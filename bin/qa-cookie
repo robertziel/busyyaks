@@ -1,0 +1,25 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Signed-in session cookie for headless browser QA. Takes NO arguments and holds no email: the cookie is for
+# the auth provider's QA identity (config/busyyaks.yml `auth`, e.g. its first allowed email). Provider none: exits 2 —
+# every request is the operator already, no cookie is needed. Writing an email into a command trips Claude Code's
+# privacy hook, whose dialog busyyaks relays to the operator as a Human input question on every screenshot run.
+#
+# Runs only inside the web container (someone with the docker group could read SESSION_SECRET anyway); no route, no
+# network surface. Prints `rack.session=<value>`:
+#
+#   docker compose exec -T web bin/qa-cookie > "$SCRATCH/qa-cookie"
+#   # puppeteer: const [name, value] = fs.readFileSync(file, "utf8").trim().split(/=(.*)/s);
+#   #            await page.setCookie({ name, value, domain: "127.0.0.1" })
+require "bundler/setup"
+require "hanami/prepare"
+require "busyyaks/qa_cookie"
+
+abort "usage: bin/qa-cookie (no arguments — the identity comes from the auth provider's settings)" unless ARGV.empty?
+begin
+  puts Busyyaks::QaCookie.mint
+rescue Busyyaks::Auth::Invalid => e
+  warn e.message
+  exit 2
+end

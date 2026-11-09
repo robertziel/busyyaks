@@ -1,0 +1,31 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Move a project's rows to its new slug after its directory was renamed. Every service stopped first
+# (a request for the new slug would create its board), the DB backed up:
+#
+#   docker compose stop
+#   (back up the database: docs/DEPLOY.md § The database)
+#   docker compose run --rm web bin/rename-project old_name new_name \
+#     --author old_name=new_name --repo owner/old_name=owner/new_name
+require "bundler/setup"
+require "hanami/prepare"
+require "busyyaks/project_rename"
+
+args = ARGV.dup
+pair = lambda do |flag|
+  i = args.index(flag) or next nil
+  v = args.slice!(i, 2)[1].to_s.split("=", 2)
+  abort "#{flag} takes OLD=NEW" unless v.size == 2
+  v
+end
+author = pair.call("--author")
+repo = pair.call("--repo")
+abort "usage: bin/rename-project OLD NEW [--author OLD=NEW] [--repo owner/old=owner/new]" unless args.size == 2
+
+begin
+  Busyyaks::ProjectRename.run(Hanami.app["db.gateway"].connection, from: args[0], to: args[1], author: author, repo: repo)
+                         .each { |col, n| puts format("%-32s %d", col, n) }
+rescue Busyyaks::ProjectRename::Refused => e
+  abort e.message
+end

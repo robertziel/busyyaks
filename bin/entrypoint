@@ -1,0 +1,29 @@
+#!/bin/sh
+# Every container's entrypoint (Dockerfile ENTRYPOINT), then the service's command. The live services run as the host
+# user (compose `user: HOST_UID:HOST_GID`); anything under DATA_DIR (./data) they do not own or cannot read — a data
+# dir Docker created as root, files left by containers that ran as root — would fail later on a write (a read-only
+# SQLite file, an attachment dir). Each service refuses to start instead and prints the one-time fix. Root (the test
+# service, the chown below) is not checked.
+set -eu
+uid=$(id -u)
+if [ "$uid" != 0 ]; then
+  data=${DATA_DIR:?DATA_DIR (the ./data mount) is required}
+  # one fix for every case: ownership back to this uid, and read/traverse for it (an own dir without u+rx stays unreadable
+  # after a chown)
+  fix="  docker compose run --rm --no-deps --user root web sh -c 'chown -R $uid:$(id -g) $data && chmod -R u+rwX $data'"
+  if [ ! -w "$data" ]; then
+    printf '%s is not writable by uid %s: create ./data as HOST_UID before compose up, or fix once, from the checkout:\n%s\n' \
+      "$data" "$uid" "$fix" >&2
+    exit 1
+  fi
+  # a subdir find cannot read fails it: said, with the same fix, never a silent pass
+  if ! foreign=$(find "$data" ! -user "$uid" -print -quit 2>&1); then
+    printf '%s has a directory uid %s cannot read (%s); fix once, from the checkout:\n%s\n' "$data" "$uid" "$foreign" "$fix" >&2
+    exit 1
+  fi
+  if [ -n "$foreign" ]; then
+    printf '%s holds files not owned by uid %s (%s); fix once, from the checkout:\n%s\n' "$data" "$uid" "$foreign" "$fix" >&2
+    exit 1
+  fi
+fi
+exec "$@"

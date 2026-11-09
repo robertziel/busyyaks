@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/robertziel/busyyaks/security/advisories/new
+    about: Privately, through GitHub's vulnerability reporting; never in a public issue (SECURITY.md).
+  - name: A bug or feature in the kanban module
+    url: https://github.com/robertziel/busyyaks_agents_kanban_module/issues
+    about: The board, cards, kanban_* MCP tools and the notifier live in the module's own repo.

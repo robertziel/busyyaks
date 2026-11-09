@@ -1,0 +1,11 @@
+# systemd --user unit; installed by deploy/install-daily-timer.sh. One tick of the daily report: exits at once when
+# today's report exists or the gateway is down (bin/daily-report holds its own lock).
+[Unit]
+Description=busyyaks daily report tick (the configured runner on the gateway)
+
+[Service]
+Type=oneshot
+WorkingDirectory=__DIR__
+Environment=PATH=__PATH__
+ExecStart=__DIR__/bin/daily-report
+TimeoutStartSec=__TIMEOUT__

@@ -1,0 +1,44 @@
+# busyyaks RuboCop config: Cookpad's style guide, verbatim, + this repo's file set.
+# Run: scripts/lint/rubocop [rubocop args…]   (in Docker, the busyyaks:lint image). Pre-commit: overcommit (.overcommit.yml)
+inherit_from:
+  - config/rubocop/cookpad.yml
+
+inherit_mode:
+  merge:
+    - Exclude
+
+AllCops:
+  TargetRubyVersion: 3.4
+  NewCops: disable
+  SuggestExtensions: false
+  Exclude:
+    - data/**/*
+    - frontend/**/*
+    - log/**/*
+    - tmp/**/*
+    - public/**/*
+
+# four plugin departments. Cookpad's DisabledByDefault: true turns a plugin's cops off too, so each
+# department is enabled here as a whole (every cop of it runs, its own defaults).
+plugins:
+  - rubocop-performance
+  - rubocop-rake
+  - rubocop-sequel
+  - rubocop-thread_safety
+
+Performance:
+  Enabled: true
+Rake:
+  Enabled: true
+Sequel:
+  Enabled: true
+ThreadSafety:
+  Enabled: true
+# Off for the whole project. The cop's advice is "let a framework like Sidekiq handle the threads";
+# busyyaks has no job framework, and its threads are deliberate, long-lived service threads, not background jobs:
+# bin/github's PR/CI-state poller, bin/launcher's clone waiter and its one-thread-per-socket-connection server
+# (bin/** is outside RuboCop's file set via Cookpad's Exclude, which is why the cop never reported them), plus the
+# tests' in-process fakes of those servers and the parallel runner waiting on its worker processes. Thread.new is the
+# right tool for each; what a thread SHARES is what the other ThreadSafety cops check, and those stay on.
+ThreadSafety/NewThread:
+  Enabled: false

@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# Daily report on an OpenAI-compatible gateway, written by the configured RUNNER (an agent CLI): how it
+# runs is config/busyyaks.yml `daily_report` (schedule, cutoff, timeouts, gateway, models, runner), read here through
+# the busyyaks MCP tool daily_report_config (the one validating loader) — no daily_report key → exit 2.
+# The runner is bin/daily-report-runners/<runner.type> (hermes: the lead reads the repos through the busyyaks MCP,
+# delegates one child per active repo — facts over MCP only, no terminal, no git on the host — and posts the report
+# via post_report). The report itself is
+# stored in the busyyaks database (post_report → reports).
+# Runs on the HOST by design (it drives the host's agent CLI), ticked by a systemd user timer
+# (deploy/install-daily-timer.sh, at daily_report.schedule). Each tick:
+#   1. today's "Daily report <day>…" exists (list_reports)   → exit 0, silent
+#   2. another tick holds the lock                            → exit 0, silent
+#   3. gateway probe fails (models list lacks the models, or a 1-token completion fails)
+#      daily_report.model / agent_model = "served": use the model the
+#      gateway serves at this tick; 0 or several served → offline (never a guess). The report names the model used.
+#        → one "vLLM offline" log line, exit 0; after daily_report.cutoff → post ONE "NOT RUN" report instead
+#   4. the last scan (daily_facts last_scan): missing, failed or stale — older than 3 × SCAN_INTERVAL_SECONDS +
+#      min(its duration, one interval), more than 60 s in the future, or a row with no start / a negative duration →
+#      before the cutoff a log line, exit 0, the next
+#      tick retries; from the cutoff on (or --force) ONE "Daily report <day> FAILED" saying why
+#   5. otherwise run the runner; a failed run posts "Daily report <day> FAILED" with the log tail, exit non-zero —
+#      unless the gateway is down again by then (it went offline mid-run): log it, post nothing, the next tick retries.
+# No other provider is ever tried: the runner is handed the gateway as its only endpoint.
+#   bin/daily-report           tick (the timer)
+#   bin/daily-report --force   skip step 1 (operator's explicit re-run); offline → exit 1
+set -euo pipefail
+cd "$(dirname "$0")/.."
+# a private dir (mktemp -d: 0700) for the runner's MCP bearer file, removed however this exits
+secret_dir=$(mktemp -d "${TMPDIR:-/tmp}/busyyaks-daily.XXXXXXXX")
+trap 'rm -rf "$secret_dir"' EXIT
+# .env through bin/env (the one .env reader: a malformed .env or a missing key stops here, naming it)
+# MCP_REPORT_TOKEN, never the full MCP bearer: the report's bearer reaches only McpServer::REPORT_TOOLS (reads, check/post_report)
+vars=$(bin/env MCP_HOST MCP_HOST_PORT MCP_REPORT_TOKEN TZ)
+eval "$vars"
+
+force=0
+case "${1:-}" in --force) force=1 ;; "") ;; *) echo "usage: bin/daily-report [--force]" >&2; exit 2 ;; esac
+
+day=$(date +%F)
+mkdir -p data
+log="data/daily-report-$day.log"
+mcp="http://${MCP_HOST}:${MCP_HOST_PORT}/mcp"
+say() { echo "== $(date -Is) $*" >>"$log"; }
+
+# One MCP tools/call; prints the tool's text, exits non-zero on transport / tool error. The bearer reaches curl as a
+# header file (printf is a builtin: the token is never in an argv, which /proc/*/cmdline shows every local user).
+mcp_call() {
+  local body out
+  body=$(jq -cn --arg n "$1" --argjson a "$2" '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:$n,arguments:$a}}')
+  out=$(curl -sfS -m 30 -X POST "$mcp" -H @<(printf 'Authorization: Bearer %s\n' "$MCP_REPORT_TOKEN") \
+    -H 'Content-Type: application/json' -d "$body") || return 1
+  jq -e '.result.isError == false' <<<"$out" >/dev/null || { jq -r '.result.content[0].text // .error.message // .' <<<"$out" >&2; return 1; }
+  jq -r '.result.content[0].text' <<<"$out"
+}
+
+post() { # title body
+  mcp_call post_report "$(jq -cn --arg t "$1" --arg b "$2" '{title:$t,author:"bin/daily-report",body_markdown:$b}')" >/dev/null
+}
+
+# --- 0. how this deployment runs it (config/busyyaks.yml daily_report, validated by the MCP server)
+config_error() { say "config: $*"; echo "$*" >&2; exit 2; }
+cfg=$(mcp_call daily_report_config '{}' 2>&1) \
+  || config_error "daily_report_config failed (no daily_report in config/busyyaks.yml, or MCP down at $mcp): ${cfg:0:200}"
+c() { jq -er "$1" <<<"$cfg" || config_error "daily_report_config: no ${1#.}"; }
+cutoff=$(c .cutoff)
+probe_timeout=$(c .probe_timeout)
+run_timeout=$(c .run_timeout)
+vllm=$(c .gateway)
+cfg_model=$(c .model)
+cfg_agent_model=$(c .agent_model)
+context_length=$(c .context_length)
+runner_type=$(c .runner.type)
+# checked HERE, on the host that runs it — not only by the MCP container that answered: a name, never a path
+[[ "$runner_type" =~ ^[a-z][a-z0-9_-]*$ ]] \
+  || config_error "daily_report.runner.type $(jq -cn --arg t "$runner_type" '$t') is not a runner name (^[a-z][a-z0-9_-]*$)"
+runner="$PWD/bin/daily-report-runners/$runner_type"
+{ [ -f "$runner" ] && [ -x "$runner" ]; } || config_error "daily_report.runner.type $runner_type: no executable $runner"
+# runner.<key> → RUNNER_<KEY> in the runner's environment (hermes: RUNNER_COMMAND, RUNNER_HOME, RUNNER_MAX_CHILDREN)
+mapfile -t runner_env < <(jq -r '.runner | del(.type) | to_entries[] | "RUNNER_\(.key | ascii_upcase)=\(.value)"' <<<"$cfg")
+
+report_exists() { # any report titled "Daily report <day>…" (a real one, FAILED or NOT RUN)
+  local rows
+  rows=$(mcp_call list_reports "$(jq -cn --arg d "$day" '{date:$d,limit:50}')") || { say "busyyaks MCP unreachable ($mcp)"; echo "busyyaks MCP unreachable ($mcp)" >&2; exit 1; }
+  jq -e --arg p "Daily report $day" 'any(.[]; .title | startswith($p))' <<<"$rows" >/dev/null
+}
+
+# Gateway up = both models listed AND a real 1-token completion on the lead model answers.
+# Sets lead_model / agent_model (a configured id, or the one served model for "served"); on failure sets why.
+lead_model=""; agent_model=""; why=""
+resolve_model() { # configured value, served ids (one per line) → prints the id to use
+  [ "$1" != served ] && { printf '%s' "$1"; return 0; }
+  local n; n=$(grep -c . <<<"$2" || true)
+  [ "$n" -eq 1 ] || { printf 'model=served but the gateway serves %s models (%s)' "$n" "$(paste -sd, <<<"$2")"; return 1; }
+  printf '%s' "$2"
+}
+probe() {
+  local models served m len
+  models=$(curl -sfS -m "$probe_timeout" "$vllm/models" 2>&1) || { why="GET /models: ${models:0:120}"; return 1; }
+  served=$(jq -r '.data[]?.id' <<<"$models" 2>/dev/null || true)
+  lead_model=$(resolve_model "$cfg_model" "$served") || { why=$lead_model; return 1; }
+  agent_model=$(resolve_model "$cfg_agent_model" "$served") || { why=$agent_model; return 1; }
+  for m in "$lead_model" "$agent_model"; do
+    grep -qxF -- "$m" <<<"$served" || { why="model $m not served (served: $(paste -sd, <<<"$served"))"; return 1; }
+    len=$(jq -r --arg m "$m" '.data[] | select(.id == $m) | .max_model_len // empty' <<<"$models")
+    [ -z "$len" ] || [ "$len" -ge "$context_length" ] \
+      || { why="model $m max_model_len $len < daily_report.context_length $context_length"; return 1; }
+  done
+  local body out
+  body=$(jq -cn --arg m "$lead_model" '{model:$m,max_tokens:1,messages:[{role:"user",content:"ping"}]}')
+  out=$(curl -sfS -m "$probe_timeout" -X POST "$vllm/chat/completions" -H 'Content-Type: application/json' -d "$body" 2>&1) \
+    || { why="POST /chat/completions: ${out:0:120}"; return 1; }
+  jq -e '(.choices | length) > 0' <<<"$out" >/dev/null 2>&1 || { why="completion without choices: ${out:0:120}"; return 1; }
+}
+
+# --- 1. already done today
+if [ "$force" -eq 0 ] && report_exists; then exit 0; fi
+
+# --- 2. one run at a time
+exec 9>data/daily-report.lock
+flock -n 9 || exit 0
+if [ "$force" -eq 0 ] && report_exists; then exit 0; fi # a run finished while we waited for nothing
+
+# --- 3. gateway
+if ! probe; then
+  say "vLLM offline: $why"
+  [ "$force" -eq 1 ] && { echo "vLLM offline: $why" >&2; exit 1; }
+  if [[ ! $(date +%H:%M) < "$cutoff" ]]; then
+    n=$(grep -c 'vLLM offline' "$log" || true)
+    first=$(grep -m1 'vLLM offline' "$log" | awk '{print $2}')
+    post "Daily report $day NOT RUN — local vLLM offline all day" \
+"\`bad:not run\` local vLLM offline at every tick until the $cutoff cutoff
+
+\`\`\`tl:kv
+Gateway: \"$vllm\"
+Model: \"$cfg_model\"
+Offline probes: $n
+First: \"$first\"
+Last: \"$(date -Is)\"
+Last error: $(jq -cn --arg w "$why" '$w')
+\`\`\`" || { say "could not post the NOT RUN report"; exit 1; }
+    say "posted NOT RUN report"
+  fi
+  exit 0
+fi
+
+# --- 4. run
+fail() {
+  # The gateway went away under the run: not a report failure. Post nothing; the next tick re-probes and starts a
+  # fresh run once it answers. From the cutoff on (or with --force) the FAILED report is posted, never a silent day.
+  if [ "$force" -eq 0 ] && [[ $(date +%H:%M) < "$cutoff" ]] && ! probe; then
+    say "vLLM went offline mid-run (exit $1): $why; next tick retries"
+    exit 0
+  fi
+  local tail; tail=$(tail -n 40 "$log" 2>/dev/null)
+  post "Daily report $day FAILED" "exit $1 · log data/daily-report-$day.log
+
+\`\`\`
+$tail
+\`\`\`" || say "could not post the FAILED report"
+  exit "$1"
+}
+
+# --- 4a. the scan the report reads: never a stale or failed one (lib/busyyaks/scan_freshness.rb). Like the gateway:
+# before the cutoff log it and exit 0 — the next tick retries (the scanner may be back by then); from the cutoff on, or
+# with --force, post ONE FAILED report saying why (report_exists stops the later ticks).
+facts=$(mcp_call daily_facts '{"hours":24,"series":"Daily report"}') || fail 4
+scan_refusal=$(ruby -rjson -r "$PWD/lib/busyyaks/scan_freshness" \
+  -e 'puts Busyyaks::ScanFreshness.refusal(JSON.parse(STDIN.read)["last_scan"])' <<<"$facts") || fail 4
+if [ -n "$scan_refusal" ]; then
+  say "$scan_refusal"
+  if [ "$force" -eq 0 ] && [[ $(date +%H:%M) < "$cutoff" ]]; then exit 0; fi
+  post "Daily report $day FAILED" "\`bad:stale scan\` $scan_refusal" || { say "could not post the FAILED report"; exit 1; }
+  exit 3
+fi
+
+say "start runner $runner_type gateway=$vllm model=$lead_model children=$agent_model"
+started=$(date +%s)
+before=$(mcp_call list_reports '{"limit":1}' | jq '[.[].id] | max // 0') || fail 4
+# The runner's one credential, the report's scoped MCP bearer, as a 0600 file in the private dir (printf is a builtin):
+# never in an argv — timeout(1) and env(1) keep theirs for the whole run, and /proc/*/cmdline shows it to every user.
+token_file="$secret_dir/mcp-report-token"
+(umask 077 && printf '%s' "$MCP_REPORT_TOKEN" >"$token_file")
+set +e
+# A clean environment: only what the runner needs.
+timeout --kill-after=60 "$run_timeout" \
+  env -i HOME="$HOME" PATH="$PATH" TZ="$TZ" LANG="${LANG:-C.UTF-8}" \
+      BUSYYAKS_MCP_TOKEN_FILE="$token_file" MCP_URL="$mcp" BUSYYAKS_DIR="$PWD" DAY="$day" GATEWAY="$vllm" \
+      LEAD_MODEL="$lead_model" AGENT_MODEL="$agent_model" CONTEXT_LENGTH="$context_length" \
+      USAGE_FILE="$PWD/data/daily-report-$day.usage.json" "${runner_env[@]}" \
+  "$runner" >>"$log" 2>&1
+rc=$?
+set -e
+say "exit $rc after $(( $(date +%s) - started ))s"
+[ "$rc" -eq 0 ] || fail "$rc"
+# A clean exit that posted nothing is a failure too.
+rows=$(mcp_call list_reports "$(jq -cn --arg d "$day" '{date:$d,limit:50}')") || fail 4
+id=$(jq -r --arg t "Daily report $day" --argjson b "$before" '[.[] | select(.title == $t and .id > $b) | .id] | max // empty' <<<"$rows")
+[ -n "$id" ] || { say "runner $runner_type exited 0 but posted no '$day' report"; fail 3; }
+say "posted report $id"

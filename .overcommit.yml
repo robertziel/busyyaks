@@ -1,0 +1,43 @@
+# busyyaks git hooks — overcommit 0.75.0, run inside the busyyaks:hooks image by .githooks/pre-commit →
+# scripts/hooks/run, on the STAGED tree. Signed: a change to this file (or a new hook) refuses every commit until it is
+# reviewed and signed again — `scripts/hooks/run sign` (overcommit --sign) after staging it. docs/LINT.md.
+# Every hook fails the commit on any finding, warnings included; nothing is excluded to make one pass.
+verify_signatures: true
+
+PreCommit:
+  ALL:
+    on_warn: fail
+    problem_on_unmodified_line: report    # an offense anywhere in a staged file counts, not only on the changed lines
+
+  # overcommit's default pre-commit hooks (AuthorName, AuthorEmail, BrokenSymlinks, CaseConflicts, MergeConflicts)
+  # stay on as shipped.
+
+  RuboCop:                                # .rubocop.yml (Cookpad + the four plugin departments); CI: test.sh lint
+    enabled: true
+    flags: ['--format=emacs', '--force-exclusion', '--display-cop-names']
+
+  EsLintFrontend:                         # ad hoc: scripts/hooks/eslint; CI: test.sh frontend (npm run lint)
+    enabled: true
+    description: 'ESLint (frontend/eslint.config.js) on the staged TS/TSX files'
+    command: ['/hooks/eslint', 'frontend']
+    include: ['frontend/**/*.ts', 'frontend/**/*.tsx']
+
+  PrettierCheck:                          # ad hoc: scripts/hooks/prettier; CI: test.sh frontend (= npm run format:check)
+    enabled: true
+    description: 'Prettier --check (.prettierrc.json, printWidth 120) on the staged TS/TSX/JS/CSS/JSON files'
+    command: ['/hooks/prettier']
+    include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.css', '**/*.json']
+
+  Gitleaks:                               # ad hoc: scripts/hooks/gitleaks; CI: test.sh secrets (full history)
+    enabled: true
+    description: 'gitleaks on the staged changes'
+    command: ['/hooks/gitleaks']
+    requires_files: true
+
+  ShellCheck:                             # built-in; command = scripts/hooks/shellcheck; CI: test.sh lint (scripts/lint/shellcheck)
+    enabled: true
+    description: 'ShellCheck (-S style) on the staged shell scripts, found by shebang'
+    command: ['/hooks/shellcheck']
+    required_executable: 'shellcheck'      # the binary the wrapper runs
+    flags: ['--format=gcc', '--severity=style']
+    include: '**/*'                       # every staged file; /hooks/shell-files keeps the sh/bash ones (most have no .sh)

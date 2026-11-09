@@ -1,0 +1,1213 @@
+/* busyyaks — report components (lib/busyyaks/report_blocks.rb). Glass tokens from app.css. */
+:root {
+  --neutral-rgb: 108, 108, 112;
+}
+:root[data-skin="dark"] {
+  --neutral-rgb: 150, 155, 166;
+}
+/* tones: --tc text colour, --tv vivid fill, --tr rgb triple for tints */
+.t-neutral {
+  --tc: var(--ink-faint);
+  --tv: var(--line-strong);
+  --tr: var(--neutral-rgb);
+}
+.t-accent,
+.t-info {
+  --tc: var(--accent);
+  --tv: var(--vivid-blue);
+  --tr: var(--accent-rgb);
+}
+.t-ok {
+  --tc: var(--ok);
+  --tv: var(--vivid-green);
+  --tr: var(--ok-rgb);
+}
+.t-warn {
+  --tc: var(--warn);
+  --tv: var(--vivid-orange);
+  --tr: var(--warn-rgb);
+}
+.t-bad {
+  --tc: var(--bad);
+  --tv: var(--vivid-red);
+  --tr: var(--bad-rgb);
+}
+/* Dark: --vivid-orange is the brand orange (= --accent), so a warning would read as the brand: warn marks take --warn (amber); the accent tone takes the accent, not blue */
+:root[data-skin="dark"] .t-warn {
+  --tv: var(--warn);
+}
+:root[data-skin="dark"] .t-accent {
+  --tv: var(--accent);
+}
+
+.tl {
+  margin: 12px 0 18px;
+}
+.md .tl :is(ul, ol) {
+  padding-left: 0;
+  margin: 0;
+}
+.md .tl li {
+  margin: 0;
+}
+.tl code {
+  overflow-wrap: anywhere;
+}
+
+/* inline tokens — every chip one height (18px), centred on the text's x-height, so chips in a line of text sit level */
+.tl-pill {
+  display: inline-block;
+  vertical-align: middle;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 0 0.5rem;
+  border-radius: var(--radius-pill);
+  color: var(--tc);
+  background: rgba(var(--tr), 0.12);
+  white-space: nowrap;
+}
+.tl-repo {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  padding: 0 0.45rem;
+  border-radius: var(--radius-chip);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent);
+  white-space: nowrap;
+}
+/* a section's status line (a paragraph that is only a pill: "0 cards in Human Check", "0 upstream flags") */
+.md p.tl-status {
+  margin: 4px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+.md p.tl-status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--line-strong);
+}
+.md p.tl-status:has(.t-ok)::before {
+  background: var(--vivid-green);
+}
+.md p.tl-status:has(.t-warn)::before {
+  background: var(--vivid-orange);
+}
+.md p.tl-status:has(.t-bad)::before {
+  background: var(--vivid-red);
+}
+.md p.tl-status:has(.t-info, .t-accent)::before {
+  background: var(--vivid-blue);
+}
+:root[data-skin="dark"] .md p.tl-status:has(.t-warn)::before {
+  background: var(--warn);
+}
+:root[data-skin="dark"] .md p.tl-status:has(.t-accent)::before {
+  background: var(--accent);
+}
+.md p.tl-status .tl-pill {
+  padding: 0;
+  background: none;
+  color: var(--ink-faint);
+  font-weight: 500;
+  font-size: 13px;
+}
+.md p.tl-status:has(.t-bad, .t-warn) .tl-pill {
+  color: var(--tc);
+  font-weight: 600;
+}
+.tl-repo:hover {
+  text-decoration: none;
+  background: rgba(var(--accent-rgb), 0.18);
+}
+.tl-repo.unknown {
+  color: var(--ink-faint);
+  background: var(--mat-fill-2);
+  text-decoration: line-through;
+}
+.tl-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--tv, var(--line-strong));
+  flex: none;
+  display: inline-block;
+}
+.t-ok > .tl-dot,
+.t-warn > .tl-dot,
+.t-bad > .tl-dot,
+.t-ok > header > .tl-dot,
+.t-warn > header > .tl-dot,
+.t-bad > header > .tl-dot {
+  box-shadow: 0 0 0 3px rgba(var(--tr), 0.16);
+}
+.tl-error {
+  padding: 10px 14px;
+  border-radius: var(--radius-band);
+  background: rgba(var(--bad-rgb), 0.1);
+  box-shadow: inset 3px 0 0 var(--vivid-red);
+  color: var(--bad);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.tl-error b {
+  font-family: var(--mono);
+}
+
+/* change chip (tl:stats prev, tl:cards prev) */
+.tl-chg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  padding: 0 0.4rem;
+  border-radius: var(--radius-pill);
+  color: var(--ink-faint);
+  background: var(--mat-fill-2);
+  white-space: nowrap;
+}
+.tl-chg i {
+  font-style: normal;
+  font-size: 9px;
+}
+.tl-chg.good {
+  color: var(--ok);
+  background: rgba(var(--ok-rgb), 0.12);
+}
+.tl-chg.bad {
+  color: var(--bad);
+  background: rgba(var(--bad-rgb), 0.12);
+}
+
+/* tl:stats */
+.tl-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 8px;
+}
+.tl-stat {
+  background: var(--panel-2);
+  border-radius: var(--radius-band);
+  padding: 11px 13px 10px;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-width: 0;
+  position: relative;
+}
+.tl-stat:not(.t-neutral)::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  right: 13px;
+  top: 0;
+  height: 2.5px;
+  border-radius: 0 0 2px 2px;
+  background: var(--tv);
+  opacity: 0.85;
+}
+.tl-stat-fig {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tl-stat b {
+  font-size: 1.65rem;
+  font-weight: 600;
+  letter-spacing: -0.024em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  color: var(--ink);
+}
+.tl-stat:not(.t-neutral) b {
+  color: var(--tc);
+}
+.tl-stat .tl-stat-label {
+  font-size: 12.5px;
+  color: var(--ink-dim);
+  font-weight: 500;
+}
+.tl-stat small {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  line-height: 1.35;
+  overflow-wrap: break-word;
+}
+
+/* tl:cards — per-repo card grid */
+.tl-cardgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 10px;
+}
+.tl-card {
+  background: var(--panel-2);
+  border-radius: var(--radius-band);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.tl-card.t-bad,
+.tl-card.t-warn {
+  box-shadow: inset 3px 0 0 var(--tv);
+}
+.tl-card > header {
+  display: flex;
+  gap: 6px 8px;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  min-width: 0;
+  margin: 0;
+}
+.tl-card header .tl-repo {
+  font-size: 13px;
+  font-weight: 600;
+}
+.tl-branch {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  background: none !important;
+  padding: 0 !important;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-figs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.tl-fig {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+.tl-fig b {
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 14px;
+}
+.tl-fig.hot b {
+  color: var(--warn);
+}
+.tl-fig .tl-chg {
+  align-self: center;
+}
+.tl-lines b {
+  font-size: 12.5px;
+}
+.md .tl-card :is(.tl-shipped, .tl-risks) {
+  list-style: none;
+  display: grid;
+  gap: 3px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.tl-card :is(.tl-shipped, .tl-risks) li {
+  position: relative;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+.tl-card .tl-shipped li::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0.3em;
+  width: 4px;
+  height: 8px;
+  border: solid var(--vivid-green);
+  border-width: 0 1.8px 1.8px 0;
+  transform: rotate(45deg);
+}
+.tl-card .tl-risks li {
+  color: var(--ink-dim);
+}
+.tl-card .tl-risks li::before {
+  content: "!";
+  position: absolute;
+  left: 1px;
+  top: 0.12em;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(var(--warn-rgb), 0.16);
+  color: var(--warn);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+}
+/* the commits a card names: one per line, the subject as wide as the card allows */
+.tl-card footer.tl-shas {
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  gap: 3px;
+  padding-top: 8px;
+  border-top: 0.5px solid var(--line);
+}
+.tl-card footer.tl-shas .gh-commit {
+  max-width: 100%;
+}
+.tl-card footer.tl-shas .gh-commit .gh-subj {
+  max-width: none;
+}
+
+/* tl:flags — risk list: kind · text (the main thing) · where, the three columns shared by every row (subgrid) */
+ul.tl-flags {
+  list-style: none;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  gap: 6px 12px;
+}
+.tl-flags li {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  padding: 7px 12px;
+  min-height: 36px;
+  border-radius: var(--radius-band);
+  background: rgba(var(--tr), 0.07);
+  box-shadow: inset 3px 0 0 var(--tv);
+}
+.tl-flags li.t-info {
+  background: var(--panel-2);
+}
+.tl-kind {
+  justify-self: start;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 18px;
+  padding: 0 0.45rem;
+  border-radius: var(--radius-chip);
+  color: var(--tc);
+  background: rgba(var(--tr), 0.14);
+  white-space: nowrap;
+}
+.tl-flag-text {
+  min-width: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  overflow-wrap: break-word;
+}
+.tl-flag-where {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  min-width: 0;
+}
+.tl-flag-where:empty {
+  display: none;
+}
+
+/* tl:needs — what waits for the operator */
+ol.tl-needs {
+  list-style: none;
+  background: var(--panel-2);
+  border-radius: var(--radius-band);
+  overflow: hidden;
+}
+.tl-needs li {
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 0.5px solid var(--line);
+  align-items: flex-start;
+}
+.tl-needs li:last-child {
+  border-bottom: 0;
+}
+.tl-need-mark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.6px var(--vivid-orange);
+  background: rgba(var(--warn-rgb), 0.08);
+}
+:root[data-skin="dark"] .tl-need-mark {
+  box-shadow: inset 0 0 0 1.6px var(--warn);
+}
+.tl-need-main {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 2px;
+}
+.tl-need-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  align-items: center;
+  min-width: 0;
+}
+.tl-need-title {
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: break-word;
+  min-width: 0;
+}
+a.tl-need-title:hover {
+  color: var(--accent);
+}
+.tl-card-id,
+.tl-since {
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.tl-col {
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 0 0.45rem;
+  border-radius: var(--radius-chip);
+  color: var(--warn);
+  background: rgba(var(--warn-rgb), 0.12);
+  white-space: nowrap;
+}
+.tl-ask {
+  font-size: 13px;
+  color: var(--ink-dim);
+  overflow-wrap: break-word;
+}
+
+/* tl:churn — changed files per repo */
+.tl-churn-list {
+  list-style: none;
+  background: var(--panel-2);
+  border-radius: var(--radius-band);
+  padding: 4px 0;
+}
+.tl-churn-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) minmax(60px, 1fr) 5.5em 4.6em 4.2em;
+  grid-template-areas: "repo bar n add del" ". top top top top";
+  gap: 2px 12px;
+  align-items: center;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.tl-churn-repo {
+  grid-area: repo;
+  min-width: 0;
+}
+.tl-churn-bar {
+  grid-area: bar;
+  display: flex;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--track);
+  overflow: hidden;
+}
+.tl-churn-bar i {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+}
+.tl-churn-bar .a {
+  background: var(--vivid-green);
+}
+.tl-churn-bar .d {
+  background: var(--vivid-red);
+}
+.tl-churn-bar .d[style="width:0.0%"] {
+  min-width: 0;
+}
+.tl-churn-n {
+  grid-area: n;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  text-align: right;
+}
+.tl-churn-n b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.tl-churn-list .tl-add {
+  grid-area: add;
+  text-align: right;
+}
+.tl-churn-list .tl-del {
+  grid-area: del;
+  text-align: right;
+}
+.tl-churn-top {
+  grid-area: top;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.tl-churn-top code {
+  font-size: 11.5px !important;
+  color: var(--ink-faint);
+}
+
+/* tl:repos */
+ul.tl-repos {
+  list-style: none;
+  background: var(--panel-2);
+  border-radius: var(--radius-band);
+  overflow: hidden;
+}
+.tl-repos li {
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 0.5px solid var(--line);
+  align-items: flex-start;
+}
+.tl-repos li:last-child {
+  border-bottom: 0;
+}
+.tl-repos .tl-dot {
+  margin-top: 6px;
+}
+.tl-repo-main {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 4px;
+}
+.tl-repo-head {
+  display: flex;
+  gap: 4px 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.tl-num {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tl-num b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.tl-num.hot b {
+  color: var(--warn);
+}
+.tl-sum {
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.tl-shas {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* tl:actions */
+/* n · priority · text · repo, the columns shared by every row (subgrid) */
+ol.tl-actions {
+  list-style: none;
+  display: grid;
+  grid-template-columns: auto max-content minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  counter-reset: act;
+}
+.tl-actions li {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  padding: 7px 12px;
+  min-height: 36px;
+  border-radius: var(--radius-band);
+  background: var(--panel-2);
+  counter-increment: act;
+}
+.tl-actions li::before {
+  content: counter(act);
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.tl-act-text {
+  grid-column: 3;
+  min-width: 0;
+  font-size: 13.5px;
+  overflow-wrap: break-word;
+}
+.tl-actions li > .tl-repo,
+.tl-actions li > .tl-repo.unknown {
+  grid-column: 4;
+  justify-self: end;
+}
+.tl-prio {
+  justify-self: start;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 18px;
+  padding: 0 0.45rem;
+  border-radius: var(--radius-chip);
+}
+.p-high .tl-prio {
+  color: var(--bad);
+  background: rgba(var(--bad-rgb), 0.12);
+}
+.p-med .tl-prio {
+  color: var(--warn);
+  background: rgba(var(--warn-rgb), 0.12);
+}
+.p-low .tl-prio {
+  color: var(--ink-faint);
+  background: var(--mat-fill-2);
+}
+.tl-actions li.p-high {
+  box-shadow: inset 3px 0 0 var(--vivid-red);
+}
+
+/* tl:callout */
+div.tl-callout:not(.tl) {
+  padding: 12px 16px 12px 44px;
+  border-radius: var(--radius-band);
+  background: rgba(var(--tr), 0.1);
+  box-shadow: inset 3px 0 0 var(--tv);
+  display: grid;
+  gap: 3px;
+  position: relative;
+  overflow-wrap: anywhere;
+}
+div.tl-callout:not(.tl)::before {
+  content: "!";
+  position: absolute;
+  left: 15px;
+  top: 12px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--tv);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+div.tl-callout.t-ok::before {
+  content: "✓";
+}
+div.tl-callout:is(.t-info, .t-accent, .t-neutral)::before {
+  content: "i";
+}
+.tl-callout b {
+  color: var(--tc);
+}
+
+/* tl:bars · tl:progress · tl:spark — one row grammar: label | graphic | figure */
+.tl-bars header {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.tl-bars header span {
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+.tl-bar,
+.tl-prog,
+.tl-sparkrow {
+  display: grid;
+  grid-template-columns: minmax(90px, 200px) minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.tl-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-dim);
+}
+.tl-bar-track {
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--track);
+  overflow: hidden;
+}
+.tl-bar-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--tv);
+  min-width: 4px;
+}
+.tl-bar.t-neutral .tl-bar-track i {
+  background: var(--vivid-blue);
+}
+.tl-bar b,
+.tl-prog b,
+.tl-sparkrow b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+}
+.tl-pct,
+.tl-delta {
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  min-width: 3.2em;
+  text-align: right;
+}
+.tl-delta.up {
+  color: var(--ok);
+}
+.tl-delta.down {
+  color: var(--bad);
+}
+.tl-sparkrow svg {
+  width: 100%;
+  height: 28px;
+  overflow: visible;
+}
+.tl-sparkrow polyline {
+  fill: none;
+  stroke: var(--tv);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+}
+.tl-sparkrow.t-neutral polyline,
+.tl-sparkrow.t-neutral circle {
+  stroke: var(--vivid-blue);
+  fill: var(--vivid-blue);
+}
+.tl-sparkrow polygon {
+  fill: var(--tv);
+  opacity: 0.14;
+}
+.tl-sparkrow.t-neutral polygon {
+  fill: var(--vivid-blue);
+}
+.tl-sparkrow circle {
+  fill: var(--tv);
+}
+.tl-bar:not(:has(.tl-pct)) {
+  grid-template-columns: minmax(90px, 200px) minmax(0, 1fr) auto;
+}
+
+/* tl:diffstat */
+ul.tl-diff {
+  list-style: none;
+  background: var(--panel-2);
+  border-radius: var(--radius-band);
+  overflow: hidden;
+}
+.tl-diff li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 0.5px solid var(--line);
+  font-size: 13px;
+}
+.tl-diff li:last-child {
+  border-bottom: 0;
+}
+.tl-diff code {
+  background: none;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-add {
+  color: var(--ok);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.tl-del {
+  color: var(--bad);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.tl-boxes {
+  display: inline-flex;
+  gap: 2px;
+}
+.tl-boxes i {
+  width: 8px;
+  height: 8px;
+  border-radius: 1.5px;
+}
+.tl-boxes .a {
+  background: var(--vivid-green);
+}
+.tl-boxes .d {
+  background: var(--vivid-red);
+}
+.tl-boxes .z {
+  background: var(--track);
+}
+
+/* tl:timeline */
+ol.tl-timeline {
+  list-style: none;
+}
+.tl-timeline li {
+  display: grid;
+  grid-template-columns: 52px 14px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 4px 0;
+  position: relative;
+}
+.tl-timeline li::before {
+  content: "";
+  position: absolute;
+  left: 64px;
+  top: 18px;
+  bottom: -6px;
+  width: 1.5px;
+  background: var(--line);
+}
+.tl-timeline li:last-child::before {
+  display: none;
+}
+.tl-timeline time {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+  padding-top: 2px;
+  text-align: right;
+}
+.tl-timeline .tl-dot {
+  margin-top: 5px;
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 0 0 3px var(--panel);
+}
+
+/* tl:kv */
+.tl-kv dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0;
+  padding: 10px 14px;
+  background: var(--panel-2);
+  border-radius: var(--radius-band);
+  font-size: 13.5px;
+}
+.tl-kv dt {
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+.tl-kv dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* gallery */
+.gallery-intro {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -4px 0 14px;
+}
+.gallery-intro a {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-chip);
+  background: var(--mat-fill-2);
+  color: var(--ink-dim);
+}
+.gallery-intro a:hover {
+  text-decoration: none;
+  color: var(--accent);
+}
+.gallery-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  scroll-margin-top: 72px;
+}
+.gallery-item pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--panel-2);
+  padding: 10px 12px;
+  border-radius: var(--radius-band);
+  overflow-x: auto;
+  white-space: pre;
+}
+.gallery-item h3 {
+  font-family: var(--mono);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.gallery-item p.schema {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  margin: 4px 0 10px;
+}
+.gallery-item p.schema b {
+  color: var(--ink-dim);
+  font-weight: 500;
+}
+@media (max-width: 900px) {
+  .gallery-item {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .tl-bar,
+  .tl-prog,
+  .tl-sparkrow {
+    grid-template-columns: minmax(70px, 34%) minmax(0, 1fr) auto;
+  }
+  .tl-pct,
+  .tl-delta {
+    display: none;
+  }
+  .tl-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tl-stat b {
+    font-size: 1.45rem;
+  }
+  div.tl-callout:not(.tl) {
+    padding-left: 40px;
+  }
+  div.tl-callout:not(.tl)::before {
+    left: 12px;
+  }
+  .tl-kv dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .tl-kv dt {
+    font-size: 12px;
+  }
+  .tl-kv dd + dt {
+    margin-top: 6px;
+  }
+}
+/* narrow block (phone, gallery column): the row's tags + chips on one line, the text under them at full width */
+div.tl-flags,
+div.tl-actions,
+div.tl-churn {
+  container-type: inline-size;
+}
+@container (max-width: 600px) {
+  .tl-churn-list li {
+    grid-template-columns: minmax(0, 1fr) 5.2em 4.6em 4em;
+    grid-template-areas: "repo repo repo repo" "bar n add del" "top top top top";
+    gap: 4px 10px;
+  }
+  ul.tl-flags,
+  ol.tl-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tl-flags li {
+    grid-column: 1;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "kind where" "text text";
+    align-items: start;
+    gap: 5px 8px;
+    padding: 8px 10px;
+  }
+  .tl-flags .tl-kind {
+    grid-area: kind;
+  }
+  .tl-flags .tl-flag-text {
+    grid-area: text;
+  }
+  .tl-flags .tl-flag-where {
+    grid-area: where;
+  }
+  .tl-actions li {
+    grid-column: 1;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    grid-template-areas: "n prio repo" "text text text";
+    gap: 5px 8px;
+    padding: 8px 10px;
+  }
+  .tl-actions li::before {
+    grid-area: n;
+    text-align: left;
+  }
+  .tl-actions .tl-prio {
+    grid-area: prio;
+  }
+  .tl-actions .tl-act-text {
+    grid-area: text;
+  }
+  .tl-actions li > .tl-repo,
+  .tl-actions li > .tl-repo.unknown {
+    grid-area: repo;
+  }
+}
+
+/* GitHub-style references (lib/busyyaks/card_links.rb chip/commit_chip) — reports and cards */
+.gh-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  vertical-align: middle;
+  text-decoration: none;
+  color: var(--accent);
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 0 0.4rem;
+  border-radius: var(--radius-pill);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+.gh-ref:hover {
+  text-decoration: none;
+  background: rgba(var(--accent-rgb), 0.16);
+}
+.gh-ref svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  opacity: 0.85;
+}
+.gh-ref > :is(code, span) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.md .gh-ref code,
+.gh-ref code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: 11.5px;
+  line-height: 18px;
+  border-radius: 0;
+}
+/* inside a table cell a chip wraps its text instead of fixing the column width at its full length */
+.md td .gh-ref {
+  white-space: normal;
+  align-items: flex-start;
+}
+.md td .gh-ref > :is(code, span) {
+  overflow: visible;
+  overflow-wrap: anywhere;
+}
+.md td .gh-ref svg {
+  margin-top: 3px;
+}
+.gh-commit {
+  color: var(--ink-dim);
+  background: var(--mat-fill-2);
+  border-radius: var(--radius-chip);
+}
+.md .gh-commit .gh-sha,
+.gh-commit .gh-sha {
+  flex: none;
+  overflow: visible;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.gh-commit .gh-subj {
+  color: var(--ink-dim);
+  max-width: 34ch;
+}
+.gh-commit:hover .gh-subj {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.gh-branch {
+  background: rgba(var(--accent-rgb), 0.12);
+}
+.gh-branch code {
+  font-family: var(--mono);
+}
+.gh-pr {
+  color: #6f3fc9;
+  background: rgba(111, 63, 201, 0.1);
+}
+:root[data-skin="dark"] .gh-pr {
+  color: #b48cf9;
+  background: rgba(163, 113, 247, 0.14);
+}
+.gh-comment,
+.gh-card {
+  color: var(--ink-dim);
+  background: var(--mat-fill-2);
+}
+.gh-comment:hover,
+.gh-card:hover {
+  color: var(--accent);
+}
+.gh-file {
+  color: var(--ink-dim);
+  background: var(--mat-fill-2);
+}
+.gh-file code {
+  font-family: var(--mono);
+}
+.gh-site {
+  background: transparent;
+  padding-left: 0;
+}
+.gh-repo-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink-faint);
+  margin-left: 2px;
+  vertical-align: middle;
+}
+.gh-repo-link svg {
+  width: 14px;
+  height: 14px;
+}
+.gh-repo-link:hover {
+  color: var(--ink);
+}
+.tl-shas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.tl-shas .gh-commit .gh-subj {
+  max-width: 26ch;
+}

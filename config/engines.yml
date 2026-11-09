@@ -1,0 +1,9 @@
+# The coding-agent engines busyyaks knows (committed): the engine names the agent_engines collector reports
+# per tmux pane → {label, family}. label = what the agents sidebar shows; family = how busyyaks reads the pane's
+# screen and whether it may type a message into it (lib/busyyaks/engines.rb: claude = Claude Code · hermes).
+# A deployment adds its own names, or relabels these, under `engines:` in config/busyyaks.yml (merged over this
+# file at start). A pane whose engine is in neither shows "<name> (not configured)" and a screen error.
+claude: { label: Claude, family: claude }                 # Claude Code (the default family)
+claudeapi: { label: Claude, family: claude }              # agent_engines: Claude Code against Anthropic's API
+localclaude: { label: Local, family: claude }             # agent_engines: Claude Code against a local model gateway
+hermes: { label: Hermes, family: hermes }                 # agent_engines: the Hermes agent CLI

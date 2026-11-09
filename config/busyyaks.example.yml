@@ -1,0 +1,105 @@
+# Copy to config/busyyaks.yml (gitignored). An unknown key is an error.
+# Required (a missing one stops boot): roots, search_depth, owner_remotes, author_emails, window_days, auth,
+#   reap_protect, agents, launch.
+# Optional: engines (absent = only config/engines.yml), daily_report (absent = no daily report).
+#
+# roots:          {path, prefix}: directories INSIDE the container whose children are git repos
+#                 (compose mounts PROJECTS_ROOT read-only at /projects); prefix namespaces their slugs.
+#                 A non-git child is a tree searched for repos (dirs with .git) without an entry of its own:
+#                 they appear as group/<repo>, group/sub/<repo>. List it only to give it another prefix.
+# search_depth:   how many subdirs below a root's non-git child to search for a repo (a repo is never
+#                 descended into); nothing within that depth = the tree is given up. 0 = only root children.
+# owner_remotes:  which `origin` remotes are yours (vs an upstream clone): host/path prefixes ("github.com/you/",
+#                 "github.com:you/"), matched on a path-segment boundary after the URL is parsed (scheme, userinfo,
+#                 port dropped; a path with `.`, `..` or `%` is never yours). Only https://, ssh:// and the scp form
+#                 user@host:owner/repo are read: any other scheme, and the scp form without `user@` (host:owner/repo),
+#                 is never yours (fails closed). Only the scanner's `own` flag (display) reads it: folder
+#                 trust never does (launch.trusted_paths, docs/DEPLOY.md § Folder trust).
+# author_emails:  commit author emails counted as "mine".
+# window_days:    how far back the scanner reads history.
+roots:
+  - { path: /projects, prefix: "" }
+  # a group folder under its own prefix (otherwise discovered as group/<repo>); a listed root that is not there fails
+  # the scan, so list only folders that exist:
+  # - { path: /projects/group, prefix: "grp/" }
+search_depth: 2
+owner_remotes:
+  - github.com/your-user/
+  - github.com:your-user/
+author_emails:
+  - you@example.com
+window_days: 7
+# (launchers — what the "Launch" button may start — live in config/kanban.yml `launchers` (from config/kanban.example.yml), the board config:
+#  ONE source for how a session is started; bin/launcher builds the argv with the engine's Launch.)
+# auth:          sign-in (README "Sign-in"). `provider: none` = no sign-in: every request is the operator — only for a
+#                deployment reachable from localhost / an ssh tunnel, never behind a public proxy. It needs the explicit
+#                `allow_unauthenticated: true` beside it (a boot without it stops), and every boot logs AUTH DISABLED. A custom provider:
+#                `provider: <directory>` (relative to the app root) holding provider.rb (a Busyyaks::Auth::Provider
+#                subclass); the block's other keys are that provider's settings, which it validates at boot.
+auth:
+  provider: none
+  allow_unauthenticated: true
+# reap_protect:   tmux session name globs the agents sidebar's "Clear idle" never stops — sessions a
+#                 service owns and manages itself. [] for none, e.g. ["svc-*", "deploy"].
+reap_protect: []
+# agents:        the agent-session collector (README "Agent sessions"): a separate host program that writes a JSON
+#                 snapshot of every tmux pane running a coding agent and answers screen/send requests on a unix socket.
+#                 `collector: none` = this box runs none: no agents sidebar, no session states on cards, no Clear idle,
+#                 no subagent list, no typing card comments or answers into sessions, no spotting a session stuck
+#                 on a dialog before anyone comments (each says so where it shows); the dashboard, scanner, MCP,
+#                 board, Launch, claim and reports work without it.
+#                 Or `collector: {snapshot: <file>, read_socket: <socket>}` (host paths, read by bin/launcher,
+#                 which refuses to start while either is missing).
+agents:
+  collector: none
+  # collector: { snapshot: /home/you/code-state/sessions.json, read_socket: /home/you/code-state/read.sock }
+# launch:        which repos bin/launcher answers Claude Code's folder-trust prompt for ("Yes, I trust this folder"),
+#                which lets the repo's own .claude settings, hooks and .mcp.json run. Never decided from the repo
+#                itself (its origin or config: whoever wrote the repo wrote those). Trusted are only:
+#                  trusted_paths: repo dirs you list (paths inside the container, under PROJECTS_MOUNT, like roots;
+#                    each exactly that dir, never what lies under it; bin/launcher refuses to start when one is
+#                    missing or resolves outside PROJECTS_ROOT). [] = none;
+#                  and the repos the launcher's "new repo" (git init) made — never a clone (recorded in .env
+#                  LAUNCHER_STATE_DIR).
+#                Every other repo keeps the prompt on screen: the launch says so, and a card its session owns gets it
+#                as a question for you.
+launch:
+  trusted_paths: []
+  # trusted_paths: [/projects/my-app, /projects/group/tool]
+# engines:       (optional) more engine names your agent_engines collector reports → {label, family}, merged
+#                 over the committed config/engines.yml (claude, claudeapi, localclaude, hermes); an entry with
+#                 a name from there relabels it. family: claude (Claude Code) · hermes. A pane whose engine is in
+#                 neither shows "<name> (not configured)" and a screen error naming this key.
+engines:
+  # a renamed Claude Code wrapper your collector reports under its own name
+  claude-local: { label: Local, family: claude }
+# daily_report:  (optional; absent = no daily report) how bin/daily-report runs on this deployment.
+#                Read by the host script through the MCP tool daily_report_config; every key required.
+#   schedule:       systemd OnCalendar of the tick, local time (deploy/install-daily-timer.sh installs it); the
+#                   first tick that finds the gateway up writes the day's report, later ticks exit.
+#   cutoff:         HH:MM local: from then on, a tick that finds the gateway down posts ONE "NOT RUN" report.
+#   probe_timeout:  seconds for each gateway probe request (GET /models, a 1-token completion).
+#   run_timeout:    wall-clock limit of one run (timeout(1) duration); hitting it posts the FAILED report.
+#   gateway:        OpenAI-compatible base URL the runner talks to (ends in /v1) — its only provider, no fallback.
+#   model:          the lead model (writes the report), id exactly as GET /models lists it; "served" = the one
+#                   model the gateway serves at that tick (0 or several → the tick counts as offline).
+#   agent_model:    the child model (one child per active repo), same rules.
+#   context_length: the lead model's context window in tokens (a served max_model_len below it → offline).
+#   runner:         the agent CLI that writes the report: type = one of the runner families
+#                   (bin/daily-report-runners/<type>) + that type's keys. hermes: command (on the host PATH),
+#                   home (a dedicated HERMES_HOME; its config.yaml is generated every run), max_children
+#                   (children at once; more repos → further batches).
+daily_report:
+  schedule: "*-*-* *:00/10:00"
+  cutoff: "23:30"
+  probe_timeout: 60
+  run_timeout: 90m
+  gateway: http://127.0.0.1:8000/v1
+  model: served
+  agent_model: served
+  context_length: 131072
+  runner:
+    type: hermes
+    command: hermes
+    home: /home/you/.hermes-busyyaks
+    max_children: 16

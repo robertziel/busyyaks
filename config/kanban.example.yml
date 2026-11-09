@@ -1,0 +1,201 @@
+# busyyaks's HOST config — the settings the vendored agents_kanban engine runs on (vendor/agents_kanban/config.example.yml
+# documents every key; vendor/agents_kanban/SPEC.md § 2 says which rule reads each). NOT here: the boards. Every
+# project's columns (with their TYPES, order and graph positions) and its workflow (named transitions) live in the
+# DATABASE (tables boards / board_columns / board_transitions, migration 20261116000000, seeded from the engine's
+# coding board fixture = the Backlog → … → Merged board busyyaks first ran on as constants), instantiated from
+# the template row for a new project and edited by the operator in the graph editor (the board's Workflow button).
+# Copy to config/kanban.yml (gitignored) and edit it for your box: the launchers are this machine's commands, the
+# prompts your agents' instructions. The app reads the file KANBAN_CONFIG names (compose: /app/config/kanban.yml); the
+# test suite runs on test/fixtures/kanban.yml and checks that this example loads.
+priorities: [high, medium, low]
+label_colors: [green, yellow, orange, red, purple, blue, teal, pink, gray]
+system_author: busyyaks
+attachment_url_prefix: /api/attachments
+# the commands that start a session (the engine's Launch builds the argv; `--remote-control <session>` is appended
+# LAST by Launch itself, so no launcher names it). What is typed and which model: agent_types.
+# This example runs plain `claude` (Claude Code) in its default permission mode: a tool call your Claude Code
+# settings do not allow stops on a permission prompt, and busyyaks turns that prompt into a question on the card
+# (its needs_operator flag) that you answer from the board. Add launchers for your box, e.g.:
+#   - a shell function of your profile (via_shell: run through `bash -ic`), say one that points Claude Code at
+#     another model gateway — list it in each type's `launchers` below:
+#       - { key: localclaude, label: localclaude, command: localclaude, args: [], via_shell: true }
+#   - Claude Code without any permission prompt. Only on a machine and repos you trust the agent with completely: it
+#     then runs every command and edit with no question asked (Claude Code's bypassPermissions mode):
+#       - { key: unattended, label: unattended, command: claude, args: ["--permission-mode", "bypassPermissions"], via_shell: false }
+launchers:
+  - { key: claude, label: claude, command: claude, args: [], via_shell: false }
+# the agent types the Launch bar offers (one split pill each; the menu = the type's launchers). A launch registers
+# the session with the engine BEFORE tmux starts it: a `lead` adopts the project's ownerless cards in the columns of
+# the TYPES in `takes` (gate = the columns that wait for the operator; the work types are the worker's spawns_for) by
+# rule — no prompt asks it to claim; the prompt's {cards} tells it what it owns. A question for the operator is the
+# card's needs_operator FLAG (kanban_ask), never a column — the card keeps its place.
+# Per type:
+#   launchers       the launcher keys it may run. A start busyyaks performs that names none (a spawned worker with
+#                   no lead to follow, POST /api/launch without `launcher`) runs `spawn_launcher`, or the type's only
+#                   launcher; a type listing several with no spawn_launcher refuses such a start (the card says why) —
+#                   e.g. with a second launcher: `launchers: [claude, localclaude]` + `spawn_launcher: claude`. A
+#                   session started by hand registers with kanban_register(..., launcher) unless its type has one
+#   model           null = Claude Code's own model choice; or `--model <id>` for every launcher; or a map launcher key
+#                   → id / null (null under a gateway launcher: a --model would override the gateway's model — Claude
+#                   Code takes the LAST --model)
+#   prompt          typed after the start; placeholders {slug} {dir} {session} {agent} {type} {cards}. The prompts
+#                   name no column: every board's columns and transitions are the operator's (the Workflow editor),
+#                   so an agent reads where a card may go next from kanban_card's `transitions`
+# Caps: none (0 = no cap) except one lead per board.
+#
+agent_types:
+  - key: lead
+    label: Launch
+    launchers: [claude]
+    model: null
+    prompt: |
+      Busyyaks session for {slug} ({dir}). Your tmux session is {session}; on the board you are {agent} ({type}).
+      Your session is registered with the board and owns these cards: {cards}. Owning is not starting: do no work on them until a ping or I ask.
+      Every card you create with mcp__busyyaks__kanban_create is owned by your session when author is {agent} (or pass tmux_session "{session}").
+      Whenever you need my answer about a card (a question, a choice, a go-ahead): mcp__busyyaks__kanban_ask(id, question, author "{agent}", options) on that card, then end your turn — never ask it only in this chat. The card keeps its column and is flagged needs_operator until my comment answers; never move a card to ask. A question about no card: create one, then kanban_ask on it. Waiting for CI or a third party: kanban_block(id, reason, url), kanban_unblock when it clears.
+      Every comment you post starts with the header `[Team Lead] · <STATUS> · round <n> · severity: <blocker|major|minor|nit> · category: <correctness|security|perf|tests|style|design>` (STATUS one of OPEN, FIXED, DISAGREE, RESOLVED, NEEDS_HUMAN).
+      Never poll the board or a card (no sleep / re-read loops): comments and moves on your cards arrive in this session as pings.
+      Reply with one line: the card ids you own (or "none"). Then wait.
+    agent_name: "claude-{session}"
+    session_name: "{slug}_teamlead"
+    takes: [gate]
+    max: 0
+    # ONE lead per board, always: two leads adopt the same cards. Not a capacity cap.
+    max_per_project: 1
+  # ONE session per card: a card ownerless in a work column — entering the queued column, or LOST later (its owner
+  # gone: a watchdog release, the operator's Approve landing it in a review column with nobody left to carry on) — gets
+  # a new worker session started for it alone by the engine (spawns_for, by column TYPE). A flagged card
+  # (needs_operator / blocked_external) waits for the answer first. The lead never takes these (it takes the gates).
+  # Caps below; a full cap = the card waits, its note says why.
+  - key: worker
+    label: Worker
+    launchers: [claude]
+    model: null
+    # the board's running lead decides the launcher (a lead started on another launcher → its workers run that one)
+    launcher_follows: lead
+    prompt: |
+      Worker session for {slug} ({dir}). Your tmux session is {session}; on the board you are {agent} ({type}) — the AUTHOR AGENT of these cards.
+      You were started for exactly these cards: {cards}. Read each with mcp__busyyaks__kanban_card — its description, its activity (a card may have been started by a session that is gone: resume from where it stopped) and its `transitions` (where an agent may move it next) — and mcp__busyyaks__kanban_workflow (the board's columns, their types, its review loop). Do the work the card asks; move the card only along the transitions kanban_card lists for agents (kanban_move with `transition`, author "{agent}"). Follow the repo's CLAUDE.md / AGENTS.md rules. Work ONLY on these cards.
+      Comment format (every comment, mandatory): header `[Author Agent] · <STATUS> · round <n> · severity: <blocker|major|minor|nit> · category: <correctness|security|perf|tests|style|design>`, then the problem in one sentence and the evidence or suggestion. A reply to a review thread carries no severity or category: `[Author Agent] · FIXED · <sha> — <one line>` or `[Author Agent] · DISAGREE — <reasoning with evidence: file:line, spec, docs>`. You never write RESOLVED — only the Reviewer resolves a thread.
+      Blocked on me (a question, a choice, a go-ahead): mcp__busyyaks__kanban_ask(id, question, author "{agent}", options) on that card, then end your turn — never ask only in this chat. The card KEEPS its column and is flagged needs_operator until my comment answers; never move a card to ask. Blocked on CI, an API or somebody outside the board: mcp__busyyaks__kanban_block(id, reason, url); kanban_unblock(id, note) when it clears. A flagged card refuses your moves until then.
+      Before handing over, have the change checked by an independent QA agent (a fresh subagent: give it the card, the PR diff and how to run the app, NOT your conclusions): it runs the repo's tests, exercises the behaviour the card asks for, attaches screenshots for a visible change (kanban_attach) and posts its verdict on the card (kanban_comment, author "qa-{agent}": PASS / FAIL, what it ran, the output). FAIL → fix, then a NEW QA agent.
+      Agent review loop (a card in one of kanban_workflow's review_loop columns): dispatch a REVIEWER AGENT (a fresh subagent; give it ONLY the card, the PR diff, the repo rules and this brief — never your reasoning). Its brief: critique, do not rewrite code; round 1 reviews the whole diff, a re-round ONLY the new commits and the open threads; every finding as a PR review comment AND a card comment (author "reviewer-{agent}") headed `[Reviewer Agent] · OPEN · round <n> · severity: … · category: …`; it resolves a thread (`RESOLVED`) when the FIXED commit or DISAGREE evidence holds, marks one still disputed after 2 replies `NEEDS_HUMAN`; open threads left and rounds below review_loop.max_rounds → the transition kanban_card lists back to the author; none left or the limit reached → one `SUMMARY` comment and, once the PR's CI is green, kanban_handoff (author "reviewer-{agent}", review_summary = the SUMMARY's counts {fixed, resolved_by_argument, needs_human, open}: required at the round limit, the `unresolved` label goes on only when needs_human + open is above 0) into the gate (hand off only after CI is green; a refused handoff = wait for CI on a Monitor, then hand off again). Your reply to every reviewer thread: FIXED (+ sha) or DISAGREE (+ evidence), then the transition back to review → a NEW reviewer.
+      Work done (QA PASS, and the review loop finished where the board has one): mcp__busyyaks__kanban_handoff (how to QA it, the PR, the CI run if there is one, the QA verdict, screenshots for a UI change) — hand off only after CI is green; a refused handoff that names the CI state (not read yet, still running, failed) = wait for CI on a Monitor (fix it when red), then hand off again. If the handoff gate refuses for anything else, kanban_ask on the card with what you have instead of going silent.
+      After I approve a card: merge it only when the card's transitions and the repo's rules say so, then take the next agent transition kanban_card lists.
+      Never poll the board or a card (no sleep / re-read loops): comments and moves on your cards arrive in this session as pings.
+    agent_name: "worker-{session}"
+    session_name: "{slug}_worker"
+    takes: []
+    spawns_for: [queued, working, review, gate]   # gate: only an APPROVED card
+    max: 0
+    max_per_project: 0
+  - key: team
+    label: Sub team
+    launchers: [claude]
+    model: null
+    launcher_follows: lead   # a sub team runs the board's lead's launcher; another one asked for → 422
+    prompt: |
+      Busyyaks sub team for {slug} ({dir}). Dispatch subagents IN PARALLEL (one per area: recent commits, uncommitted work, open/unmerged branches) to review this repo, read-only. Then record the result with mcp__busyyaks__add_note (project "{slug}", author "{agent}"): compact tables, shas, max 5 "act on" bullets. Do not modify, commit or push anything unless I ask in this session.
+      Your tmux session is {session}; on the board you are {agent}: a card you create with mcp__busyyaks__kanban_create (author "{agent}") is owned by this session; a card you take over: mcp__busyyaks__kanban_claim with tmux_session "{session}".
+      Need my answer about a card: mcp__busyyaks__kanban_ask on it (the card keeps its column, flagged needs_operator), then end your turn — never ask it only in this chat.
+      Never poll the board or a card (no sleep / re-read loops): end your turn and wait for the ping.
+    agent_name: "team-{session}"
+    session_name: "{slug}_team"
+    takes: []
+    max: 0
+    max_per_project: 0
+  - key: plain
+    label: Plain
+    launchers: [claude]
+    model: null
+    prompt: null
+    agent_name: "claude-{session}"
+    session_name: "{slug}"
+    takes: []
+    max: 0
+    max_per_project: 0
+# registered agent sessions running at once on this host, every type and project together (the sidebar shows
+# "running / cap"); a launch or kanban_register beyond it is refused with who runs
+concurrency:
+  max_sessions: 0   # 0 = no cap
+# the tmux sessions a card of a board may be owned by: null = busyyaks's own rule (the sessions its collector files
+# under the card's project — the owner picker lists those); another host may name its sessions here as globs instead
+owner_sessions: null
+# the tables predate the library and keep their names (cards, card_activity, …): no data move
+table_prefix: ""
+# the board's --ak-* tokens mapped onto busyyaks's Glass palette (public/static/app.css), light and dark alike
+theme:
+  --ak-ink: var(--ink)
+  --ak-ink-dim: var(--ink-dim)
+  --ak-ink-faint: var(--ink-faint)
+  --ak-panel: var(--panel)
+  --ak-panel-2: var(--panel-2)
+  --ak-mat-fill: var(--mat-fill)
+  --ak-mat-fill-2: var(--mat-fill-2)
+  --ak-mat-card: var(--mat-card)
+  --ak-mat-blur: var(--mat-blur)
+  --ak-surface-3: var(--surface-3)
+  --ak-line: var(--line)
+  --ak-line-strong: var(--line-strong)
+  --ak-row-rule: var(--row-rule)
+  --ak-track: var(--track)
+  --ak-accent: var(--accent)
+  --ak-accent-rgb: var(--accent-rgb)
+  --ak-ok: var(--ok)
+  --ak-ok-rgb: var(--ok-rgb)
+  --ak-warn: var(--warn)
+  --ak-warn-rgb: var(--warn-rgb)
+  --ak-done: var(--vivid-purple)   # link tags for a finished state (a merged PR)
+  --ak-bad: var(--bad)
+  --ak-bad-rgb: var(--bad-rgb)
+  --ak-vivid-green: var(--vivid-green)
+  --ak-vivid-orange: var(--vivid-orange)
+  --ak-vivid-red: var(--vivid-red)
+  --ak-vivid-blue: var(--vivid-blue)
+  --ak-vivid-yellow: var(--vivid-yellow)
+  --ak-vivid-purple: var(--vivid-purple)
+  --ak-vivid-teal: var(--vivid-teal)
+  --ak-vivid-pink: var(--vivid-pink)
+  --ak-radius-card: var(--radius-card)
+  --ak-radius-band: var(--radius-band)
+  --ak-radius-ctl: var(--radius-ctl)
+  --ak-radius-ctl-sm: var(--radius-ctl-sm)
+  --ak-radius-chip: var(--radius-chip)
+  --ak-radius-pill: var(--radius-pill)
+  --ak-mono: var(--mono)
+  --ak-sans: var(--sans)
+  --ak-shadow-card: var(--shadow-card)
+  --ak-shadow-thumb: var(--shadow-thumb)
+  --ak-menu-shadow: var(--menu-shadow)
+# CI idle watch (engine: Store#idle_watch_pass; PR checks come from the github service through lib/busyyaks/ci_checks.rb)
+# on every board's WORKING column (In progress). A card whose PR's checks all finished and whose owner did nothing for
+# 10 min is pinged once ("CI on PR #N finished (<state>) — hand off or fix"); 20 min after that ping, still silent, the
+# system comments on the card; an alive owner with no card activity and no commit for 4 h is flagged with a comment.
+idle_watch: { ci_ping_after_minutes: 10, ci_comment_after_minutes: 20, owner_idle_hours: 4 }
+# the handoff gate's requirements on a board with a gate column (e.g. Human Check): kanban_handoff needs how to QA it
+# (≥ 20 chars), the PR URL, and screenshots attached first for a UI change. requires_ci_url: true also demands the CI
+# run's URL — turn it on once your repos have CI (any system whose run has a URL)
+handoff: { requires_pr_url: true, requires_ci_url: false, qa_min_chars: 20, ui_change_needs_screenshots: true }
+# the approval gate: null = none (the Approve button records the approval whatever the PR's checks say). With CI on
+# GitHub, `approval: { requires_green_ci: true }` refuses every approval step (Approve button or a drag along it) until
+# the PR it is about has green checks, read from the github service through lib/busyyaks/ci_checks.rb
+# (approval_checks): no PR, checks pending / failed / not read yet → refused with the reason. A kanban_handoff INTO such a
+# gate is refused the same way ("hand off once CI is green"), and every card waiting there has its checks asked on each
+# notifier watch pass, so the Approve answers at once. Without CI every approval would be refused, so it ships off
+approval: null
+# parent dependencies: recorded and shown only (false); true enforces them
+dependencies: false
+# session dialogs: asked only once on screen 30 s (a prompt cleared in seconds never reaches the operator);
+# the question quotes the agent's last comment on the card from the last 10 min, or says it gave no reason
+session_dialogs: { settle_seconds: 30, context_minutes: 10 }
+# the cross-cutting card flags (workflow v3): needs_operator (kanban_ask, a session dialog) and blocked_external
+# (kanban_block). A flagged card keeps its column, refuses agent moves and counts as waiting for you; after 24 h
+# without an answer the notifier posts ONE reminder comment on it.
+flags: { reminder_hours: 24 }
+# the agent review loop: null = none (no round limit, no label). A board whose workflow has an agent review column
+# (a review-type column the reviewer agent moves back to an author column) can cap it: name those column keys of
+# your board (kanban_workflow lists them) — after max_rounds per loop column the reviewer must hand the card to the
+# gate with the SUMMARY counts (review_summary), labelled `unresolved` only when needs_human + open > 0; the operator's move back into the loop allows
+# exactly one more round. e.g.
+#   review_loop: { max_rounds: 3, unresolved_label: unresolved, unresolved_color: red, columns: [<your review column keys>] }
+review_loop: null

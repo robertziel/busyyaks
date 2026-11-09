@@ -1,0 +1,11 @@
+.env
+/data/
+/config/busyyaks.yml
+/log/
+/tmp/
+/.claude/
+/public/app/
+/frontend/node_modules/
+/docker-compose.override.yml
+/deploy/rendered/
+/config/kanban.yml

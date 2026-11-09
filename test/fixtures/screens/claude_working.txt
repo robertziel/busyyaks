@@ -1,0 +1,11 @@
+● Reading the live collector snapshot.
+
+● Running 2 shell commands…
+  ⎿  $ tmux ls
+
+✢ Skedaddling… (1m 20s · ↓ 6.4k tokens)
+
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt

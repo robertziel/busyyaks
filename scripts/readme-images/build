@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# The README images of busyyaks AND of the kanban module (busyyaks_agents_kanban_module), from the demo stack: seeds it
+# once (the board through the MCP tools + the operator API: seed.js; the Today page's merged PRs: seed-github.rb),
+# captures every screenshot in the light skin (capture.js; the module's with its part marked), checks every word they
+# show against the private-term lists, then writes them into both checkouts.
+#
+#   README_DEMO_WEB_PORT=… README_DEMO_MCP_PORT=… scripts/readme-images/demo-stack up <workdir>
+#   PRIVATE_TERMS=<file>[:<file>…] scripts/readme-images/build <workdir> <module checkout>
+#     → docs/images/{today,board,card,today-mobile}.webp here
+#     → <module checkout>/docs/images/{board,card,launch-bar,workflow-editor}.webp
+#   scripts/readme-images/demo-stack down <workdir>
+#
+# PRIVATE_TERMS (required): term lists, colon-separated, one term per line (# comments, case-insensitive) — busyyaks's
+# and the module mirror's .private-terms; /dev/null states there is none. No term may appear in the captured text, in
+# these scripts or in the README SVGs; the images reach docs/images/ only when none does. The SVGs:
+# scripts/readme-images/svgs.py. The demo is seeded once per workdir (the marker `seeded` holds the seeded card ids); a
+# second run captures again without seeding.
+set -euo pipefail
+
+PLAYWRIGHT=mcr.microsoft.com/playwright:v1.63.0-noble
+NODE=node:22-bookworm-slim   # the Dockerfile's frontend stage
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+w=$(cd "${1:?workdir (scripts/readme-images/demo-stack up)}" && pwd)
+module=$(cd "${2:?the kanban module checkout (its docs/images/ gets the module images)}" && pwd)
+[ -d "$module/react/src/components" ] || { echo "build: $module is not a kanban module checkout" >&2; exit 1; }
+IFS=: read -r -a lists <<< "${PRIVATE_TERMS:?term list files, colon-separated (each mirror .private-terms), or /dev/null for none}"
+for l in "${lists[@]}"; do [ -r "$l" ] || { echo "build: term list $l is not readable" >&2; exit 1; }; done
+
+env_of() {
+  local v
+  v=$(grep "^$1=" "$w/.env" | cut -d= -f2-) || true
+  [ -n "$v" ] || { echo "build: $1 is not set in $w/.env (was the workdir made by demo-stack up?)" >&2; exit 1; }
+  printf '%s\n' "$v"
+}
+web="http://127.0.0.1:$(env_of WEB_HOST_PORT)"
+mcp="http://127.0.0.1:$(env_of MCP_HOST_PORT)/mcp"
+token=$(env_of MCP_TOKEN)
+
+if [ ! -e "$w/seeded" ]; then
+  docker run --rm --network host -e WEB="$web" -e MCP="$mcp" -e MCP_TOKEN="$token" \
+    -v "$here:/s:ro" "$NODE" node /s/seed.js > "$w/seeded.tmp"
+  docker compose -p readme-demo --project-directory "$w" --env-file "$w/.env" -f "$repo/docker-compose.yml" \
+    -f "$w/override.yml" exec -T web bundle exec ruby - < "$here/seed-github.rb"
+  mv "$w/seeded.tmp" "$w/seeded"
+fi
+card=$(sed -nE 's/.*"card":([0-9]+).*/\1/p' "$w/seeded")
+[ -n "$card" ] || { echo "build: no card id in $w/seeded" >&2; exit 1; }
+
+rm -rf "$w/raw" "$w/images"
+mkdir -p "$w/raw" "$w/images/busyyaks" "$w/images/module"
+docker run --rm --network host -u "$(id -u):$(id -g)" -e HOME=/tmp -e WEB="$web" -e CARD="$card" \
+  -e OUT_BUSYYAKS=/out/busyyaks -e OUT_MODULE=/out/module -e RAW=/raw \
+  -v "$w/images:/out" -v "$w/raw:/raw" -v "$here:/s:ro" "$PLAYWRIGHT" \
+  sh -euc 'mkdir -p /tmp/w && cd /tmp/w && npm init -y >/dev/null && npm install --silent playwright@1.63.0 >/dev/null && NODE_PATH=/tmp/w/node_modules node /s/capture.js'
+
+# no private term in anything the images show, in these scripts, in the README SVGs or in the public text of the docs
+# that show them (both READMEs, the pages that say how to regenerate them: <!-- local-only --> blocks dropped, as the
+# publish gate does). The file is named, never the term.
+mkdir -p "$w/public"
+for f in "$repo/README.md" "$repo/docs/TESTING.md" "$module/README.md" "$module/docs/DEVELOPMENT.md"; do
+  awk '/    > "$w/public/$(basename "$(dirname "$f")")-$(basename "$f")"
+done
+found=0
+while IFS= read -r t; do
+  case $t in '' | '#'*) continue ;; esac
+  if grep -i -F -l -- "$t" "$w"/raw/*.txt "$here"/* "$repo"/docs/images/*.svg "$module"/docs/images/*.svg "$w"/public/*; then
+    found=1
+  fi
+done < <(cat "${lists[@]}")
+[ "$found" = 0 ] || { echo "build: a private term is in the files above; docs/images/ left as they were" >&2; exit 1; }
+# every image small enough for a README (GitHub serves them as they are)
+MAX_BYTES=409600
+big=$(find "$w/images" -name '*.webp' -size +"$MAX_BYTES"c)
+[ -z "$big" ] || { echo "build: over $MAX_BYTES bytes: $big; docs/images/ left as they were" >&2; exit 1; }
+cp "$w"/images/busyyaks/*.webp "$repo/docs/images/"
+cp "$w"/images/module/*.webp "$module/docs/images/"
+echo "build: no private term in $(cat "$w"/raw/*.txt | wc -w) captured words + the scripts + the SVGs + the docs → both docs/images/"

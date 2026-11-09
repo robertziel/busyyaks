@@ -1,0 +1,158 @@
+# The kanban host config the TEST SUITE runs on (compose `test` service: KANBAN_CONFIG). Not an example for a box —
+# that is config/kanban.example.yml (test/unit/no_kanban_code_test.rb checks it loads and stays generic). This one
+# lists two launchers and per-launcher models so the launch / follow / spawn paths are exercised.
+priorities: [high, medium, low]
+label_colors: [green, yellow, orange, red, purple, blue, teal, pink, gray]
+system_author: busyyaks
+attachment_url_prefix: /api/attachments
+# two launchers, so the suite exercises the launcher menu, the follow rule and the via_shell (`bash -ic`) path:
+# `fullclaude` = claude + flags, `localclaude` = a profile function standing for a gateway launcher
+launchers:
+  - { key: fullclaude, label: fullclaude, command: claude, args: ["--permission-mode", "bypassPermissions"], via_shell: false }
+  - { key: localclaude, label: localclaude, command: localclaude, args: [], via_shell: true }
+# the agent types the Launch bar offers (one split pill each; the menu = the type's launchers). A launch registers
+# the session with the engine BEFORE tmux starts it: a `lead` adopts the project's ownerless cards in the columns of
+# the TYPES in `takes` (gate = the columns that wait for the operator: Human Check / Ready to merge, the local
+# boards' Human review / Local: Deploy check / Awaiting merge; the work types are the worker's spawns_for) by rule — no
+# prompt asks it to claim; the prompt's {cards} tells it what it owns. Workflow v3 (card #233): a question for the
+# operator is the card's needs_operator FLAG (kanban_ask), never a column — the card keeps its place.
+# Caps: none (0 = no cap) except one lead per board.
+#
+agent_types:
+  - key: lead
+    label: Launch
+    launchers: [fullclaude, localclaude]
+    model: null   # stays null: a --model would override localclaude's gateway model (Claude takes the LAST --model) — test/unit/no_kanban_code_test.rb
+    prompt: |
+      Test {type} session for {slug} ({dir}): tmux {session}, board name {agent}, cards {cards}.
+    agent_name: "claude-{session}"
+    session_name: "{slug}_teamlead"
+    takes: [gate]
+    max: 0
+    # ONE lead per board, always: two leads adopt the same cards (seen twice). Not a capacity cap.
+    max_per_project: 1
+  # ONE session per card: a card ownerless in a work column — entering the queued column (To do), or LOST later (its
+  # owner gone: a watchdog release, the operator's Approve landing it in a review column with nobody left to carry on)
+  # — gets a new worker session started for it alone by the engine (spawns_for, by column TYPE). A flagged card
+  # (needs_operator / blocked_external) waits for the answer first. The lead never takes these (it takes the gates).
+  # Caps below; a full cap = the card waits, its note says why.
+  - key: worker
+    label: Worker
+    launchers: [fullclaude, localclaude]
+    # --model on its launch → the collector reads it → the card face shows it; none under localclaude: a
+    # --model would override the gateway's model (Claude takes the LAST --model)
+    model: { fullclaude: opus, localclaude: null }
+    # the board's running lead decides the launcher: a lead started on localclaude → its workers run localclaude; no lead running → fullclaude
+    launcher_follows: lead
+    spawn_launcher: fullclaude   # no lead to follow → fullclaude (the operator's explicit choice, no code default)
+    prompt: |
+      Test {type} session for {slug} ({dir}): tmux {session}, board name {agent}, cards {cards}.
+    agent_name: "worker-{session}"
+    session_name: "{slug}_worker"
+    takes: []
+    spawns_for: [queued, working, review, gate]   # gate: only an APPROVED card (Awaiting merge / Ready to merge)
+    max: 0
+    max_per_project: 0
+  - key: team
+    label: Sub team
+    launchers: [fullclaude, localclaude]
+    model: { fullclaude: opus, localclaude: null }   # none under localclaude (see worker)
+    launcher_follows: lead   # a sub team runs the board's lead's launcher; another one asked for → 422
+    prompt: |
+      Test {type} session for {slug} ({dir}): tmux {session}, board name {agent}, cards {cards}.
+    agent_name: "team-{session}"
+    session_name: "{slug}_team"
+    takes: []
+    max: 0
+    max_per_project: 0
+  - key: plain
+    label: Plain
+    launchers: [fullclaude, localclaude]
+    model: null   # same: localclaude
+    prompt: null
+    agent_name: "claude-{session}"
+    session_name: "{slug}"
+    takes: []
+    max: 0
+    max_per_project: 0
+# registered agent sessions running at once on this host, every type and project together (the sidebar shows
+# "running / cap"); a launch or kanban_register beyond it is refused with who runs
+concurrency:
+  max_sessions: 0   # 0 = no cap
+# the tmux sessions a card of a board may be owned by: null = busyyaks's own rule (the sessions its collector files
+# under the card's project — the owner picker lists those); another host may name its sessions here as globs instead
+owner_sessions: null
+# the tables predate the library and keep their names (cards, card_activity, …): no data move
+table_prefix: ""
+# the board's --ak-* tokens mapped onto busyyaks's Glass palette (public/static/app.css), light and dark alike
+theme:
+  --ak-ink: var(--ink)
+  --ak-ink-dim: var(--ink-dim)
+  --ak-ink-faint: var(--ink-faint)
+  --ak-panel: var(--panel)
+  --ak-panel-2: var(--panel-2)
+  --ak-mat-fill: var(--mat-fill)
+  --ak-mat-fill-2: var(--mat-fill-2)
+  --ak-mat-card: var(--mat-card)
+  --ak-mat-blur: var(--mat-blur)
+  --ak-surface-3: var(--surface-3)
+  --ak-line: var(--line)
+  --ak-line-strong: var(--line-strong)
+  --ak-row-rule: var(--row-rule)
+  --ak-track: var(--track)
+  --ak-accent: var(--accent)
+  --ak-accent-rgb: var(--accent-rgb)
+  --ak-ok: var(--ok)
+  --ak-ok-rgb: var(--ok-rgb)
+  --ak-warn: var(--warn)
+  --ak-warn-rgb: var(--warn-rgb)
+  --ak-done: var(--vivid-purple)   # link tags for a finished state (a merged PR)
+  --ak-bad: var(--bad)
+  --ak-bad-rgb: var(--bad-rgb)
+  --ak-vivid-green: var(--vivid-green)
+  --ak-vivid-orange: var(--vivid-orange)
+  --ak-vivid-red: var(--vivid-red)
+  --ak-vivid-blue: var(--vivid-blue)
+  --ak-vivid-yellow: var(--vivid-yellow)
+  --ak-vivid-purple: var(--vivid-purple)
+  --ak-vivid-teal: var(--vivid-teal)
+  --ak-vivid-pink: var(--vivid-pink)
+  --ak-radius-card: var(--radius-card)
+  --ak-radius-band: var(--radius-band)
+  --ak-radius-ctl: var(--radius-ctl)
+  --ak-radius-ctl-sm: var(--radius-ctl-sm)
+  --ak-radius-chip: var(--radius-chip)
+  --ak-radius-pill: var(--radius-pill)
+  --ak-mono: var(--mono)
+  --ak-sans: var(--sans)
+  --ak-shadow-card: var(--shadow-card)
+  --ak-shadow-thumb: var(--shadow-thumb)
+  --ak-menu-shadow: var(--menu-shadow)
+# CI idle watch (engine: Store#idle_watch_pass; PR checks come from the github service through lib/busyyaks/ci_checks.rb)
+# on every board's WORKING column (In progress). A card whose PR's checks all finished and whose owner did nothing for
+# 10 min is pinged once ("CI on PR #N finished (<state>) — hand off or fix"); 20 min after that ping, still silent, the
+# system comments on the card; an alive owner with no card activity and no commit for 4 h is flagged with a comment.
+idle_watch: { ci_ping_after_minutes: 10, ci_comment_after_minutes: 20, owner_idle_hours: 4 }
+# the handoff gate's requirements on a board with a gate column (Human Check / Ready to merge; the local boards' Human
+# review / Local: Deploy check / Awaiting merge): kanban_handoff needs how to QA it (≥ 20 chars), the PR and CI URLs,
+# and screenshots attached first for a UI change
+handoff: { requires_pr_url: true, requires_ci_url: true, qa_min_chars: 20, ui_change_needs_screenshots: true }
+# the approval gate: every approval step (Approve button or a drag along it) is refused until the PR it is about has
+# green checks — the open local PR at Local: Human review, its merge commit's jenkins/ci on `local` at Local deploy
+# check, the public pub/card-<id> PR at Public: Human review (the final step, once the local PR is merged) — read from the github service through lib/busyyaks/ci_checks.rb (approval_checks);
+# null = no gate
+approval: { requires_green_ci: true }
+# parent dependencies: recorded and shown only (false); true enforces them
+dependencies: false
+# session dialogs: asked only once on screen 30 s (a prompt cleared in seconds never reaches the operator);
+# the question quotes the agent's last comment on the card from the last 10 min, or says it gave no reason
+session_dialogs: { settle_seconds: 30, context_minutes: 10 }
+# the cross-cutting card flags (workflow v3): needs_operator (kanban_ask, a session dialog) and blocked_external
+# (kanban_block). A flagged card keeps its column, refuses agent moves and counts as waiting for you; after 24 h
+# without an answer the notifier posts ONE reminder comment on it.
+flags: { reminder_hours: 24 }
+# the agent review loop (Local / Public: Agent review ↔ Author response — the loop columns; the coding board's QA has
+# no limit): 3 rounds per loop column, then the reviewer must hand the card to Human review; at the limit the handoff
+# carries the label `unresolved` (red). The operator's Changes requested allows exactly one more round.
+review_loop: { max_rounds: 3, unresolved_label: unresolved, unresolved_color: red,
+               columns: [local_agent_review, public_agent_review] }

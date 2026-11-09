@@ -1,0 +1,14 @@
+● I need one decision before I go on.
+
+────────────────────────────────────────────────────────────
+ ☐ Storage
+
+Where should the seen marks live?
+
+❯ 1. SQLite
+     One row per session.
+  2. localStorage
+     Per browser.
+  3. Type something.
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

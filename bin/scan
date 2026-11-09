@@ -1,0 +1,26 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Scans every repo, then sleeps SCAN_INTERVAL_SECONDS, forever. A failed scan is recorded
+# (scans.error, shown on the dashboard) and the loop keeps going; it never invents data.
+require "hanami/prepare"
+require "busyyaks/config"
+require "busyyaks/scanner"
+require "busyyaks/store"
+
+interval = Integer(ENV.fetch("SCAN_INTERVAL_SECONDS"))
+config = Busyyaks::Config.load
+store = Busyyaks::Store.default
+$stdout.sync = true
+loop do
+  t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  begin
+    n = Busyyaks::Scanner.new(config, store).run
+    puts "scan ok repos=#{n} seconds=#{(Process.clock_gettime(Process::CLOCK_MONOTONIC) - t).round(1)}"
+  rescue StandardError => e
+    puts "scan FAILED #{e.class}: #{e.message}"
+  end
+  break if ENV["SCAN_ONCE"] == "1"
+
+  sleep interval
+end

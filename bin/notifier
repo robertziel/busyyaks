@@ -1,0 +1,33 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Card notifier: delivers comment pings to owner sessions every NOTIFIER_INTERVAL_SECONDS, runs the owner
+# watchdog every NOTIFIER_WATCH_SECONDS (cards whose session is gone for WATCHDOG_GRACE_SECONDS are released).
+require "hanami/prepare"
+require "busyyaks/kanban"
+
+interval = Integer(ENV.fetch("NOTIFIER_INTERVAL_SECONDS"))
+watch_every = Integer(ENV.fetch("NOTIFIER_WATCH_SECONDS"))
+grace = Integer(ENV.fetch("WATCHDOG_GRACE_SECONDS"))
+$stdout.sync = true
+Busyyaks::Kanban.watch_fits!(watch: watch_every, interval: interval) # the watch pass keeps the gated cards' CI requests inside the poll window
+n = Busyyaks::Kanban.notifier(grace: grace)
+last_watch = 0
+puts "notifier up: deliver every #{interval}s, watchdog every #{watch_every}s, grace #{grace}s"
+loop do
+  n.deliver
+  if Time.now.to_i - last_watch >= watch_every
+    # Re-read config/kanban.yml with the vendored engine every watch pass (Kanban.config is memoized at boot, the host
+    # launcher reads it fresh): a config the engine refuses stops the notifier loudly instead of leaving pings and the
+    # watchdog silently dead.
+    begin
+      AgentsKanban::HostConfig.load(Busyyaks::Kanban::CONFIG_PATH)
+    rescue StandardError => e
+      warn "notifier: config/kanban.yml refused by the vendored engine: #{e.class}: #{e.message}"
+      exit 1
+    end
+    n.watch
+    last_watch = Time.now.to_i
+  end
+  sleep interval
+end

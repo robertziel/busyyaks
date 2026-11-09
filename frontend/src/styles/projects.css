@@ -1,0 +1,728 @@
+/* busyyaks — projects page (toolbar, tree table, launch split, custom select, create). Glass tokens from app.css.
+   Sticky offsets --top-h / --bar-h are measured by projects.js (header and toolbar heights). */
+
+:root {
+  --top-h: 0px;
+  --bar-h: 0px;
+  --menu-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 10px 30px -6px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+:root[data-skin="dark"] {
+  --menu-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.1), 0 12px 32px -6px rgba(0, 0, 0, 0.6);
+}
+
+.btn.small {
+  font-size: 12.5px;
+  padding: 0.2rem 0.7rem;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.launchbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+}
+/* a project's tmux sessions — one grid, every column aligned across rows */
+.sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.sessions-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  min-height: 28px;
+}
+.sessions-head b {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.sessions-grid {
+  display: grid;
+  grid-template-columns: 10px minmax(0, max-content) minmax(0, 1fr) 3.5em max-content max-content;
+  column-gap: 12px;
+  row-gap: 4px;
+  align-items: center;
+}
+.sessions-row {
+  display: contents;
+}
+.sessions-row > * {
+  min-width: 0;
+}
+.sessions .sessions-name code {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+.sessions-type,
+.sessions-age {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sessions-age {
+  text-align: right;
+}
+.sessions-links {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.sessions-links .copychip {
+  display: inline-flex;
+}
+@media (max-width: 720px) {
+  /* phone: each row is its own grid — name · age · Stop, the links on a line under the name */
+  .sessions-grid {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .sessions-row {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr) 3em max-content;
+    grid-template-areas: "dot name age stop" ". links links links";
+    column-gap: 10px;
+    row-gap: 6px;
+    align-items: center;
+  }
+  .sessions-row > .dot {
+    grid-area: dot;
+  }
+  .sessions-row > .sessions-name {
+    grid-area: name;
+  }
+  .sessions-row > .sessions-age {
+    grid-area: age;
+  }
+  .sessions-row > .stop-btn {
+    grid-area: stop;
+  }
+  .sessions-row > .sessions-links {
+    grid-area: links;
+    flex-wrap: wrap;
+  }
+  .sessions-type {
+    display: none;
+  }
+}
+.launchbar code,
+.flash code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--mat-fill-2);
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-chip);
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.flash {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: var(--mat-card);
+  border-radius: var(--radius-band);
+  box-shadow: var(--shadow-card);
+}
+.flash.bad span {
+  color: var(--bad);
+}
+
+/* ── custom select: a trigger + a frosted listbox (moved to <body> while open, so no overflow clips it) ── */
+.chev {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: translateY(-2px) rotate(45deg);
+  opacity: 0.8;
+  flex: none;
+}
+[aria-expanded="true"] > .chev {
+  transform: translateY(1px) rotate(-135deg);
+}
+.sel {
+  display: inline-flex;
+  position: relative;
+}
+.sel-btn {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 150px;
+  padding: 0.35rem 0.7rem;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  cursor: pointer;
+  text-align: left;
+  background: var(--mat-fill-2);
+  box-shadow: inset 0 0 0 0.5px var(--line-strong);
+  color: var(--ink);
+}
+.sel-btn:hover {
+  background: var(--mat-fill);
+}
+.sel-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu {
+  position: absolute;
+  z-index: 100;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  min-width: 160px;
+  max-height: 60vh;
+  overflow-y: auto;
+  font: 13px/1.4 var(--sans);
+  color: var(--ink);
+  background: var(--mat-card);
+  -webkit-backdrop-filter: var(--mat-blur);
+  backdrop-filter: var(--mat-blur);
+  border-radius: 14px;
+  box-shadow: var(--menu-shadow);
+}
+.menu[hidden] {
+  display: none;
+}
+.menu:focus {
+  outline: 0;
+}
+.item {
+  position: relative;
+  padding: 0.32rem 0.75rem 0.32rem 1.75rem;
+  border-radius: var(--radius-ctl-sm);
+  cursor: default;
+  white-space: nowrap;
+  user-select: none;
+}
+.item[aria-selected="true"] {
+  font-weight: 600;
+}
+.item[aria-selected="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0.7rem;
+  top: 50%;
+  width: 0.3rem;
+  height: 0.6rem;
+  margin-top: -0.42rem;
+  border: solid var(--accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.item.active,
+.item:hover {
+  background: var(--button-fill);
+  color: #ffffff;
+}
+.item.active[aria-selected="true"]::before,
+.item:hover[aria-selected="true"]::before {
+  border-color: #ffffff;
+}
+
+/* launch: two split pills — primary "Launch" (busyyaks session) and quiet "Plain", each + its launcher chooser */
+.launchpair {
+  display: inline-flex;
+  gap: 6px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+div.launch {
+  display: inline-flex;
+  margin: 0;
+  align-items: stretch;
+  white-space: nowrap;
+}
+div.launch .split-main,
+.ak-launch .ak-launch-main {
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+  padding-right: 0.6rem;
+}
+.ak-launch .ak-launch-main:last-child {
+  border-radius: var(--radius-pill);
+}
+.ak-launch {
+  display: inline-flex;
+  margin: 0;
+  align-items: stretch;
+  white-space: nowrap;
+}
+.ak-launch .ak-launch-menu {
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+  margin-left: -1px;
+}
+table.tree .ak-launch .btn.primary {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+}
+table.tree tr:hover .ak-launch .btn.primary:not(:disabled),
+table.tree .ak-launch:focus-within .btn.primary:not(:disabled) {
+  background: var(--button-fill);
+  color: #ffffff;
+}
+div.launch .split-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  font-size: 11.5px;
+  letter-spacing: 0;
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+  padding: 0.2rem 0.6rem 0.2rem 0.55rem;
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.28);
+}
+div.launch .split-menu .sel-label {
+  max-width: 110px;
+}
+div.launch .split-menu:not(.primary) {
+  box-shadow: inset 1px 0 0 var(--line-strong);
+}
+div.launch .split-menu:disabled {
+  opacity: 1;
+}
+div.launch .split-main:disabled + .split-menu {
+  opacity: 0.45;
+}
+/* in the table 82 solid pills would shout: tinted at rest, solid on the hovered / focused / open row */
+table.tree div.launch .btn.primary {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+}
+table.tree div.launch .split-menu {
+  box-shadow: inset 1px 0 0 rgba(var(--accent-rgb), 0.22);
+}
+table.tree tr:hover div.launch .btn.primary:not(:disabled),
+table.tree div.launch:focus-within .btn.primary:not(:disabled),
+table.tree div.launch:has([aria-expanded="true"]) .btn.primary:not(:disabled) {
+  background: var(--button-fill);
+  color: #ffffff;
+}
+table.tree tr:hover div.launch .split-menu,
+table.tree div.launch:focus-within .split-menu {
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.28);
+}
+
+/* ── toolbar: search, count chips, match count, expand/collapse — sticky under the header ─────────── */
+.toolbar {
+  position: sticky;
+  top: var(--top-h);
+  z-index: 6;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.search {
+  position: relative;
+  flex: 0 1 260px;
+  min-width: 180px;
+  display: block;
+}
+.search input {
+  width: 100%;
+  font: inherit;
+  padding: 0.35rem 2rem 0.35rem 0.75rem;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: var(--mat-fill-2);
+  box-shadow: inset 0 0 0 0.5px var(--line-strong);
+  color: var(--ink);
+}
+.search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+.search kbd {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font: 500 11px/1 var(--mono);
+  color: var(--ink-faint);
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--mat-fill);
+  pointer-events: none;
+}
+.search:focus-within kbd {
+  opacity: 0;
+}
+.chips {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.chip {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 0.22rem 0.6rem 0.22rem 0.7rem;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--mat-fill);
+  color: var(--ink-dim);
+  cursor: pointer;
+  display: inline-flex;
+  gap: 5px;
+  align-items: baseline;
+}
+.chip b {
+  font-weight: 600;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.chip:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+.chip[aria-pressed="true"] {
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent);
+  font-weight: 600;
+}
+.chip[aria-pressed="true"] b {
+  color: var(--accent);
+}
+.count {
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+/* ── the tree table ───────────────────────────────────────────────────────────────────────────── */
+.tree-wrap {
+  overflow: clip;
+}
+table.tree {
+  overflow: visible;
+  table-layout: auto;
+  font-size: 13px;
+}
+table.tree th,
+table.tree td {
+  padding: 5px 10px;
+  vertical-align: middle;
+  white-space: nowrap;
+  line-height: 1.35;
+}
+table.tree thead th {
+  position: sticky;
+  top: calc(var(--top-h) + var(--bar-h));
+  z-index: 2;
+  font-size: 12px;
+  padding: 7px 10px;
+  background: var(--mat-card);
+  -webkit-backdrop-filter: var(--mat-blur);
+  backdrop-filter: var(--mat-blur);
+  border-bottom: 0.5px solid var(--line-strong);
+}
+table.tree th.name,
+table.tree td.name {
+  width: 100%;
+  padding-left: calc(10px + var(--depth, 0) * 20px);
+}
+table.tree th.kind {
+  width: 1%;
+}
+table.tree td.branch {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+table.tree td.branch .mono {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+table.tree .when {
+  min-width: 56px;
+}
+table.tree th.launch,
+table.tree td.launch {
+  text-align: right;
+  padding-right: 12px;
+}
+table.tree td.launch {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+table.tree td.tmux {
+  width: 1%;
+}
+
+table.tree td.n {
+  color: var(--ink-dim);
+}
+table.tree td.zero {
+  color: var(--ink-faint);
+  opacity: 0.55;
+}
+table.tree td.when.old {
+  color: var(--ink-faint);
+}
+table.tree td.warn {
+  color: var(--warn);
+}
+.pip {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 0.35em;
+  border-radius: var(--radius-pill);
+  text-align: center;
+  font-weight: 600;
+  color: var(--warn);
+  background: rgba(var(--warn-rgb), 0.12);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.badge {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 0.4em;
+  border-radius: var(--radius-pill);
+  text-align: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+}
+.badge.live {
+  color: var(--ok);
+  background: rgba(var(--ok-rgb), 0.14);
+}
+table.tree .tag {
+  font-size: 11px;
+  padding: 0.05rem 0.45rem;
+}
+table.tree td.name a {
+  font-weight: 500;
+}
+
+/* folders: tinted band, chevron, icon, bold name, child count; nested repos hang off a guide line */
+table.tree tr.folder {
+  cursor: pointer;
+}
+table.tree tr.folder td {
+  background: var(--panel-2);
+  font-weight: 500;
+}
+table.tree tr.folder:hover td {
+  background: var(--surface-3);
+}
+table.tree tr.folder td.name .muted {
+  font-weight: 500;
+  font-size: 11.5px;
+  padding: 0 0.45em;
+  border-radius: var(--radius-pill);
+  background: var(--mat-fill);
+  color: var(--ink-faint);
+  margin-left: 2px;
+}
+.twisty {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  padding: 0;
+  margin: 0 2px 0 -2px;
+  background: none;
+  cursor: pointer;
+  vertical-align: -4px;
+  color: var(--ink-faint);
+  border-radius: 5px;
+}
+.twisty::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border: solid currentColor;
+  border-width: 0 1.6px 1.6px 0;
+  transform: translate(-1px, -1px) rotate(-45deg);
+  transition: transform 0.15s;
+}
+.twisty[aria-expanded="true"]::before {
+  transform: translate(0, -2px) rotate(45deg);
+}
+.ficon {
+  display: inline-block;
+  width: 15px;
+  height: 11px;
+  margin-right: 7px;
+  border-radius: 2px 3px 3px 3px;
+  background: var(--vivid-blue);
+  opacity: 0.85;
+  vertical-align: -1px;
+  position: relative;
+}
+.ficon::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -2px;
+  width: 6px;
+  height: 3px;
+  border-radius: 2px 2px 0 0;
+  background: inherit;
+}
+.branchline {
+  display: inline-block;
+  width: 14px;
+  height: 18px;
+  margin: 0 6px 0 7px;
+  vertical-align: -5px;
+  border-left: 1.5px solid var(--line-strong);
+  position: relative;
+}
+tr.repo[style*="--depth:0"] .branchline {
+  display: none;
+}
+.branchline::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 9px;
+  border-top: 1.5px solid var(--line-strong);
+}
+.branchline.last {
+  height: 9px;
+  vertical-align: 1px;
+}
+.branchline.last::after {
+  top: 100%;
+}
+table.tree tr.empty td {
+  text-align: center;
+  padding: 18px;
+}
+
+/* ── new project ──────────────────────────────────────────────────────────────────────────────── */
+form.create {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.field .lbl {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+.field.grow {
+  flex: 1 1 320px;
+}
+form.create input {
+  font: inherit;
+  width: 100%;
+  padding: 0.35rem 0.7rem;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: var(--mat-fill-2);
+  box-shadow: inset 0 0 0 0.5px var(--line-strong);
+  color: var(--ink);
+}
+form.create .btn.primary {
+  padding: 0.4rem 1rem;
+}
+table.jobs {
+  font-size: 13px;
+}
+table.jobs td {
+  padding: 5px 12px;
+  vertical-align: middle;
+}
+table.jobs td.url,
+table.jobs td.log {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── narrow: the table scrolls in its own box (header no longer sticks); controls stack ─────────── */
+@media (max-width: 900px) {
+  .tree-wrap {
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+  table.tree thead th {
+    position: static;
+  }
+  table.tree th.name,
+  table.tree td.name {
+    width: auto;
+  }
+}
+@media (max-width: 600px) {
+  .toolbar {
+    position: static;
+    padding: 8px;
+  }
+  .search {
+    flex: 1 1 100%;
+  }
+  .toolbar .spacer {
+    display: none;
+  }
+  .count {
+    margin-left: auto;
+  }
+  form.create .field,
+  form.create .btn.primary {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+  .sel,
+  .sel-btn {
+    width: 100%;
+  }
+  div.launch .split-menu .sel-label {
+    display: none;
+  }
+  div.launch .split-menu {
+    padding: 0.2rem 0.6rem 0.2rem 0.5rem;
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .menu,
+  table.tree thead th {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--panel);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .twisty::before {
+    transition: none;
+  }
+}

@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# ONE read of ONE repo through libgit2, for Busyyaks::GitRead (lib/busyyaks/git_read.rb), which starts this with an
+# empty environment, cwd /, its limits (RLIMIT_AS / RLIMIT_CPU, a wall-clock kill) and --disable-gems: the request is
+# one JSON object on stdin, the answer one JSON object on stdout. Never run by hand against a repo you do not trust
+# without those limits.
+require "busyyaks/git_reader"
+
+$stdout.write(Busyyaks::GitReader.serve($stdin.read(1024 * 1024)))

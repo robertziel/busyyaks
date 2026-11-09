@@ -1,0 +1,51 @@
+busyyaks
+Copyright 2026 Robert Zieliński
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes third-party material, listed below with its source, its license and where it lives in this
+repository. Each license's full text is in the path given, or at the URL given.
+
+--------------------------------------------------------------------------------------------------------------------
+1. herdr: agent screen-state detection (ported)
+   Path:    lib/busyyaks/agent_screen.rb
+   Source:  https://github.com/herdrdev/herdr, commit ee5bfb5041bb3e4a49d591c72308aae3c81ecdde:
+            src/detect/manifest.rs (the rule engine) and
+            distribution/agent-detection/claude.toml, distribution/agent-detection/hermes.toml (the rules)
+   License: Apache License 2.0 (the same text as LICENSE)
+   Changes: translated from Rust and TOML into Ruby; rules kept with their ids, priorities and patterns, Rust regex
+            syntax translated to Ruby; a known agent with no matching rule is reported as `unknown` instead of `idle`.
+   herdr ships no NOTICE file at that commit (checked: no NOTICE in its tree), so there is no NOTICE text to carry
+   over under section 4(d) of the license.
+
+2. Cookpad Ruby style guide: RuboCop rules (copied verbatim)
+   Path:    config/rubocop/cookpad.yml
+   Source:  https://github.com/cookpad/styleguide/blob/255d797bac4930a45a9a724419ce5e2db8456572/rubocop.yml
+   License: Creative Commons Attribution 3.0 Unported (CC BY 3.0),
+            https://creativecommons.org/licenses/by/3.0/
+   Copyright (c) Cookpad Inc. Unmodified; this repository's own settings are in .rubocop.yml.
+
+3. Inter typeface
+   Path:    public/static/fonts/Inter-400.woff2, Inter-500.woff2, Inter-600.woff2
+   Source:  https://github.com/rsms/inter
+   License: SIL Open Font License 1.1, full text in public/static/fonts/Inter-OFL.txt
+   Copyright 2020 The Inter Project Authors.
+
+4. Fragment Mono typeface
+   Path:    public/static/fonts/FragmentMono-Regular.woff2
+   Source:  https://github.com/weiweihuanghuang/fragment-mono
+   License: SIL Open Font License 1.1, full text in public/static/fonts/FragmentMono-OFL.txt
+   Copyright 2022 The Fragment-Mono Project Authors.
+
+5. busyyaks_agents_kanban_module: the kanban engine (vendored copy)
+   Path:    vendor/agents_kanban/ (Ruby port, fixtures, SPEC.md, config.example.yml),
+            frontend/src/vendor/agents_kanban/ (React port)
+   Source:  https://github.com/robertziel/busyyaks_agents_kanban_module, at the commit pinned in
+            vendor/agents_kanban/VENDOR.md and frontend/src/vendor/VENDOR.md
+   License: Apache License 2.0, full text in vendor/agents_kanban/LICENSE and
+            frontend/src/vendor/agents_kanban/LICENSE
+   Copyright 2026 Robert Zieliński.
+
+--------------------------------------------------------------------------------------------------------------------
+Dependencies (Ruby gems in Gemfile.lock, npm packages in frontend/package-lock.json) are not part of this
+repository: they are downloaded when an image is built. Their licenses, and the few that are not MIT, BSD, Apache-2.0
+or ISC, are summarised in docs/DEPENDENCY-LICENSES.md.

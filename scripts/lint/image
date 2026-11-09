@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Prints the busyyaks:lint image tag, building it first when it is missing (shared by scripts/lint/rubocop
+# and CI's audit stage). The tag is the hash of Gemfile + Gemfile.lock + scripts/lint/Dockerfile and the
+# image is built from those three files alone, so the RuboCop / bundler-audit that runs is the one Gemfile.lock pins.
+set -euo pipefail
+
+cd "$(dirname "$0")/../.."
+TAG="busyyaks:lint-$(cat Gemfile Gemfile.lock scripts/lint/Dockerfile | sha256sum | cut -c1-12)"
+
+if ! docker image inspect "$TAG" >/dev/null 2>&1; then
+  echo "lint: building $TAG (Gemfile.lock changed or first run)" >&2
+  tar -c Gemfile Gemfile.lock -C scripts/lint Dockerfile | docker build -q -t "$TAG" - >&2
+fi
+echo "$TAG"

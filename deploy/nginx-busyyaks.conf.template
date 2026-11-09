@@ -1,0 +1,51 @@
+# busyyaks behind nginx with TLS. Rendered by bin/render-deploy into deploy/rendered/nginx-busyyaks.conf;
+# every double-braced placeholder comes from .env (its "Reverse proxy" section). Modes and steps: docs/DEPLOY.md.
+#
+# PUBLIC_HOST → {{PUBLIC_HOST}} · upstream {{PROXY_UPSTREAM}} (the web port WEB_HOST_PORT on the same host, or a
+# tunnel's listener such as frps' vhost_http_port when the app runs elsewhere — deploy/frpc-busyyaks.ini.template).
+#
+# The app's gate is load-bearing: every page asks the auth provider (config/busyyaks.yml `auth`; never `none` behind
+# this vhost). Unauthenticated: /up, /login, /auth/*, /static. Do not put a basic-auth prompt in front of it: a
+# provider's token exchange POST cannot pass one. The MCP port is never proxied.
+#
+# INSTALL (proxy host, root; from another machine first: scp deploy/rendered/nginx-busyyaks.conf <proxy-host>:/tmp/):
+#   cp /tmp/nginx-busyyaks.conf /etc/nginx/sites-available/{{PUBLIC_HOST}}   (or deploy/rendered/… when rendered on this host)
+#   ln -sf /etc/nginx/sites-available/{{PUBLIC_HOST}} /etc/nginx/sites-enabled/ && nginx -t && systemctl reload nginx
+# ROLLBACK: remove the symlink and reload.
+
+server {
+  listen 80;
+  server_name {{PUBLIC_HOST}};
+  return 301 https://$host$request_uri;
+}
+
+server {
+  # `listen … http2` works on every nginx with HTTP/2; nginx ≥ 1.25.1 warns and prefers `listen 443 ssl;` + `http2 on;`
+  listen 443 ssl http2;
+  server_name {{PUBLIC_HOST}};
+
+  ssl_certificate     {{TLS_CERT_PATH}};
+  ssl_certificate_key {{TLS_KEY_PATH}};
+
+  access_log /var/log/nginx/busyyaks.access.log;
+  error_log  /var/log/nginx/busyyaks.error.log notice;
+
+  # card attachments (POST /api/cards/:id/attachments): ATTACHMENT_MAX_BYTES + multipart overhead, computed by
+  # bin/render-deploy (nginx's default is 1m — a bigger upload would die here as an HTML 413 before the app).
+  client_max_body_size {{NGINX_MAX_BODY}};
+
+  location / {
+    proxy_pass http://{{PROXY_UPSTREAM}};
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # this server block is TLS-only: tell the app so in a header the frp tunnel (mode 3) passes through — frps rewrites
+    # X-Forwarded-Proto to "http" (its own inbound hop) and drops Forwarded. Rack reads X-Forwarded-Ssl first, so the
+    # session cookie's Secure flag (.env SESSION_COOKIE_SECURE=true) is set; without it no session cookie is ever set.
+    proxy_set_header X-Forwarded-Ssl on;
+    proxy_buffering off;
+    proxy_http_version 1.1;
+    proxy_read_timeout 300s;
+  }
+}

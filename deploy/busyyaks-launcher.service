@@ -1,0 +1,18 @@
+# systemd --user unit; installed by deploy/install-launcher.sh. Runs as the operator so tmux sessions
+# and clones are theirs. Socket: <.env LAUNCHER_RUN_DIR>/launcher.sock (bind-mounted into web, mcp and notifier only).
+[Unit]
+Description=busyyaks host launcher (tmux sessions, new/clone repos)
+
+[Service]
+WorkingDirectory=__DIR__
+Environment=PATH=__PATH__
+ExecStart=__RUBY__ __DIR__/bin/launcher
+Restart=always
+RestartSec=5
+# The first `tmux new-session` the launcher runs starts the box's tmux SERVER inside this unit's cgroup, so the
+# default KillMode=control-group made every stop / restart (install-launcher.sh restarts) kill EVERY tmux session
+# on the box, other projects' included (found when the service was first cut over). Only the launcher itself is stopped.
+KillMode=process
+
+[Install]
+WantedBy=default.target

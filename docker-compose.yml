@@ -1,0 +1,257 @@
+# busyyaks — wiring is env (.env, see .env.example); the deployment's repos/owners are
+# config/busyyaks.yml (see config/busyyaks.example.yml). `${VAR:?}` fails loudly when unset.
+#
+# web     -> 127.0.0.1:${WEB_HOST_PORT}; public only through a proxy you add
+#            (deploy/). Gate: the auth provider in config/busyyaks.yml `auth` (none = no sign-in: keep it local).
+# mcp     -> http://${MCP_HOST}:${MCP_HOST_PORT}/mcp, local only, bearer MCP_TOKEN; kanban_claim checks tmux sessions through the launcher socket.
+# scanner -> rescans every repo under PROJECTS_ROOT (read-only) every SCAN_INTERVAL_SECONDS.
+# github  -> GitHub network snapshots (GITHUB_LOGIN's followees: stars, follows) every GITHUB_INTERVAL_SECONDS.
+# postgres -> optional (profile `postgres`; .env COMPOSE_PROFILES=postgres makes it part of the stack): the database when
+#             DATABASE_ADAPTER=postgresql and no server of your own; data in ./data/postgres, reached only through its
+#             Unix socket in ./data/postgres-run (/data/postgres-run in the app containers), no network.
+# test    -> docker compose run --rm test
+name: busyyaks
+
+x-app: &app
+  build: .
+  # The host has no free address pools for a per-project network; nothing here talks to a sibling.
+  network_mode: bridge
+  image: busyyaks:local
+  # the host user (.env HOST_UID/HOST_GID = the launcher's user): ./data stays theirs, the launcher socket reachable
+  # (only where it is mounted: x-launcher below)
+  user: "${HOST_UID:?}:${HOST_GID:?}"
+  restart: unless-stopped
+  logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+  environment: &env
+    HANAMI_ENV: production
+    HOME: /tmp   # the host user has no home in the image; bundler wants a writable one
+    DATA_DIR: /data   # the ./data mount bin/entrypoint checks (owned by HOST_UID) before each service starts
+    # the database (lib/busyyaks/database.rb): every key must be in .env; the adapter's keys must be non-empty
+    DATABASE_ADAPTER: ${DATABASE_ADAPTER:?}   # sqlite | postgresql
+    SQLITE_PATH: /data/busyyaks.sqlite3
+    SQLITE_BUSY_TIMEOUT_MS: ${SQLITE_BUSY_TIMEOUT_MS?}   # ms a writer waits for another service's write lock (lib/busyyaks/sqlite.rb)
+    POSTGRES_HOST: ${POSTGRES_HOST?}
+    POSTGRES_PORT: ${POSTGRES_PORT?}
+    POSTGRES_DB: ${POSTGRES_DB?}
+    POSTGRES_USER: ${POSTGRES_USER?}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?}
+    POSTGRES_LOCK_TIMEOUT_MS: ${POSTGRES_LOCK_TIMEOUT_MS?}   # ms a writer waits for another's transaction lock (lib/busyyaks/postgres.rb)
+    BUSYYAKS_CONFIG: /app/config/busyyaks.yml
+    KANBAN_CONFIG: /app/config/kanban.yml
+    TZ: ${TZ:?}
+    # the Hosts the web app answers (lib/busyyaks/host_guard.rb, DNS rebinding): 127.0.0.1 / localhost on WEB_HOST_PORT,
+    # and PUBLIC_HOST (`?`: may be empty = loopback only). Every service boots the app (config/app.rb), so all get them.
+    # Also the dashboard's origin (lib/busyyaks/dashboard_url.rb): https://PUBLIC_HOST, or http://127.0.0.1:WEB_HOST_PORT
+    # when PUBLIC_HOST is empty — every card's `url` in the kanban MCP tools
+    WEB_HOST_PORT: ${WEB_HOST_PORT:?}
+    PUBLIC_HOST: ${PUBLIC_HOST?}
+    SESSION_SECRET: ${SESSION_SECRET:?}
+    SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:?}
+    SESSION_COOKIE_SAME_SITE: ${SESSION_COOKIE_SAME_SITE:?}
+    PROJECTS_MOUNT: ${PROJECTS_MOUNT:?}   # where PROJECTS_ROOT is mounted (volumes below)
+    # git trusts the repos under the mount (owned by the host user) and nothing else: safe.directory "<mount>/*" in
+    # command scope (git reads safe.directory only from system / global / command config), for every process — `exec` too
+    # ... and never fetches on demand: a partial-clone repo (a promisor remote in its own config) would otherwise run
+    # that remote's transport for a missing object — for EVERY git in the container, the kanban engine's card links
+    # included (defence in depth: busyyaks itself runs no git CLI on scanned repos, test/unit/no_git_spawn_test.rb). Every
+    # protocol.<name>.allow is set as well: a repo's own protocol.<name>.allow=always would beat protocol.allow=never
+    GIT_CONFIG_COUNT: "11"
+    GIT_CONFIG_KEY_0: safe.directory
+    GIT_CONFIG_VALUE_0: ${PROJECTS_MOUNT:?}/*
+    GIT_CONFIG_KEY_1: protocol.allow
+    GIT_CONFIG_VALUE_1: never
+    GIT_CONFIG_KEY_2: protocol.file.allow
+    GIT_CONFIG_VALUE_2: never
+    GIT_CONFIG_KEY_3: protocol.ssh.allow
+    GIT_CONFIG_VALUE_3: never
+    GIT_CONFIG_KEY_4: protocol.git.allow
+    GIT_CONFIG_VALUE_4: never
+    GIT_CONFIG_KEY_5: protocol.http.allow
+    GIT_CONFIG_VALUE_5: never
+    GIT_CONFIG_KEY_6: protocol.https.allow
+    GIT_CONFIG_VALUE_6: never
+    GIT_CONFIG_KEY_7: protocol.ext.allow
+    GIT_CONFIG_VALUE_7: never
+    GIT_CONFIG_KEY_8: protocol.fd.allow
+    GIT_CONFIG_VALUE_8: never
+    GIT_CONFIG_KEY_9: protocol.ftp.allow
+    GIT_CONFIG_VALUE_9: never
+    GIT_CONFIG_KEY_10: protocol.ftps.allow
+    GIT_CONFIG_VALUE_10: never
+    GIT_NO_LAZY_FETCH: "1"
+    TEAM_TERMINAL_URL: ${TEAM_TERMINAL_URL:?}
+    SSH_ATTACH_TEMPLATE: ${SSH_ATTACH_TEMPLATE:?}
+    ATTACHMENTS_DIR: /data/attachments
+    ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:?}
+    ATTACHMENT_TYPES: ${ATTACHMENT_TYPES:?}
+    GITHUB_LOGIN: ${GITHUB_LOGIN:?}
+    WATCHDOG_GRACE_SECONDS: ${WATCHDOG_GRACE_SECONDS:?}   # a registered session counts as running this long before it is live; the watchdog's grace
+    GITHUB_CI_INTERVAL_SECONDS: ${GITHUB_CI_INTERVAL_SECONDS:?}   # every kanban Store reads PR checks older than 3x this as unknown (the approval gate, the idle watch, PR flags)
+    # the limits of every read of a scanned repo (bin/git-read, one killable child per read; lib/busyyaks/git_read.rb)
+    GIT_READ_TIMEOUT_SECONDS: ${GIT_READ_TIMEOUT_SECONDS:?}
+    GIT_READ_CPU_SECONDS: ${GIT_READ_CPU_SECONDS:?}
+    GIT_READ_MEMORY_BYTES: ${GIT_READ_MEMORY_BYTES:?}
+    GIT_READ_MAX_BLOB_BYTES: ${GIT_READ_MAX_BLOB_BYTES:?}
+  volumes:
+    - &vol_data ./data:/data
+    - &vol_config ./config/busyyaks.yml:/app/config/busyyaks.yml:ro
+    - &vol_kanban ./config/kanban.yml:/app/config/kanban.yml:ro
+    - &vol_projects ${PROJECTS_ROOT:?}:${PROJECTS_MOUNT:?}:ro
+
+# The host launcher's socket dir (.env LAUNCHER_RUN_DIR, outside ./data and PROJECTS_ROOT — bin/launcher refuses
+# otherwise): only web, mcp and notifier ask the launcher, so only they mount it — whoever reaches the socket launches
+# sessions and types into them. create_host_path: false — Docker never makes it (it would be root-owned): the dir is
+# persistent (.env.example) and must exist before these start; a missing one stops them with "bind source path does
+# not exist" (Docker does not retry that). The launcher (re)creates only the socket inside it.
+x-launcher-volumes: &launcher_volumes
+  - *vol_data
+  - *vol_config
+  - *vol_kanban
+  - *vol_projects
+  - { type: bind, source: "${LAUNCHER_RUN_DIR:?}", target: /launcher, bind: { create_host_path: false } }
+
+services:
+  web:
+    <<: *app
+    mem_limit: ${SERVICE_MEM_LIMIT:?}   # the container's ceiling over its git-read children's own GIT_READ_MEMORY_BYTES
+    volumes: *launcher_volumes   # x-app's + the launcher socket dir
+    environment: { <<: *env, HANAMI_PORT: "${WEB_CONTAINER_PORT:?}", LOG_LEVEL: info,
+                   HANAMI_MAX_THREADS: "${HANAMI_MAX_THREADS:?}", HANAMI_MIN_THREADS: "${HANAMI_MIN_THREADS:?}",
+                   HANAMI_WEB_CONCURRENCY: "${HANAMI_WEB_CONCURRENCY:?}", LAUNCHER_SOCKET: /launcher/launcher.sock }
+    ports: ["127.0.0.1:${WEB_HOST_PORT:?}:${WEB_CONTAINER_PORT:?}"]
+    depends_on:
+      postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
+    healthcheck: { test: ["CMD", "ruby", "-rnet/http", "-e", "exit Net::HTTP.start(\"127.0.0.1\", ENV.fetch('HANAMI_PORT')) { |h| h.get(\"/up\", \"Host\" => \"127.0.0.1:#{ENV.fetch('WEB_HOST_PORT')}\") }.code == '200'"], interval: 30s, timeout: 5s, retries: 3 }
+
+  mcp:
+    <<: *app
+    mem_limit: ${SERVICE_MEM_LIMIT:?}   # the container's ceiling over its git-read children's own GIT_READ_MEMORY_BYTES
+    volumes: *launcher_volumes   # x-app's + the launcher socket dir
+    command: ["bin/mcp"]
+    environment: { <<: *env, MCP_PORT: "${MCP_CONTAINER_PORT:?}", MCP_TOKEN: "${MCP_TOKEN:?}", MCP_REPORT_TOKEN: "${MCP_REPORT_TOKEN:?}", SCAN_INTERVAL_SECONDS: "${SCAN_INTERVAL_SECONDS:?}", MCP_HOST: "${MCP_HOST:?}", LOG_LEVEL: warn, LAUNCHER_SOCKET: /launcher/launcher.sock }
+    ports: ["${MCP_HOST:?}:${MCP_HOST_PORT:?}:${MCP_CONTAINER_PORT:?}"]
+    depends_on:
+      web: { condition: service_started }
+      postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
+
+  scanner:
+    <<: *app
+    mem_limit: ${SERVICE_MEM_LIMIT:?}   # the container's ceiling over its git-read children's own GIT_READ_MEMORY_BYTES
+    command: ["bin/scan"]
+    environment: { <<: *env, SCAN_INTERVAL_SECONDS: "${SCAN_INTERVAL_SECONDS:?}", LOG_LEVEL: warn }
+    depends_on:
+      web: { condition: service_started }
+      postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
+
+  # GitHub network collector (bin/github): who GITHUB_LOGIN follows, their stars and follows, every
+  # GITHUB_INTERVAL_SECONDS. The only service holding GITHUB_TOKEN; web/mcp read its snapshots from the db.
+  github:
+    <<: *app
+    command: ["bin/github"]
+    environment: { <<: *env, LOG_LEVEL: warn, GITHUB_TOKEN: "${GITHUB_TOKEN:?}", GITHUB_INTERVAL_SECONDS: "${GITHUB_INTERVAL_SECONDS:?}" }
+    depends_on:
+      web: { condition: service_started }
+      postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
+
+  notifier:
+    <<: *app
+    mem_limit: ${SERVICE_MEM_LIMIT:?}   # the container's ceiling over its git-read children's own GIT_READ_MEMORY_BYTES
+    volumes: *launcher_volumes   # x-app's + the launcher socket dir
+    command: ["bin/notifier"]
+    environment: { <<: *env, LOG_LEVEL: warn, LAUNCHER_SOCKET: /launcher/launcher.sock,
+                   NOTIFIER_INTERVAL_SECONDS: "${NOTIFIER_INTERVAL_SECONDS:?}", NOTIFIER_WATCH_SECONDS: "${NOTIFIER_WATCH_SECONDS:?}" }
+    depends_on:
+      web: { condition: service_started }
+      postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
+
+  test:
+    # its own image name: `docker compose run --build test` must never re-tag busyyaks:local (the live stack's image —
+    # bin/web migrates on start, so a live recreate would run a half-tested migration on the live DB)
+    build: .
+    image: busyyaks:test
+    # the per-worker SQLite files, sockets and attachment dirs live in /tmp: in RAM, because on a disk every test's table
+    # wipe waits on fsync — 10x slower per file on the CI host (migrations_test 22.4 s on disk, 2.2 s in RAM)
+    tmpfs: ["/tmp:exec"]   # exec: tests run stub scripts written there
+    profiles: [test]
+    # the throwaway PostgreSQL's network namespace: it is 127.0.0.1:5432 here (the suite's database when
+    # DATABASE_ADAPTER=postgresql — CI's ruby-pg stage; the copy test's target on both stages)
+    network_mode: "service:test-postgres"
+    depends_on: { test-postgres: { condition: service_healthy } }
+    restart: "no"
+    # the suite in one worker process per CPU, each on its own copy of a once-migrated SQLite file (Rakefile
+    # test:parallel). One file, serially: run --rm test sh -c "bundle exec hanami db migrate && bundle exec rake test TEST=<file>"
+    command: ["bundle", "exec", "rake", "test:parallel"]
+    environment:
+      HANAMI_ENV: test
+      DATABASE_ADAPTER: sqlite   # CI's ruby-pg stage overrides it with postgresql (scripts/ci/test.sh)
+      SQLITE_PATH: /tmp/busyyaks-test.sqlite3
+      SQLITE_BUSY_TIMEOUT_MS: "15000"
+      POSTGRES_HOST: 127.0.0.1   # test-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: busyyaks
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test
+      POSTGRES_LOCK_TIMEOUT_MS: "15000"
+      SESSION_SECRET: test-secret-test-secret-test-secret-test-secret-test-secret-0000
+      SESSION_COOKIE_SECURE: "false"
+      SESSION_COOKIE_SAME_SITE: strict
+      WEB_HOST_PORT: "4100"
+      PUBLIC_HOST: example.org   # rack-test's default Host (test/unit/host_guard_test.rb covers the refusals); each card's `url` in the kanban MCP tools (lib/busyyaks/dashboard_url.rb)
+      PROJECTS_MOUNT: /projects
+      TEAM_TERMINAL_URL: "https://term.test/code/#s={session}&sock={socket}"
+      SSH_ATTACH_TEMPLATE: "ssh -t box tmux attach -t {session}"
+      TZ: UTC
+      BUSYYAKS_CONFIG: /app/test/fixtures/busyyaks.yml
+      KANBAN_CONFIG: /app/test/fixtures/kanban.yml   # the suite's host (two launchers); no_kanban_code_test checks the example
+      LAUNCHER_SOCKET: /tmp/busyyaks-launcher-test.sock
+      ATTACHMENTS_DIR: /tmp/busyyaks-test-attachments   # tests use their own temp dirs; never ./data
+      ATTACHMENT_MAX_BYTES: "1048576"
+      ATTACHMENT_TYPES: image/png,image/jpeg,image/gif,image/webp,image/svg+xml,text/html,application/pdf,text/plain,text/markdown,application/json
+      LOG_LEVEL: warn
+      GITHUB_LOGIN: octotest   # tests stub GitHub; no token, no network
+      WATCHDOG_GRACE_SECONDS: "60"
+      GITHUB_CI_INTERVAL_SECONDS: "60"   # the card links' PR flags read it
+      GIT_READ_TIMEOUT_SECONDS: "20"   # a fixture that hangs (test/unit/git_read_test.rb) is killed inside it
+      GIT_READ_CPU_SECONDS: "20"
+      GIT_READ_MEMORY_BYTES: "1073741824"
+      GIT_READ_MAX_BLOB_BYTES: "1048576"
+    # the source is mounted over the image; the built SPA (public/app) stays the image's, from the node stage
+    volumes: [".:/app", "/app/public/app"]
+
+  # the test service's PostgreSQL: data on tmpfs, durability off (a test server), one database per parallel worker
+  # (test/support/test_databases.rb creates and drops them; the superuser has CREATEDB)
+  test-postgres:
+    image: postgres:16.10-alpine
+    profiles: [test]
+    network_mode: bridge
+    restart: "no"
+    tmpfs: ["/var/lib/postgresql/data"]
+    environment: { POSTGRES_DB: busyyaks, POSTGRES_USER: postgres, POSTGRES_PASSWORD: test }
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off", "-c", "max_connections=500"]
+    healthcheck: { test: ["CMD", "pg_isready", "-q", "-h", "127.0.0.1", "-U", "postgres"], interval: 1s, timeout: 5s, retries: 60 }
+
+  # DATABASE_ADAPTER=postgresql without a server of your own: .env COMPOSE_PROFILES=postgres (every `docker compose up`
+  # then starts it first, the app services wait for it to be healthy), POSTGRES_HOST=/data/postgres-run,
+  # POSTGRES_PORT=5432 and a POSTGRES_DB / USER / PASSWORD of your choice (the image creates them on its first start).
+  # It runs as HOST_UID like the app: ./data/postgres (the cluster) and ./data/postgres-run (its socket) are created by
+  # that user before the first start (`mkdir -p data/postgres data/postgres-run`). No network: the app services reach
+  # the socket through their ./data mount, and every login needs the password (--auth-local=scram-sha-256).
+  postgres:
+    image: postgres:16.10-alpine
+    profiles: [postgres]
+    user: "${HOST_UID:?}:${HOST_GID:?}"
+    network_mode: none
+    restart: unless-stopped
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+    command: ["postgres", "-c", "listen_addresses="]
+    environment:
+      # `?`, not `:?`: compose reads this service on a SQLite deployment too, where these are empty (the image refuses
+      # an empty password when the profile is started)
+      POSTGRES_DB: ${POSTGRES_DB?}
+      POSTGRES_USER: ${POSTGRES_USER?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?}
+      POSTGRES_INITDB_ARGS: --auth-local=scram-sha-256
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./data/postgres-run:/var/run/postgresql
+    healthcheck: { test: ["CMD", "pg_isready", "-q", "-h", "/var/run/postgresql", "-U", "${POSTGRES_USER?}"], interval: 10s, timeout: 5s, retries: 5 }

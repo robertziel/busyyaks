@@ -1,0 +1,45 @@
+#!/bin/sh
+# The demo stack's stand-in agent sessions and agent-session collector (scripts/readme-images/demo-stack copies this file
+# into its workdir, @PROJECTS@ / @COLLECTOR@ filled, and runs it in the launcher container before bin/launcher):
+# four idle shells in the acme/storefront repo in this container's own tmux server, a snapshot of them every 5 s in the
+# collector's format (bin/launcher `agents` reads it: who is busy, who is idle), and a read socket that answers nothing.
+set -eu
+
+repo=@PROJECTS@/acme/storefront
+out=@COLLECTOR@
+
+for s in acme_storefront_teamlead acme_storefront_worker acme_storefront_worker_2 acme_storefront_team; do
+  tmux new-session -d -s "$s" -c "$repo" sleep infinity
+done
+
+# session → collector status (busy = a turn running, idle = waiting for a prompt)
+status() {
+  case $1 in
+    acme_storefront_worker | acme_storefront_worker_2) echo busy ;;
+    *) echo idle ;;
+  esac
+}
+
+snapshot() {
+  now=$(date +%s)
+  sep=""
+  printf '{"generated_at":%s,"interval_s":5,"error":null,"sessions":[' "$now"
+  tmux list-panes -a -F '#{session_name} #{pane_id} #{session_created}' | while read -r name pane created; do
+    printf '%s{"name":"%s","socket":"default","attached":0,"created":%s,"activity":%s,"windows":1,"panes":[' \
+      "$sep" "$name" "$created" "$now"
+    printf '{"pane_id":"%s","target":"%s:0.0","cwd":"%s","engine":"claude","model":"opus","context":0.31,' \
+      "$pane" "$name" "$repo"
+    printf '"effort":"high","status":"%s","waiting_for":null,"title":"%s","status_at":%s,"subagents_running":0}]}' \
+      "$(status "$name")" "$name" "$((now - 120))"
+    sep=","
+  done
+  printf ']}\n'
+}
+
+snapshot > "$out/snapshot.json"
+(while sleep 5; do snapshot > "$out/snapshot.tmp" && mv "$out/snapshot.tmp" "$out/snapshot.json"; done) &
+rm -f "$out/read.sock"
+ruby -rsocket -e 'srv = UNIXServer.new(ARGV[0]); loop { srv.accept.close }' "$out/read.sock" &
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S "$out/read.sock" ] && exit 0; sleep 0.5; done
+echo "collector: read socket never appeared" >&2
+exit 1

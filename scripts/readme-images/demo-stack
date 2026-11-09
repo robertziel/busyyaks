@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# The README screenshots' stage (busyyaks's and the kanban module's): a throwaway busyyaks stack built from this
+# checkout, on SYNTHETIC data only — generated repos under acme/* with a year of commits by dev@example.com and a
+# teammate, a fresh database, auth none on 127.0.0.1, and a launcher whose tmux server (in its own container) runs idle
+# stand-in sessions. Nothing of a real deployment is read.
+#
+#   scripts/readme-images/demo-stack up <workdir>     build + start (prints the web and MCP URLs)
+#   scripts/readme-images/demo-stack down <workdir>   stop and remove the containers (workdir kept)
+#
+# Then scripts/readme-images/build <workdir> <module checkout> seeds the demo and captures the images.
+# Ports: README_DEMO_WEB_PORT / README_DEMO_MCP_PORT (both required, free ports on 127.0.0.1).
+set -euo pipefail
+
+PROJECT=readme-demo
+IMAGE=busyyaks:readme-demo
+LAUNCHER_IMAGE=busyyaks:readme-demo-launcher
+REPOS=(acme/storefront acme/payments-api acme/mobile-app acme/docs-site acme/infra)
+
+die() { echo "demo-stack: $*" >&2; exit 1; }
+
+compose() {
+  local w=$1; shift
+  docker compose -p "$PROJECT" --project-directory "$w" --env-file "$w/.env" \
+    -f "$(cat "$w/checkout")/docker-compose.yml" -f "$w/override.yml" "$@"
+}
+
+# One repo with a year of commits (git fast-import: a few a day on weekdays, fewer at weekends, by the demo author and,
+# one in four, a teammate); origin points at github.com/acme/<name> (never fetched). $3 varies the pattern per repo.
+make_repo() {
+  local w=$1 slug=$2 seed=$3
+  docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$w/projects:/p" -w /p --entrypoint sh "$IMAGE" -euc '
+    slug=$1; seed=$2; mkdir -p "$slug"; cd "$slug"
+    git init -q -b main
+    git remote add origin "https://github.com/$slug.git"
+    awk -v now="$(date +%s)" -v seed="$seed" -v slug="$slug" "BEGIN {
+      split(\"Fix the flaky checkout test|Cache the product query|Add pagination to the listing|Bump dependencies|Refactor the price formatter|Log slow requests|Handle empty carts|Tidy the README|Add a health check|Retry failed webhooks\", subj, \"|\")
+      mark = 1
+      for (d = 364; d >= 0; d--) {
+        day = now - d * 86400
+        dow = int(day / 86400 + 4) % 7
+        n = (d * 7919 + seed * 104729 + d * d * 31) % 9
+        n = (n > 5 ? n - 5 : 0) + (d < 14 ? 2 : 0)
+        if (dow == 0 || dow == 6) n = int(n / 3)
+        for (k = 0; k < n; k++) {
+          t = day - 3600 * (k + 1) - seed * 60
+          who = ((d + k + seed) % 4 == 0) ? \"Sam Teammate <teammate@example.com>\" : \"Dev Example <dev@example.com>\"
+          msg = subj[(d + k * 3 + seed) % 10 + 1]
+          body = \"change \" d \".\" k \"\\n\"
+          print \"blob\"; print \"mark :\" mark; print \"data \" length(body) + 0; printf \"%s\", body; print \"\"
+          print \"commit refs/heads/main\"; print \"author \" who \" \" t \" +0000\"; print \"committer \" who \" \" t \" +0000\"
+          print \"data \" length(msg); print msg
+          print \"M 100644 :\" mark \" CHANGELOG.md\"; print \"\"
+          mark++
+        }
+      }
+    }" | git fast-import --quiet
+    git checkout -q main' sh "$slug" "$seed"
+}
+
+up() {
+  local checkout w
+  checkout=$(cd "$(dirname "$0")/../.." && pwd)
+  mkdir -p "${1:?workdir}"
+  w=$(cd "$1" && pwd)
+  : "${README_DEMO_WEB_PORT:?a free port for the demo web app}" "${README_DEMO_MCP_PORT:?a free port for the demo MCP}"
+  # the collector's read socket lives under it: a unix socket path has at most 107 bytes
+  [ "${#w}" -le 80 ] || die "workdir path $w is longer than 80 bytes: pick a shorter one (a unix socket goes under it)"
+  [ -e "$w/data" ] && die "$w/data exists: use a fresh workdir (down + rm -rf it first)"
+  echo "$checkout" > "$w/checkout"
+
+  docker build -q -t "$IMAGE" "$checkout" >/dev/null
+  printf 'FROM %s\nRUN apt-get update -qq && apt-get install -y -qq --no-install-recommends tmux >/dev/null && rm -rf /var/lib/apt/lists/*\n' \
+    "$IMAGE" | docker build -q -t "$LAUNCHER_IMAGE" - >/dev/null
+
+  mkdir -p "$w/projects" "$w/data/run" "$w/config" "$w/session-records" "$w/collector"
+  local i=0
+  for r in "${REPOS[@]}"; do i=$((i + 1)); make_repo "$w" "$r" "$i"; done
+
+  cp "$checkout/config/kanban.example.yml" "$w/config/kanban.yml"
+  cat > "$w/config/busyyaks.yml" <<YML
+roots:
+  - { path: /projects, prefix: "" }
+search_depth: 2
+owner_remotes: [github.com/acme/]
+author_emails: [dev@example.com]
+window_days: 7
+auth: { provider: none, allow_unauthenticated: true }
+reap_protect: []
+agents: { collector: { snapshot: $w/collector/snapshot.json, read_socket: $w/collector/read.sock } }
+YML
+  # every key compose requires from busyyaks's .env.example (it refuses a missing one): a key added there is added here
+  # too. Left out: the optional reverse-proxy section (PUBLIC_HOST, TLS_*, PROXY_UPSTREAM, FRPC_SUBDOMAIN), which only
+  # bin/render-deploy reads
+  cat > "$w/.env" <<ENV
+WEB_HOST_PORT=$README_DEMO_WEB_PORT
+MCP_HOST_PORT=$README_DEMO_MCP_PORT
+MCP_HOST=127.0.0.1
+WEB_CONTAINER_PORT=2300
+MCP_CONTAINER_PORT=2400
+HANAMI_MIN_THREADS=5
+HANAMI_MAX_THREADS=5
+HANAMI_WEB_CONCURRENCY=0
+PROJECTS_ROOT=$w/projects
+PROJECTS_MOUNT=/projects
+HOST_UID=$(id -u)
+HOST_GID=$(id -g)
+TZ=UTC
+SESSION_SECRET=$(head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')
+SESSION_COOKIE_SECURE=false
+SESSION_COOKIE_SAME_SITE=strict
+MCP_TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+COMPOSE_PROFILES=
+DATABASE_ADAPTER=sqlite
+SQLITE_BUSY_TIMEOUT_MS=15000
+POSTGRES_HOST=
+POSTGRES_PORT=
+POSTGRES_DB=
+POSTGRES_USER=
+POSTGRES_PASSWORD=
+POSTGRES_LOCK_TIMEOUT_MS=
+SCAN_INTERVAL_SECONDS=60
+GITHUB_LOGIN=dev-example
+GITHUB_TOKEN=unused
+GITHUB_INTERVAL_SECONDS=3600
+GITHUB_CI_INTERVAL_SECONDS=60
+TEAM_TERMINAL_URL="https://terminal.example.com/#s={session}&sock={socket}"
+CLAUDE_SESSIONS_DIR=$w/session-records
+CLAUDE_SESSION_URL="https://claude.example.com/{id}"
+SSH_ATTACH_TEMPLATE="ssh -t box.example.com tmux attach -t {session}"
+NOTIFIER_INTERVAL_SECONDS=5
+NOTIFIER_WATCH_SECONDS=30
+WATCHDOG_GRACE_SECONDS=60
+ATTACHMENT_MAX_BYTES=26214400
+ATTACHMENT_TYPES=image/png,image/jpeg,image/webp
+ENV
+  cat > "$w/override.yml" <<YML
+services:
+  web: { image: $IMAGE, restart: "no" }
+  mcp: { image: $IMAGE, restart: "no" }
+  scanner: { image: $IMAGE, restart: "no" }
+  launcher:
+    image: $LAUNCHER_IMAGE
+    network_mode: none
+    user: "$(id -u):$(id -g)"
+    restart: "no"
+    environment: { HOME: /tmp }
+    entrypoint: ["sh", "-c"]
+    # the stand-in agent sessions (idle shells in the repos, in this container's own tmux server) and a stand-in
+    # agent-session collector (scripts/readme-images/collector), then the real bin/launcher
+    command: ["sh $w/collector/run && exec bin/launcher"]
+    volumes:
+      - $w/.env:/app/.env:ro
+      - $w/config/busyyaks.yml:/app/config/busyyaks.yml:ro
+      - $w/config/kanban.yml:/app/config/kanban.yml:ro
+      - $w/data:/app/data
+      - $w/projects:$w/projects:ro
+      - $w/session-records:$w/session-records:ro
+      - $w/collector:$w/collector
+YML
+  sed "s|@PROJECTS@|$w/projects|; s|@COLLECTOR@|$w/collector|" "$(dirname "$0")/collector" > "$w/collector/run"
+  compose "$w" up -d --no-build launcher
+  for _ in $(seq 1 30); do [ -S "$w/data/run/launcher.sock" ] && break; sleep 1; done
+  [ -S "$w/data/run/launcher.sock" ] || { compose "$w" logs launcher >&2; die "launcher socket never appeared"; }
+  # web first: it migrates the fresh database (bin/web); the scanner and the MCP server read it, so they start after /up
+  compose "$w" up -d --no-build web
+  for _ in $(seq 1 60); do curl -fsS "http://127.0.0.1:$README_DEMO_WEB_PORT/up" >/dev/null 2>&1 && break; sleep 1; done
+  curl -fsS "http://127.0.0.1:$README_DEMO_WEB_PORT/up" >/dev/null || { compose "$w" logs web >&2; die "web never answered /up"; }
+  compose "$w" up -d --no-build mcp scanner
+  # the scanner's first pass: every demo repo is a project before anything seeds its board
+  local api="http://127.0.0.1:$README_DEMO_WEB_PORT/api/projects" r ok
+  for _ in $(seq 1 90); do
+    ok=1
+    for r in "${REPOS[@]}"; do curl -fsS "$api" | grep -q "\"slug\":\"$r\"" || ok=0; done
+    [ "$ok" = 1 ] && break
+    sleep 1
+  done
+  [ "$ok" = 1 ] || { compose "$w" logs scanner >&2; die "the scanner never listed every demo repo"; }
+  echo "web http://127.0.0.1:$README_DEMO_WEB_PORT  mcp http://127.0.0.1:$README_DEMO_MCP_PORT/mcp"
+}
+
+down() {
+  local w
+  w=$(cd "${1:?workdir}" && pwd)
+  compose "$w" down --remove-orphans
+}
+
+case "${1:-}" in
+  up) shift; up "$@" ;;
+  down) shift; down "$@" ;;
+  *) die "usage: $0 up <workdir> | down <workdir>" ;;
+esac

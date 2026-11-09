@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The shell scripts' .env reader: prints `export KEY='value'` for each KEY named, for `eval`, read by the one .env
+# parser (lib/busyyaks/env_file.rb) — never `. ./.env`, which would interpolate `$` and cut inline comments its own way.
+# A malformed .env, or a KEY missing or empty → exit 1 naming it; nothing is printed.
+#   vars=$(bin/env MCP_HOST MCP_HOST_PORT MCP_TOKEN) && eval "$vars"
+require_relative "../lib/busyyaks/env_file"
+
+abort "usage: bin/env KEY..." if ARGV.empty?
+begin
+  puts Busyyaks::EnvFile.shell_exports(Busyyaks::EnvFile.read(File.expand_path("../.env", __dir__)), ARGV)
+rescue Busyyaks::EnvFile::Invalid => e
+  abort e.message
+end

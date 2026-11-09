@@ -1,0 +1,7 @@
+# Prettier formats every TS/TSX/JS/CSS/JSON file in the repo (`npm run format:check` in frontend/, CI
+# frontend stage, overcommit PrettierCheck hook), the vendored engine included (it is formatted at its source).
+# Prettier also reads .gitignore (node_modules, data/, tmp/). Ignored here: only what is not written by hand.
+# npm writes the lockfile itself
+package-lock.json
+# the SPA bundle Vite builds into the image (also gitignored)
+public/app/

@@ -1,0 +1,10 @@
+roots:
+  - { path: /projects/none, prefix: "" }
+search_depth: 2
+owner_remotes: [example.com/x/]
+author_emails: [me@x.io]
+window_days: 7
+reap_protect: ["svc-*"]
+auth: { provider: test/fixtures/auth_stub, allowed_emails: [owner@example.com] }
+agents: { collector: none }
+launch: { trusted_paths: [] }

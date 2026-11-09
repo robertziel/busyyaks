@@ -1,0 +1,60 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# GitHub network collector (lib/busyyaks/github_network.rb + the dashboard feed, github_feed.rb) and the operator's
+# merged PRs (github_prs.rb: the home page's window, config window_days): one run, then sleeps GITHUB_INTERVAL_SECONDS, forever.
+# Every run is recorded in gh_runs (ok, or the error: token rejected, rate limited, unreachable) and shown on /github
+# and by the MCP tool github_network. A failed run invents nothing; the next one tries again.
+require "hanami/prepare"
+require "busyyaks/github_network"
+require "busyyaks/ci_checks"
+require "busyyaks/pr_states"
+require "busyyaks/github_prs"
+require "busyyaks/config"
+
+interval = Integer(ENV.fetch("GITHUB_INTERVAL_SECONDS"))
+login = ENV.fetch("GITHUB_LOGIN")
+token = ENV.fetch("GITHUB_TOKEN")
+data = Busyyaks::GithubNetwork::Data.default
+ci_interval = Integer(ENV.fetch("GITHUB_CI_INTERVAL_SECONDS"))
+window_days = Busyyaks::Config.load.window_days # the home page's range (/api/today reads the same key)
+$stdout.sync = true
+# PR check status for the kanban idle watch (config/kanban.yml idle_watch): answers the rows the notifier asked for
+# (gh_pr_checks), on its own faster cadence. A failed poll is stored on the row; the notifier says it, never guesses.
+# Same cadence: the PR state behind the card links' flags (gh_pr_states), asked for by the web.
+Thread.new do
+  client = Busyyaks::GithubNetwork::Client.new(token: token)
+  poller = Busyyaks::CiChecks::Poller.new(db: data.db, client: client, wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval))
+  states = Busyyaks::PrStates::Poller.new(db: data.db, client: client, wanted_for: Busyyaks::PrStates.wanted_for(ci_interval))
+  loop do
+    begin
+      n = poller.run
+      puts "ci checks polled=#{n}" if n.positive?
+    rescue StandardError => e
+      puts "ci checks FAILED #{e.class}: #{e.message}"
+    end
+    begin
+      n = states.run
+      puts "pr states polled=#{n}" if n.positive?
+    rescue StandardError => e
+      puts "pr states FAILED #{e.class}: #{e.message}"
+    end
+    sleep ci_interval
+  end
+end
+loop do
+  t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  client = Busyyaks::GithubNetwork::Client.new(token: token)
+  r = Busyyaks::GithubNetwork::Collector.new(login: login, client: client, data: data).run
+  secs = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t).round(1)
+  stats = "followees=#{r[:followees]} stars_added=#{r[:stars_added]} follows_added=#{r[:follows_added]} calls=#{r[:calls]} " \
+          "304=#{r[:not_modified]} rate=#{r[:rate_remaining]}/#{r[:rate_limit]} baseline=#{r[:baseline]} seconds=#{secs} " \
+          "feed=#{r[:feed_ok] ? 'ok' : "FAILED(#{r[:feed_error]})"} feed_added=#{r[:feed_added]} feed_calls=#{r[:feed_calls]} feed_304=#{r[:feed_not_modified]} feed_gap=#{r[:feed_gap]}"
+  puts r[:ok] ? "github ok #{stats}" : "github FAILED #{r[:error]} #{stats}"
+  since = Date.today - window_days
+  pr = Busyyaks::GithubPrs.collect(db: data.db, client: client, login: login, since: since)
+  puts pr[:ok] ? "merged prs ok since=#{since} found=#{pr[:found]} added=#{pr[:added]} calls=#{pr[:calls]}" : "merged prs FAILED #{pr[:error]}"
+  break if ENV["GITHUB_ONCE"] == "1"
+
+  sleep interval
+end

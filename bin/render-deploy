@@ -1,0 +1,46 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Renders deploy/*.template from .env into deploy/rendered/ (gitignored, kept out of images by .dockerignore): the
+# reverse-proxy files for THIS deployment (docs/DEPLOY.md). A placeholder with no value in .env → exit 1 with its
+# name; nothing is written.
+#   bin/render-deploy            # every template (frp tunnel mode)
+#   bin/render-deploy nginx      # one template, by the name before its first "-" (nginx | frpc)
+require_relative "../lib/busyyaks/deploy_template"
+require_relative "../lib/busyyaks/env_file"
+
+abort "usage: bin/render-deploy [nginx|frpc]" if ARGV.size > 1
+
+root = File.expand_path("..", __dir__)
+env = begin
+  Busyyaks::EnvFile.read(File.join(root, ".env"))
+rescue Busyyaks::EnvFile::Invalid => e
+  abort e.message
+end
+
+templates = Dir[File.join(root, "deploy/*.template")].sort
+all = templates.group_by { |t| File.basename(t).split("-").first }
+dup = all.select { |_, ts| ts.size > 1 }
+abort "deploy templates share a name before \"-\": #{dup.values.flatten.map { File.basename(_1) }.join(', ')}" if dup.any?
+all = all.transform_values(&:first)
+outputs = all.values.map { |t| File.basename(t, ".template") }
+if (only = ARGV.first)
+  abort "no deploy template #{only.inspect}; known: #{all.keys.join(', ')}" unless all.key?(only)
+  all = all.slice(only)
+end
+
+rendered = all.values.to_h do |t|
+  [File.basename(t, ".template"), Busyyaks::DeployTemplate.render(File.read(t), env)]
+rescue Busyyaks::DeployTemplate::MissingValues => e
+  abort "#{File.basename(t)}: #{e.message}"
+end
+
+out = File.join(root, "deploy/rendered")
+Dir.mkdir(out) unless Dir.exist?(out)
+rendered.each do |name, body|
+  File.write(File.join(out, name), body)
+  puts "deploy/rendered/#{name}"
+end
+(outputs - rendered.keys).select { File.file?(File.join(out, _1)) }.each do |stale|
+  puts "deploy/rendered/#{stale} (not rendered this run, left as it was)"
+end

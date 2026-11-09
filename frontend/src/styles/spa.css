@@ -1,0 +1,388 @@
+/* busyyaks SPA — rules the client-side app adds on top of app.css (shared with the login page) and the page
+   stylesheets: loading/error states, tabs, flash dismiss, the board's drag ghost and quick-add. Glass tokens only. */
+
+/* loading: the loading yak (scripts/logo/loader.py) centred over its label, never placeholder data.
+   Shown only after 250 ms (fast loads never flash it); the box keeps its height from the first frame. */
+@keyframes yak-in {
+  from {
+    visibility: hidden;
+  }
+}
+.state.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: min(40vh, 320px);
+  margin: 0;
+  color: var(--ink-faint);
+  text-align: center;
+  animation: yak-in 0s 0.25s both;
+}
+.state.loading.inline {
+  flex-direction: row;
+  justify-content: flex-start;
+  min-height: 0;
+  gap: 8px;
+  margin: 12px 0;
+  text-align: left;
+}
+.yak-loader {
+  display: inline-flex;
+  color: var(--ink);
+}
+.yak-loader svg {
+  height: 56px;
+  width: auto;
+  display: block;
+}
+.state.loading.inline .yak-loader svg {
+  height: 24px;
+}
+.yak-loader.sm svg {
+  height: 16px;
+}
+.ag-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* the vendored board's Loading renders <i class="spin">: same yak as a picture, the variant picked by
+   components/Board.tsx (data-yak), colours per skin. The card dialog's sits inside .ak-root (row layout there) and
+   reserves most of the dialog's loaded height so it does not jump when the card arrives. */
+.yak-board {
+  display: contents;
+}
+.yak-board .state.loading {
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: min(40vh, 320px);
+  font-size: inherit;
+}
+.yak-board .ak-root .state.loading {
+  min-height: min(75vh, 680px);
+}
+.yak-board .state i.spin {
+  width: 70px;
+  height: 56px;
+  border: 0;
+  border-radius: 0;
+  animation: none;
+  background: url("/static/yak-loader-a-light.svg") center / contain no-repeat;
+}
+.yak-board[data-yak="b"] .state i.spin {
+  background-image: url("/static/yak-loader-b-light.svg");
+}
+:root[data-skin="dark"] .yak-board .state i.spin {
+  background-image: url("/static/yak-loader-a-dark.svg");
+}
+:root[data-skin="dark"] .yak-board[data-yak="b"] .state i.spin {
+  background-image: url("/static/yak-loader-b-dark.svg");
+}
+@media (prefers-reduced-motion: reduce) {
+  .yak-board .state i.spin {
+    background-image: url("/static/yak-loader-a-light-still.svg");
+  }
+  .yak-board[data-yak="b"] .state i.spin {
+    background-image: url("/static/yak-loader-b-light-still.svg");
+  }
+  :root[data-skin="dark"] .yak-board .state i.spin {
+    background-image: url("/static/yak-loader-a-dark-still.svg");
+  }
+  :root[data-skin="dark"] .yak-board[data-yak="b"] .state i.spin {
+    background-image: url("/static/yak-loader-b-dark-still.svg");
+  }
+}
+
+.flash .flash-close {
+  margin-left: auto;
+  padding: 0.1rem 0.55rem;
+}
+.flash span {
+  overflow-wrap: anywhere;
+}
+.tag.bad {
+  color: var(--bad);
+  background: rgba(var(--bad-rgb), 0.12);
+}
+
+/* tabs: the segmented control, as the header nav */
+.tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-ctl);
+  background: var(--mat-fill);
+  margin: -4px 0 14px;
+}
+.tabs [role="tab"] {
+  font: inherit;
+  font-weight: 500;
+  border: 0;
+  border-radius: var(--radius-ctl-sm);
+  padding: 0.3rem 0.95rem;
+  color: var(--ink-dim);
+  background: none;
+  cursor: pointer;
+}
+.tabs [role="tab"]:hover {
+  color: var(--ink);
+  background: var(--mat-fill-2);
+}
+.tabs [role="tab"][aria-selected="true"] {
+  background: var(--mat-thumb);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: var(--shadow-thumb);
+}
+
+/* a button that reads as a link (archived card titles) */
+.linklike {
+  font: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 500;
+  text-align: left;
+}
+.linklike:hover {
+  text-decoration: underline;
+}
+
+/* the launch split outside a form */
+div.launch {
+  display: inline-flex;
+  margin: 0;
+  align-items: stretch;
+  white-space: nowrap;
+}
+
+/* notes */
+.card.note .md > :first-child {
+  margin-top: 6px;
+}
+.card.note .md > :last-child {
+  margin-bottom: 0;
+}
+
+/* phone: nothing wider than the viewport */
+@media (max-width: 600px) {
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stats b {
+    font-size: 1.45rem;
+  }
+  .launchbar code {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mono.muted {
+    overflow-wrap: anywhere;
+  }
+  .report-nav .btn {
+    flex: 1 1 auto;
+    text-align: center;
+  }
+  .top .in form {
+    margin-left: auto;
+  }
+}
+
+/* project icons (components/ProjectIcon.tsx) */
+.picon {
+  display: inline-block;
+  flex: none;
+  object-fit: contain;
+  vertical-align: middle;
+  background: var(--panel-2);
+}
+.picon.mono {
+  display: inline-grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+}
+.pname {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+h1 .picon {
+  margin-right: 2px;
+}
+
+/* click-to-copy chips + team terminal links (components/Copy.tsx) */
+.copychip {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: copy;
+  border-radius: var(--radius-chip);
+  position: relative;
+}
+.copychip code {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.copychip:hover code {
+  background: var(--surface-3);
+}
+.copychip:focus-visible {
+  outline: 3px solid rgba(var(--accent-rgb), 0.5);
+  outline-offset: 1px;
+}
+.copystate {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ok);
+  white-space: nowrap;
+}
+.copychip.fail .copystate {
+  color: var(--bad);
+}
+.copystate:empty {
+  display: none;
+}
+.termlink {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-pill);
+  background: rgba(var(--accent-rgb), 0.12);
+  white-space: nowrap;
+}
+.termlink:hover {
+  text-decoration: none;
+  background: rgba(var(--accent-rgb), 0.2);
+}
+a.termbadge:hover {
+  text-decoration: none;
+  filter: brightness(1.1);
+}
+.claudelink {
+  background: rgba(217, 119, 87, 0.14);
+  color: #d97757;
+}
+.claudelink:hover {
+  background: rgba(217, 119, 87, 0.24);
+}
+/* Stop / Stop all on a project's tmux sessions */
+.btn.stop-btn {
+  color: var(--vivid-red);
+  border-color: color-mix(in srgb, var(--vivid-red) 45%, transparent);
+}
+.btn.stop-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--vivid-red) 14%, transparent);
+}
+
+/* the skin switch (Skin.tsx): a compact pill in the header, never a full-width field */
+.top .sel:has(> .skin-switch) {
+  width: auto;
+}
+.top .sel-btn.skin-switch {
+  width: auto;
+  min-width: 0;
+  gap: 8px;
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--radius-pill);
+  font-weight: 500;
+  color: var(--ink-dim);
+}
+
+/* home: per-day figures + merged PRs */
+table.daily th {
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+table.daily td.mono {
+  white-space: nowrap;
+}
+table.daily tr.muted td {
+  color: var(--ink-faint);
+}
+table.daily td.ok {
+  color: var(--ok);
+  font-weight: 600;
+}
+table.daily tfoot td {
+  font-weight: 600;
+  border-top: 1px solid var(--line);
+}
+.merged-prs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.merged-prs li {
+  display: grid;
+  grid-template-columns: minmax(0, 11rem) auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.merged-prs li:last-child {
+  border-bottom: 0;
+}
+.merged-prs .mpr-repo {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.merged-prs .mpr-s {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-dim);
+}
+.merged-prs .mpr-t {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 600px) {
+  .merged-prs li {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+  .merged-prs .mpr-s {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+.pr-status {
+  font-size: 12.5px;
+  margin: -4px 0 6px;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+/* phones: the daily table fits 390 px (it was 401 px wide, the page zoomed out and pushed the fixed waiting bubbles off
+   the bottom) — the bar column gives way and the cells tighten */
+@media (max-width: 600px) {
+  table.daily {
+    table-layout: fixed;
+    width: 100%;
+  }
+  table.daily .bar {
+    width: 28%;
+  }
+  table.daily th,
+  table.daily td {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+}

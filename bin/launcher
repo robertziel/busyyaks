@@ -1,0 +1,704 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Host-side launcher (systemd --user, deploy/busyyaks-launcher.service). The web container cannot
+# reach the host's tmux, so it asks this process over a unix socket in .env LAUNCHER_RUN_DIR (bind-mounted
+# into the web, mcp and notifier containers only — never under ./data, which every container mounts). One JSON request per connection:
+#   {"op":"name","base":"x_teamlead"}               → {"ok":true,"session":"x_teamlead_2"}   the engine's name, made free
+#   {"op":"launch","path":"/projects/x","session":"x_2","type":"lead","launcher":"fullclaude","vars":{...}}
+#                                                  → {"ok":true,"session":"x_2",...}  the engine registered x_2 first (Api#launch)
+#   {"op":"sessions"}                                                      → {"ok":true,"sessions":[...]}
+#   {"op":"create","root":"/projects","name":"x","url":""}               → {"ok":true,"path":"/projects/x"}
+#   {"op":"jobs"}                                                          → clone jobs with status + log tail
+#   {"op":"agents"}                                → coding-agent sessions (agent_engines collector snapshot)
+#   {"op":"agent_tasks","session":"x","socket":"default"} → that session's subagents/workflows/tasks
+#   {"op":"reap_preview"}                          → agent sessions that are not working (stop candidates)
+#   {"op":"reap","sessions":[{"name","socket"}]}   → stop those still eligible in a fresh snapshot
+#   {"op":"stop","path","sessions":[names]}       → kill those sessions of that project (operator Stop / Stop all)
+#   {"op":"notify","session","socket","text"}      → type a card ping into that Claude session (collector "send")
+#   {"op":"dialog","session","socket"}              → the dialog on its screen now (SessionDialog.parse) or null
+#   {"op":"git","session","socket"}                  → {"ok":true,"path"} the session's working dir, relative to PROJECTS_ROOT
+#   {"op":"answer","session","socket","hash","key"} → press that option key (digit / esc) ONLY while the same dialog shows
+# agents · agent_tasks · reap_preview · reap · notify read the agent-session collector (AgentCollector::OPS); with
+# config/busyyaks.yml agents.collector: none each answers {ok:false, unsupported:true, error: AgentCollector::OFF, status: 422}.
+# Only an agent type + launcher key from config/kanban.yml (the board config's `agent_types` / `launchers`, built
+# into an argv by the engine's Launch — the ONE place a launch is defined; the type's prompt template rendered with
+# the engine's values + {dir}), only a git repo under PROJECTS_ROOT; create only inside a configured root, a safe
+# name, an https:// or git@ URL. Nothing else runs.
+require "socket"
+require "json"
+require "yaml"
+require "open3"
+require "shellwords"
+require "fileutils"
+require "time"
+require "tmpdir"
+# the engine files the host side loads: the dialog parser (the same the container runs, so both compute the same
+# dialog hash) and the host config + Launch (how a session is started — config/kanban.yml's launchers and agent types)
+require_relative "../vendor/agents_kanban/ruby/lib/agents_kanban/session_dialog"
+require_relative "../vendor/agents_kanban/ruby/lib/agents_kanban/host_config"
+require_relative "../vendor/agents_kanban/ruby/lib/agents_kanban/launch"
+# herdr's screen-state rules (blocked / working / idle), ported: pure Ruby, the same file the container loads
+require_relative "../lib/busyyaks/engines"
+# config/busyyaks.yml `agents.collector`: none, or the collector's snapshot + read socket (checked at start)
+require_relative "../lib/busyyaks/agent_collector"
+# the one .env reader (bin/render-deploy and bin/env use it too)
+require_relative "../lib/busyyaks/env_file"
+require_relative "../lib/busyyaks/private_socket"
+require_relative "../lib/busyyaks/launcher_rules"
+require_relative "../lib/busyyaks/launch_trust"
+
+$stdout.sync = true
+ROOT = File.expand_path("..", __dir__)
+ENV_FILE = begin
+  Busyyaks::EnvFile.read(File.join(ROOT, ".env"))
+rescue Busyyaks::EnvFile::Invalid => e
+  abort e.message
+end
+
+PROJECTS_ROOT = ENV_FILE.fetch("PROJECTS_ROOT") { abort "PROJECTS_ROOT missing in .env" }
+# where compose mounts PROJECTS_ROOT inside the containers: the paths the web app sends are under it
+CONTAINER_ROOT = ENV_FILE.fetch("PROJECTS_MOUNT") { abort "PROJECTS_MOUNT missing in .env" }
+abort "PROJECTS_MOUNT in .env must be an absolute path without a trailing / (got #{CONTAINER_ROOT.inspect})" \
+  unless CONTAINER_ROOT.match?(%r{\A/[^/]}) && !CONTAINER_ROOT.end_with?("/")
+# the socket's own dir (.env LAUNCHER_RUN_DIR): only the containers that ask the launcher mount it. Its real path,
+# created 0700, never under / around PROJECTS_ROOT or this checkout, owned by this uid (LauncherRules.run_dir!)
+RUN_DIR = begin
+  Busyyaks::LauncherRules.run_dir!(ENV_FILE.fetch("LAUNCHER_RUN_DIR") { abort "LAUNCHER_RUN_DIR missing in .env" },
+                                   projects_root: PROJECTS_ROOT, checkout: ROOT, uid: Process.uid)
+rescue Busyyaks::LauncherRules::Invalid => e
+  abort e.message
+end
+SOCKET = File.join(RUN_DIR, "launcher.sock")
+# Folder trust (LaunchTrust), read once at start; a bad value stops the start. TRUSTED = config/busyyaks.yml
+# launch.trusted_paths on this host (real paths); CREATED = the repos this launcher's create made, in .env
+# LAUNCHER_STATE_DIR (a dir only the launcher touches: no container mounts it).
+TRUSTED, CREATED = begin
+  trust = Busyyaks::LaunchTrust
+  paths = trust.parse!(YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["launch"])
+  trusted = trust.host_paths!(trust.under_mount!(paths, CONTAINER_ROOT), container_root: CONTAINER_ROOT,
+                                                                         projects_root: PROJECTS_ROOT)
+  state = trust.state_dir!(ENV_FILE.fetch("LAUNCHER_STATE_DIR") { abort "LAUNCHER_STATE_DIR missing in .env" },
+                           mounted: { "PROJECTS_ROOT" => PROJECTS_ROOT, "the busyyaks checkout" => ROOT,
+                                      "./data" => File.join(ROOT, "data"), "the launcher socket dir" => RUN_DIR, },
+                           uid: Process.uid)
+  [trusted, trust::Created.new(state)]
+rescue Busyyaks::LaunchTrust::Invalid => e
+  abort "folder trust: #{e.message}"
+end
+%w[AGENTS_SNAPSHOT AGENTS_READ_SOCKET].each do |k|
+  abort "#{k} is in .env: the collector moved to config/busyyaks.yml agents.collector — remove it from .env" if ENV_FILE.key?(k)
+end
+# The agent-session collector this box runs, stated in config/busyyaks.yml `agents` (no default): nil = none — every op
+# that needs it answers AgentCollector::OFF; a named collector whose snapshot or socket is missing stops the start.
+COLLECTOR = begin
+  Busyyaks::AgentCollector.parse(YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["agents"])
+                          .tap { |c| Busyyaks::AgentCollector.check!(c) if c }
+rescue Busyyaks::AgentCollector::Invalid => e
+  abort "config/busyyaks.yml: #{e.message}"
+end
+CLAUDE_SESSIONS_DIR = ENV_FILE.fetch("CLAUDE_SESSIONS_DIR") { abort "CLAUDE_SESSIONS_DIR missing in .env" }
+CLAUDE_SESSION_URL = ENV_FILE.fetch("CLAUDE_SESSION_URL") { abort "CLAUDE_SESSION_URL missing in .env" }
+# The engines the collector may report (config/engines.yml + config/busyyaks.yml `engines:`), read once at start like the board
+# config below: a bad table fails the launcher's start; a pane whose engine is not in it is shown, with the reason.
+ENGINES = Busyyaks::Engines.load(YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["engines"])
+PANE_KEYS = %w[target cwd engine model context effort status waiting_for title status_at subagents_running].freeze
+
+# The host config's launchers (config/kanban.yml): the keys the Launch button offers; Launch builds each argv
+# with `--remote-control <session>` LAST (the one effective name — Claude Code takes a repeated option's last value).
+# Read ONCE, at start, beside the engine code it is parsed by: the checkout under ROOT changes under a running
+# launcher (a merge, another session's branch), and a config re-read per launch against the engine loaded at start
+# refused every spawn with "unknown keys session_dialogs" once the checkout gained a key the running engine did not know. New config or engine = restart the launcher
+# (deploy/install-launcher.sh), the same as any code change.
+BOARD_CONFIG = AgentsKanban::HostConfig.load(File.join(ROOT, "config/kanban.yml")) # a broken config fails at start
+
+# The pane's process tree, read from /proc: does a `claude` in it run with --remote-control <name>?
+def remote_control_running?(pane_pid, name)
+  kids = Hash.new { |h, k| h[k] = [] }
+  Dir.glob("/proc/[0-9]*/stat").each do |f|
+    st = File.read(f) rescue next
+    pid = f[%r{/proc/(\d+)/}, 1].to_i
+    ppid = st.sub(/\A.*\) /m, "").split[1].to_i
+    kids[ppid] << pid
+  end
+  todo = [pane_pid]
+  until todo.empty?
+    pid = todo.shift
+    argv = (File.read("/proc/#{pid}/cmdline") rescue "").split("\0")
+    if File.basename(argv.first.to_s) == "claude" || argv.first.to_s.end_with?("/claude") || argv.include?("claude")
+      # the LAST --remote-control is the effective one (a profile function may add an earlier one; Launch's wins)
+      i = argv.rindex("--remote-control")
+      return true if i && argv[i + 1] == name
+    end
+    todo.concat(kids[pid])
+  end
+  false
+end
+
+# Claude Code's folder-trust prompt on a fresh session. Answering it lets the repo's .claude settings / hooks /
+# .mcp.json run, so the launcher answers it only for a repo trusted from outside the repo (LaunchTrust: a
+# launch.trusted_paths entry, or a repo this launcher's create made) — cursor to "Yes, I trust this folder" (checked
+# on screen before Enter), then checks it is gone. Any other repo keeps the prompt on screen ({trust: "left"}): the
+# launch flash says so, and a card the session owns gets it as a session dialog. Any OTHER dialog is never touched.
+TRUST_YES = "Yes, I trust this folder"
+
+def pane_text(name) = tmux("capture-pane", "-p", "-t", "=#{name}:").first.to_s
+
+def trust_prompt?(text) = text.include?(TRUST_YES) && text.match?(/trust this folder|Do you trust/i)
+
+# refusal: LaunchTrust.refusal, decided BEFORE the session started (a corrupt record refuses the launch, nothing runs)
+def accept_trust(name, refusal, wait: 15)
+  return { trust: "left", trust_reason: refusal } if refusal
+
+  deadline = Time.now + wait
+  until Time.now > deadline
+    text = pane_text(name)
+    break if trust_prompt?(text)
+    return nil if text.match?(/bypass permissions on|for shortcuts|Try "/) # at its prompt already: nothing to answer
+
+    sleep 1
+  end
+  text = pane_text(name)
+  return nil unless trust_prompt?(text)
+
+  6.times do
+    return accept_trust_enter(name) if text.lines.any? { |l| l.match?(/❯\s*(\d+\.\s*)?#{Regexp.escape(TRUST_YES)}/) }
+
+    tmux("send-keys", "-t", "=#{name}:", "Down")
+    sleep 0.3
+    text = pane_text(name)
+  end
+  { trust: "failed", trust_reason: "could not select \"#{TRUST_YES}\" on the trust prompt" }
+end
+
+def accept_trust_enter(name)
+  tmux("send-keys", "-t", "=#{name}:", "Enter")
+  10.times do
+    sleep 0.5
+    return { trust: "accepted" } unless trust_prompt?(pane_text(name))
+  end
+  { trust: "failed", trust_reason: "the trust prompt is still on screen after Enter" }
+end
+
+# A dialog still on screen after start (not the trust prompt): the session is waiting for a person.
+def dialog_on_screen(name)
+  text = pane_text(name)
+  return nil unless text.match?(/Enter to confirm|Esc to cancel|\(y\/n\)|Do you want to/i)
+
+  text.lines.map(&:rstrip).reject(&:empty?).last(3).join(" · ")[0, 300]
+end
+
+# Up to `wait` seconds for Remote Control to come up; else the pane's last lines say why (a refused start).
+def confirm_remote_control(name, wait: 12)
+  deadline = Time.now + wait
+  loop do
+    out, _e, ok = tmux("list-panes", "-t", "=#{name}", "-F", "\#{pane_pid}")
+    return { remote_control: "failed", reason: "tmux session is gone" } unless ok
+
+    pane_pid = out.lines.first.to_i
+    return { remote_control: "on", remote_control_name: name } if remote_control_running?(pane_pid, name)
+    break if Time.now > deadline
+
+    sleep 1
+  end
+  screen, _e, _ok = tmux("capture-pane", "-p", "-t", "=#{name}:")
+  tail = screen.lines.map(&:rstrip).reject(&:empty?).last(4).join(" · ")
+  { remote_control: "failed", reason: tail.empty? ? "no claude --remote-control #{name} process after #{wait}s" : tail[0, 400] }
+end
+
+def host_dir(container_path)
+  Busyyaks::LauncherRules.host_dir(container_path, container_root: CONTAINER_ROOT, projects_root: PROJECTS_ROOT)
+end
+
+def tmux(*args)
+  out, err, st = Open3.capture3("tmux", *args)
+  [out, err, st.success?]
+end
+
+def sessions
+  out, _err, ok = tmux("ls", "-F", "\#{session_name}\t\#{pane_current_path}\t\#{session_created}\t\#{session_attached}")
+  return [] unless ok # no server = no sessions
+
+  links = claude_links
+  out.lines.map do |l|
+    name, path, created, attached = l.chomp.split("\t")
+    project_path = path == PROJECTS_ROOT || !path.start_with?("#{PROJECTS_ROOT}/") ? nil : path.sub(PROJECTS_ROOT, CONTAINER_ROOT)
+    { name: name, path: path, project_path: project_path, created: created.to_i, attached: attached.to_i.positive?, claude_url: links[name] }
+  end
+end
+
+def session_name(base)
+  base = base.to_s.gsub(/[^A-Za-z0-9_-]/, "_")
+  taken = sessions.map { |s| s[:name] }
+  return base unless taken.include?(base)
+
+  n = 1
+  n += 1 while taken.include?("#{base}_#{n}")
+  "#{base}_#{n}"
+end
+
+# A free tmux session name for a board (the engine registers it, then asks for the launch under that name).
+def name_op(req)
+  base = req["base"].to_s
+  raise ArgumentError, "base is required (the engine's agent_types[].session_name, rendered)" if base.empty?
+
+  { ok: true, session: session_name(base) }
+end
+
+# The start of a session the engine already registered (Api#launch → this): the type's argv from the board config
+# (the prompt — the type's template rendered with the engine's values + {dir}, which only this side knows — as the
+# positional prompt, `--remote-control <session>` still LAST), in a detached tmux session named as the engine said.
+def launch(req)
+  cfg = BOARD_CONFIG
+  dir = host_dir(req["path"])
+  name = req["session"].to_s
+  raise ArgumentError, "session must match the tmux name alphabet" unless name.match?(AgentsKanban::Launch::SESSION)
+  _o, _e, exists = tmux("has-session", "-t", "=#{name}")
+  raise ArgumentError, "tmux session #{name} already exists" if exists
+
+  vars = Busyyaks::LauncherRules.launch_vars(req["vars"], dir: dir) # the engine's keys; {dir} is ours
+  begin
+    t = cfg.agent_type(req["type"])
+    prompt = t.prompt && AgentsKanban::Launch.render(t.prompt, **vars)
+    argv = AgentsKanban::Launch.argv(cfg, type: t.key, launcher: req["launcher"], session: name, extra: prompt ? [prompt] : [])
+  rescue AgentsKanban::Invalid => e
+    raise ArgumentError, e.message
+  end
+  cmd = Shellwords.join(argv)
+  # `bash -ic` so ~/.bashrc functions (fullclaude, …) exist; `exec bash` keeps the pane open after claude exits.
+  # the folder-trust decision first: a record it cannot read refuses the launch before anything starts
+  refusal = begin
+    Busyyaks::LaunchTrust.refusal(dir, trusted: TRUSTED, created: CREATED)
+  rescue Busyyaks::LaunchTrust::Invalid => e
+    raise ArgumentError, "folder trust: #{e.message}"
+  end
+  _out, err, ok = tmux("new-session", "-d", "-s", name, "-c", dir, "bash", "-ic", "#{cmd}; exec bash")
+  raise "tmux failed: #{err.strip}" unless ok
+
+  trust = accept_trust(name, refusal) || {}
+  rc = confirm_remote_control(name)
+  waiting = dialog_on_screen(name)
+  rc = rc.merge(remote_control: "failed", reason: "waiting on a dialog: #{waiting}") if waiting && rc[:remote_control] == "on"
+  puts "#{Time.now.iso8601} launched #{name} (#{t.key}/#{req['launcher']}) in #{dir} · trust #{trust[:trust] || 'not asked'} · remote control #{rc[:remote_control]}#{rc[:reason] ? " (#{rc[:reason]})" : ''}"
+  { ok: true, session: name, type: t.key, launcher: t.launcher!(req["launcher"]), dir: dir, prompt: !prompt.nil?, **trust, **rc }
+end
+
+NAME = /\A[A-Za-z0-9][A-Za-z0-9._-]{0,99}\z/
+JOBS = [] # clone jobs, newest last; kept in memory for the page's status list
+JOBS_LOCK = Mutex.new
+
+def roots
+  YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml")).fetch("roots").map { |r| r.fetch("path") }
+end
+
+# New repo in a configured root: empty dir + `git init -b main`, or a background `git clone`.
+def create(req)
+  root = req["root"].to_s
+  raise ArgumentError, "unknown root #{root.inspect}" unless roots.include?(root)
+
+  url = req["url"].to_s.strip
+  # parsed strictly (LaunchTrust.clone_url!): git gets only the URL rebuilt from host / owner / repo
+  parsed = begin
+    url.empty? ? nil : Busyyaks::LaunchTrust.clone_url!(url)
+  rescue Busyyaks::LaunchTrust::Invalid => e
+    raise ArgumentError, e.message
+  end
+
+  name = req["name"].to_s.strip
+  name = parsed[:repo] if name.empty? && parsed
+  raise ArgumentError, "name must match #{NAME.source}" unless name.match?(NAME)
+
+  parent = root == CONTAINER_ROOT ? PROJECTS_ROOT : File.join(PROJECTS_ROOT, root.delete_prefix("#{CONTAINER_ROOT}/"))
+  raise ArgumentError, "root not on disk: #{parent}" unless File.directory?(parent)
+
+  dir = File.join(parent, name)
+  # both paths start by reserving the dir: an exclusive mkdir — a second create of the name (a clone racing an init,
+  # two inits) gets EEXIST and is refused with nothing written
+  begin
+    Dir.mkdir(dir)
+  rescue Errno::EEXIST
+    raise ArgumentError, "already exists: #{dir}"
+  end
+
+  return clone(parsed, dir, File.join(root, name)) if parsed
+
+  # git init only in the dir this call just made; recorded only while it holds nothing but that fresh .git
+  _o, err, st = Open3.capture3("git", "init", "-q", "-b", "main", dir, in: File::NULL)
+  raise "git init failed: #{err.strip}" unless st.success?
+
+  trusted, trust_error = record_created(dir)
+  puts "#{Time.now.iso8601} created #{dir}"
+  { ok: true, path: File.join(root, name), cloning: false, trusted: trusted, trust_error: trust_error }
+end
+
+# [true, nil] = recorded (trusted) — git init only; [false, why] = not recorded (a record that cannot be written, or
+# a repo that is no longer just a fresh init): untrusted, said in the log and in create's answer
+def record_created(dir)
+  CREATED.record(dir)
+  [true, nil]
+rescue StandardError => e
+  puts "#{Time.now.iso8601} git init #{dir}: NOT recorded as created (#{e.class}: #{e.message}); its trust prompt is left"
+  [false, "#{e.class}: #{e.message}"]
+end
+
+# A clone is never trusted (what a URL serves is whoever owns it — a fork under your own name included): it keeps the
+# trust prompt for the operator. It runs with nothing inherited (LaunchTrust.clone_env, unsetenv_others).
+def clone(parsed, dir, container_path)
+  url = parsed[:url]
+  log = File.join(RUN_DIR, "clone-#{File.basename(dir)}-#{Time.now.to_i}.log")
+  job = { url: url, path: container_path, log: File.basename(log), started: Time.now.to_i, status: "running", exit: nil }
+  JOBS_LOCK.synchronize { JOBS << job; JOBS.shift while JOBS.size > 20 }
+  home = Dir.mktmpdir("busyyaks-clone-home") # empty: no gitconfig but the command line's
+  template = Dir.mktmpdir("busyyaks-clone-template") # empty: no hooks or config copied into the new .git
+  pid = Process.spawn(Busyyaks::LaunchTrust.clone_env(home, template), *Busyyaks::LaunchTrust.clone_argv(url, dir),
+                      %i[out err] => [log, "w"], in: File::NULL, unsetenv_others: true)
+  Thread.new do
+    _, st = Process.wait2(pid)
+    FileUtils.rm_rf([home, template])
+    JOBS_LOCK.synchronize { job[:status] = st.success? ? "done" : "failed"; job[:exit] = st.exitstatus }
+    puts "#{Time.now.iso8601} clone #{url} → #{dir}: exit #{st.exitstatus}"
+  end
+  puts "#{Time.now.iso8601} cloning #{url} → #{dir}"
+  { ok: true, path: container_path, cloning: true, trusted: false }
+end
+
+def jobs
+  JOBS_LOCK.synchronize do
+    JOBS.map do |j|
+      tail = File.readlines(File.join(RUN_DIR, j[:log])).last(3).map { |l| l.split("\r").last.to_s.strip }.reject(&:empty?)
+      j.merge(tail: tail)
+    rescue Errno::ENOENT
+      j.merge(tail: [])
+    end
+  end
+end
+
+# tmux session name → its Claude Remote Control page, from Claude Code's live session records
+# (<pid>.json: "tmux":"name:@w.%p", "bridgeSessionId"). Only records whose process is alive; a session
+# without a bridge id (no --remote-control, Hermes) gets no link.
+def claude_links
+  Dir.glob(File.join(CLAUDE_SESSIONS_DIR, "*.json")).each_with_object({}) do |f, acc|
+    rec = JSON.parse(File.read(f)) rescue next
+    pid = rec["pid"].to_i
+    bridge = rec["bridgeSessionId"].to_s
+    name = rec["tmux"].to_s.split(":").first
+    next if pid <= 0 || bridge.empty? || name.to_s.empty? || !File.exist?("/proc/#{pid}")
+    next unless bridge.match?(/\A[A-Za-z0-9_-]{8,80}\z/)
+
+    acc[name] = CLAUDE_SESSION_URL.gsub("{id}", bridge)
+  end
+end
+
+# The agent_engines collector's snapshot, reduced to allowlisted fields. A stale or unreadable snapshot is
+# said (stale_s / error), never papered over: the sidebar shows it.
+def agents
+  raw = File.read(COLLECTOR.snapshot)
+  snap = JSON.parse(raw)
+  links = claude_links
+  age = Time.now.to_f - snap.fetch("generated_at").to_f
+  sessions = snap.fetch("sessions").map do |s|
+    panes = s.fetch("panes").map do |p|
+      pane = p.slice(*PANE_KEYS)
+      cwd = p["cwd"].to_s
+      pane["project_path"] = cwd.start_with?("#{PROJECTS_ROOT}/") ? cwd.sub(PROJECTS_ROOT, CONTAINER_ROOT) : nil
+      eng = ENGINES.pane(p["engine"])
+      pane["engine_label"] = eng[:label] if eng[:label]
+      pane["screen"] = eng[:error] ? { error: eng[:error] } : pane_screen(s["socket"], p["pane_id"], eng[:family])
+      pane
+    end
+    s.slice("name", "socket", "attached", "created", "activity", "windows").merge("panes" => panes, "claude_url" => links[s["name"]])
+  end
+  { ok: true, generated_at: snap["generated_at"], age_s: age.round(1), interval_s: snap["interval_s"],
+    collector_error: snap["error"], sessions: sessions }
+rescue Errno::ENOENT, Errno::EACCES, JSON::ParserError, KeyError => e
+  { ok: false, error: "agents snapshot unreadable (#{COLLECTOR.snapshot}): #{e.class}: #{e.message}", status: 503 }
+end
+
+# What the pane draws now, read by herdr's rules (Busyyaks::AgentScreen): {state, rule} — plus, when blocked on a
+# Claude Code dialog, the dialog (question, command, options, hash: what the sidebar shows and answers). Only the
+# verdict leaves the host, never the screen. A pane tmux cannot read → {error} (shown), never a guessed state.
+def pane_screen(socket, pane_id, family)
+  sock = socket.to_s
+  return { error: "bad pane #{pane_id.inspect}" } unless pane_id.to_s.match?(/\A%\d+\z/) && sock.match?(/\A[\w.-]{1,64}\z/)
+
+  base = sock == "default" ? [] : ["-L", sock]
+  text, err, ok = tmux(*base, "capture-pane", "-p", "-t", pane_id)
+  return { error: "capture-pane #{pane_id}: #{err.strip}" } unless ok
+
+  title, = tmux(*base, "display-message", "-p", "-t", pane_id, "\#{pane_title}")
+  verdict = Busyyaks::AgentScreen.detect(family.rules, text, title.to_s.chomp)
+  if verdict[:state] == "blocked" && (d = AgentsKanban::SessionDialog.parse(text))
+    verdict[:dialog] = d.slice(:question, :command, :options, :escape, :free_text, :hash).merge(answerable: sock == "default")
+  end
+  verdict
+end
+
+# ── reap: stop agent tmux sessions that are not working ──────────────────────────────────────────────
+# Eligible = an agent session (in the collector snapshot) that is NOT attached, has no pane waiting on the
+# operator, no pane busy, no pane whose screen shows a dialog or a running turn, no subagent running, and either a pane the record says is idle, or — when no pane's
+# state is readable — tmux activity older than REAP_QUIET_S. Everything else is kept. A stale snapshot
+# means nobody can tell who is working: refused outright.
+REAP_QUIET_S = 30 * 60
+
+def reap_candidates(now = Time.now.to_f)
+  snap = agents
+  return snap unless snap[:ok]
+  raise ReapRefused, "collector snapshot is #{snap[:age_s]}s old — cannot tell who is working" if snap[:age_s].to_f > 3 * snap[:interval_s].to_f
+
+  protect = reap_protect
+  snap[:sessions].filter_map do |s|
+    reason = reap_reason(s, now, protect)
+    reason && { name: s["name"], socket: s["socket"], reason: reason, activity: s["activity"],
+                project_path: s["panes"].map { |p| p["project_path"] }.compact.first,
+                engines: s["panes"].map { |p| p["engine"] }.uniq, title: s["panes"].map { |p| p["title"] }.compact.first }
+  end
+end
+
+class ReapRefused < StandardError; end
+
+def reap_protect
+  list = YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml")).fetch("reap_protect")
+  raise "reap_protect must be a list" unless list.is_a?(Array)
+
+  list
+end
+
+def reap_reason(s, now, protect = reap_protect)
+  return nil if protect.any? { |pat| File.fnmatch?(pat, s["name"].to_s) } # owned by a service (config reap_protect)
+
+  panes = s["panes"]
+  return nil if panes.empty? || s["attached"].to_i.positive?
+  return nil if panes.any? { |p| p["waiting_for"] || p["status"] == "busy" || p["subagents_running"].to_i.positive? }
+  return nil if panes.any? { |p| %w[blocked working].include?(p["screen"]&.dig(:state)) } # its screen: a dialog, or a turn running
+  return "idle" if panes.any? { |p| p["status"] == "idle" }
+
+  quiet = now - s["activity"].to_f
+  return nil unless panes.all? { |p| p["status"].nil? || p["status"] == "unknown" } && quiet > REAP_QUIET_S
+
+  "state unreadable, 0 subagents, quiet #{(quiet / 60).round} min"
+end
+
+def reap_preview
+  { ok: true, quiet_min: REAP_QUIET_S / 60, candidates: reap_candidates }
+rescue ReapRefused => e
+  { ok: false, error: e.message, status: 409 }
+end
+
+# Stops only the named sessions that are STILL eligible in a fresh snapshot; reports each one.
+def reap(req)
+  wanted = Array(req["sessions"]).map { |x| [x["name"].to_s, (x["socket"] || "default").to_s] }
+  raise ArgumentError, "sessions: give at least one {name, socket}" if wanted.empty?
+
+  eligible = reap_candidates.to_h { |c| [[c[:name], c[:socket]], c] }
+  results = wanted.map do |name, sock|
+    c = eligible[[name, sock]]
+    next { name: name, stopped: false, reason: "no longer eligible (working, waiting, attached or gone)" } unless c
+    next { name: name, stopped: false, reason: "socket #{sock} is not the default tmux server" } unless sock == "default"
+
+    _o, err, ok = tmux("kill-session", "-t", "=#{name}")
+    puts "#{Time.now.iso8601} reap #{name} (#{c[:reason]}): #{ok ? 'stopped' : err.strip}"
+    { name: name, stopped: ok, reason: ok ? c[:reason] : "tmux: #{err.strip}" }
+  end
+  { ok: true, results: results }
+rescue ReapRefused => e
+  { ok: false, error: e.message, status: 409 }
+end
+
+# ── stop: the operator's "Stop" / "Stop all" on a project page ─────────────────────────────────────────
+# Kills the named tmux sessions whatever they are doing (the operator clicked and confirmed), but ONLY sessions whose
+# pane is in this project's directory (`path` = the container path the page shows) and never one owned by a service
+# (config reap_protect). Every name gets its own result; anything not stopped says why.
+def stop_op(req)
+  path = req["path"].to_s
+  names = Array(req["sessions"]).map(&:to_s)
+  raise ArgumentError, "path is required (the project's container path)" if path.empty?
+  raise ArgumentError, "sessions: give at least one session name" if names.empty?
+
+  live = sessions.to_h { |s| [s[:name], s] }
+  protect = reap_protect
+  results = names.uniq.map do |name|
+    s = live[name]
+    next { name: name, stopped: false, reason: "not running" } unless s
+    next { name: name, stopped: false, reason: "not in this project (#{s[:project_path] || s[:path]})" } unless s[:project_path] == path
+    next { name: name, stopped: false, reason: "protected by reap_protect" } if protect.any? { |pat| File.fnmatch?(pat, name) }
+
+    _o, err, ok = tmux("kill-session", "-t", "=#{name}")
+    puts "#{Time.now.iso8601} stop #{name} (operator, #{path}): #{ok ? 'stopped' : err.strip}"
+    { name: name, stopped: ok, reason: ok ? "stopped" : "tmux: #{err.strip}" }
+  end
+  { ok: true, results: results }
+end
+
+# ── notify: type a busyyaks message into a card owner's session ──────────────────────────────────────
+# Through the collector's own input op ("send": bracketed paste + Enter, refused unless the snapshot's engine is
+# still alive in that pane). Before forwarding: the session must be in a fresh snapshot (else gone), must not
+# show a question dialog (a paste would answer it — retry later), and every pane's engine must be of a family that
+# takes typed input mid-turn (Engines::Family#typeable?: Claude Code queues it; Hermes' state is unreadable).
+def notify(req)
+  name = req["session"].to_s
+  sock = (req["socket"] || "default").to_s
+  text = req["text"].to_s
+  raise ArgumentError, "bad session" unless name.match?(/\A[A-Za-z0-9._-]{1,100}\z/) && sock.match?(/\A[\w.-]{1,64}\z/)
+  raise ArgumentError, "text must be 1..8000 characters" if text.strip.empty? || text.length > 8000
+
+  snap = agents
+  return snap unless snap[:ok]
+  return { ok: false, retry: true, error: "collector snapshot is #{snap[:age_s]}s old" } if snap[:age_s].to_f > 3 * snap[:interval_s].to_f
+
+  s = snap[:sessions].find { |x| x["name"] == name && x["socket"] == sock }
+  return { ok: false, gone: true, error: "session #{name} is not running" } unless s
+
+  panes = s["panes"]
+  return { ok: false, retry: true, error: "a question is on its screen" } if panes.any? { |p| p["waiting_for"] }
+  untypeable = ENGINES.untypeable(panes.map { |p| p["engine"] })
+  return { ok: false, unsupported: true, error: "cannot type into #{untypeable.map { |n, why| "#{n} (#{why})" }.join(', ')}" } if untypeable.any?
+
+  # The screen NOW, read by the collector (parse_dialog): any dialog on it — a question, the folder-trust prompt,
+  # a permission ask — means a paste + Enter would ANSWER it (the trust prompt's default is "No, exit"). Wait.
+  screen = collector(op: "screen", session: name, socket: sock)
+  return { ok: false, retry: true, error: "cannot read its screen: #{screen.dig('error', 'message')}" } unless screen["ok"]
+  return { ok: false, retry: true, error: "a dialog is on its screen (#{screen.dig('dialog', 'kind') || 'question'})" } if screen["dialog"]
+  return { ok: false, retry: true, error: "a dialog is on its screen" } if screen["text"].to_s.match?(/Enter to confirm|Do you trust|Yes, I trust this folder/i)
+
+  res = collector(op: "send", session: name, socket: sock, text: text)
+  puts "#{Time.now.iso8601} notify #{name}: #{res['ok'] ? 'sent' : res.dig('error', 'message')}"
+  res["ok"] ? { ok: true } : { ok: false, retry: res.dig("error", "type") == "tmux", error: res.dig("error", "message") || "collector refused" }
+rescue Errno::ENOENT, Errno::ECONNREFUSED, Errno::EACCES => e
+  { ok: false, retry: true, error: "collector read socket unavailable: #{e.class}" }
+end
+
+# ── dialogs: the screen of an owner session blocked on a dialog, and the operator's key press ──────────
+# Read with tmux capture-pane (any session, not only collector-tracked ones) and parsed by the same SessionDialog the
+# container uses, so the hash the card carries is the hash compared here. Only the default tmux server.
+def dialog_session!(req)
+  name = req["session"].to_s
+  sock = (req["socket"] || "default").to_s
+  raise ArgumentError, "bad session" unless name.match?(/\A[A-Za-z0-9._-]{1,100}\z/) && sock.match?(/\A[\w.-]{1,64}\z/)
+  raise ArgumentError, "socket #{sock} is not the default tmux server" unless sock == "default"
+
+  name
+end
+
+def dialog_op(req)
+  name = dialog_session!(req)
+  _o, _e, ok = tmux("has-session", "-t", "=#{name}")
+  return { ok: false, gone: true, error: "session #{name} is not running" } unless ok
+
+  { ok: true, dialog: AgentsKanban::SessionDialog.parse(pane_text(name)) }
+end
+
+# WHERE a session works (the idle watch: which branch's PR to check, how long since a commit): its pane's dir,
+# relative to PROJECTS_ROOT. No git runs here — a session's checkout is a repo the host must not run git in (its config
+# can name programs); the notifier reads it through its GitRead child (lib/busyyaks/session_git.rb).
+def git_op(req)
+  name = dialog_session!(req)
+  out, _e, ok = tmux("display-message", "-p", "-t", "=#{name}:", "\#{pane_current_path}")
+  return { ok: false, gone: true, error: "session #{name} is not running" } unless ok
+
+  root = File.realpath(PROJECTS_ROOT)
+  path = begin
+    File.realpath(out.strip)
+  rescue SystemCallError => e
+    return { ok: false, error: "the pane's dir #{out.strip} cannot be resolved: #{e.message}" }
+  end
+  return { ok: false, error: "#{path} is not under PROJECTS_ROOT" } unless path == root || path.start_with?("#{root}/")
+
+  { ok: true, path: path == root ? "." : path.delete_prefix("#{root}/") }
+end
+
+ANSWER_KEYS = /\A(\d{1,2}|esc)\z/
+
+# Re-captures the screen and presses the key only if the dialog there has the hash the operator saw, and the key is
+# one of its non-free options (or esc when Esc cancels). Anything else is refused with the reason; nothing is typed.
+def answer_op(req)
+  name = dialog_session!(req)
+  key = req["key"].to_s
+  raise ArgumentError, "key must be a digit or esc" unless key.match?(ANSWER_KEYS)
+
+  _o, _e, ok = tmux("has-session", "-t", "=#{name}")
+  return { ok: false, error: "session #{name} is not running — nothing typed", status: 409 } unless ok
+
+  refusal = AgentsKanban::SessionDialog.refuse_answer(pane_text(name), hash: req["hash"], key: key)
+  return { ok: false, error: "#{name}: #{refusal} — nothing typed", status: 409 } if refusal
+
+  _o, err, ok = tmux("send-keys", "-t", "=#{name}:", key == "esc" ? "Escape" : key)
+  puts "#{Time.now.iso8601} answer #{name}: #{key} #{ok ? 'pressed' : err.strip}"
+  ok ? { ok: true, pressed: key } : { ok: false, error: "tmux: #{err.strip}", status: 500 }
+end
+
+def collector(req)
+  line = UNIXSocket.open(COLLECTOR.read_socket) do |u|
+    u.puts(JSON.generate(req))
+    u.gets
+  end
+  raise "collector closed the socket" if line.nil?
+
+  JSON.parse(line)
+end
+
+# One session's subagents / workflows / background tasks from the collector's read socket. Only the
+# read-only "tasks" op is ever forwarded (that socket also takes input for interactive sessions).
+def agent_tasks(req)
+  name = req["session"].to_s
+  sock = req["socket"].to_s
+  raise ArgumentError, "bad session" unless name.match?(/\A[^\x00-\x1f]{1,200}\z/) && sock.match?(/\A[\w.-]{1,64}\z/)
+
+  line = UNIXSocket.open(COLLECTOR.read_socket) do |s|
+    s.puts(JSON.generate(op: "tasks", session: name, socket: sock))
+    s.gets
+  end
+  raise "collector closed the socket" if line.nil?
+
+  res = JSON.parse(line)
+  res["ok"] ? res : { ok: false, error: res.dig("error", "message") || "collector refused", status: 404 }
+rescue Errno::ENOENT, Errno::ECONNREFUSED, Errno::EACCES => e
+  { ok: false, error: "collector read socket unavailable: #{e.class}", status: 503 }
+end
+
+def handle(line)
+  req = JSON.parse(line)
+  # an op that reads the collector, on a box configured without one (AgentCollector::OPS): OFF, nothing else runs
+  refused = Busyyaks::AgentCollector.refusal(COLLECTOR, req["op"])
+  return refused if refused
+
+  case req["op"]
+  when "name" then name_op(req)
+  when "launch" then launch(req)
+  when "sessions" then { ok: true, sessions: sessions }
+  when "create" then create(req)
+  when "jobs" then { ok: true, jobs: jobs }
+  when "agents" then agents
+  when "agent_tasks" then agent_tasks(req)
+  when "reap_preview" then reap_preview
+  when "reap" then reap(req)
+  when "stop" then stop_op(req)
+  when "notify" then notify(req)
+  when "dialog" then dialog_op(req)
+  when "git" then git_op(req)
+  when "answer" then answer_op(req)
+  else { ok: false, error: "unknown op" }
+  end
+rescue ArgumentError, KeyError, JSON::ParserError => e
+  { ok: false, error: e.message, status: 400 }
+rescue StandardError => e
+  { ok: false, error: "#{e.class}: #{e.message}", status: 500 }
+end
+
+# the last run's socket (a restart, a reboot: RUN_DIR persists) is replaced; anything else there stops the start
+if File.symlink?(SOCKET) || (File.exist?(SOCKET) && !File.socket?(SOCKET))
+  abort "#{SOCKET} exists and is not a socket (a symlink or a file): remove it"
+end
+File.unlink(SOCKET) if File.socket?(SOCKET)
+server = Busyyaks::PrivateSocket.bind(SOCKET) # owner-only from the moment it exists; the umask restored
+puts "launcher listening on #{SOCKET}"
+puts COLLECTOR ? "agent-session collector: #{COLLECTOR.snapshot} · #{COLLECTOR.read_socket}" : Busyyaks::AgentCollector::OFF
+trap("TERM") { File.unlink(SOCKET) rescue nil; exit }
+loop do
+  client = server.accept
+  Thread.new(client) do |c|
+    line = c.gets
+    c.puts(JSON.generate(line ? handle(line) : { ok: false, error: "empty request" }))
+  ensure
+    c.close
+  end
+end

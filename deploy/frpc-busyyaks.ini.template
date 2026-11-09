@@ -1,0 +1,11 @@
+# Optional: an frp tunnel from the app's host to a public proxy host (frps with subdomain_host). docs/DEPLOY.md, mode 3.
+# Rendered by bin/render-deploy into deploy/rendered/frpc-busyyaks.ini; append the block to the app host's frpc.ini
+# (frp's INI format: still read by frp 0.52+, which logs it as deprecated in favour of TOML).
+# frps routes by the Host header and nginx forwards Host = {{PUBLIC_HOST}}, so {{PUBLIC_HOST}} must be
+# {{FRPC_SUBDOMAIN}}.<frps subdomain_host> — anything else gets frps' 404.
+# → busyyaks web on 127.0.0.1:{{WEB_HOST_PORT}}. The MCP port is NOT forwarded.
+[busyyaks]
+type = http
+local_ip = 127.0.0.1
+local_port = {{WEB_HOST_PORT}}
+subdomain = {{FRPC_SUBDOMAIN}}

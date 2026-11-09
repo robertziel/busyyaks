@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+# --no-dump: the schema dump goes into the image's config/db (read-only for the host user, and unused in production)
+bundle exec hanami db migrate --no-dump
+exec bundle exec puma -C config/puma.rb config.ru

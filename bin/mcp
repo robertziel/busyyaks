@@ -1,0 +1,5 @@
+#!/bin/sh
+# The MCP server: its own puma, its own settings. `-C /dev/null`: puma would otherwise load config/puma.rb (the web's,
+# HANAMI_PORT and friends required) and crash-loop on KeyError.
+set -eu
+exec bundle exec puma -C /dev/null --threads 1:4 --bind "tcp://0.0.0.0:${MCP_PORT}" mcp.ru
