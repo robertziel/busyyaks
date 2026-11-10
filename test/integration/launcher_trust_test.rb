@@ -94,15 +94,22 @@ class LauncherTrustTest < Minitest::Test
     @pid = Process.spawn(env, RbConfig.ruby, File.join(@co, "bin/launcher"), %i[out err] => [@log, "w"])
     sock = File.join(@base, "run/launcher.sock")
     # its boot (ruby + the engine) took > 10 s on the CI host under load (66 test workers, load 60 on 20 CPUs): wait
-    # for the socket or the process's exit, up to BOOT_SECONDS
+    # for the socket to accept a connection, or the process's exit, up to BOOT_SECONDS. The file alone is not enough:
+    # UNIXServer.new binds (the file appears) before it listens, and a connect in between is refused
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + BOOT_SECONDS
     until Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
-      return if File.socket?(sock)
+      return if accepting?(sock)
       flunk "the launcher exited: #{File.read(@log)}" if Process.waitpid(@pid, Process::WNOHANG)
 
       sleep 0.1
     end
     flunk "no socket after #{BOOT_SECONDS}s: #{File.read(@log)}"
+  end
+
+  def accepting?(sock)
+    File.socket?(sock) && UNIXSocket.open(sock) { true }
+  rescue Errno::ECONNREFUSED
+    false
   end
 
   def ask(req)
