@@ -16,6 +16,7 @@ require "yaml"
 #   - a corrupt created.json refuses a launch before `tmux new-session` runs.
 class LauncherTrustTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
+  BOOT_SECONDS = 60 # the launcher's start, until its socket exists
   COPY = %w[bin/launcher lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml].freeze
 
   def setup
@@ -92,13 +93,16 @@ class LauncherTrustTest < Minitest::Test
             "GIT_CONFIG_COUNT" => "1", "GIT_CONFIG_KEY_0" => "protocol.file.allow", "GIT_CONFIG_VALUE_0" => "always", }
     @pid = Process.spawn(env, RbConfig.ruby, File.join(@co, "bin/launcher"), %i[out err] => [@log, "w"])
     sock = File.join(@base, "run/launcher.sock")
-    100.times do
+    # its boot (ruby + the engine) took > 10 s on the CI host under load (66 test workers, load 60 on 20 CPUs): wait
+    # for the socket or the process's exit, up to BOOT_SECONDS
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + BOOT_SECONDS
+    until Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
       return if File.socket?(sock)
       flunk "the launcher exited: #{File.read(@log)}" if Process.waitpid(@pid, Process::WNOHANG)
 
       sleep 0.1
     end
-    flunk "no socket: #{File.read(@log)}"
+    flunk "no socket after #{BOOT_SECONDS}s: #{File.read(@log)}"
   end
 
   def ask(req)

@@ -58,8 +58,13 @@ docker run --rm --network host -u "$(id -u):$(id -g)" -e HOME=/tmp -e WEB="$web"
 # that show them (both READMEs, the pages that say how to regenerate them: <!-- local-only --> blocks dropped, as the
 # publish gate does). The file is named, never the term.
 mkdir -p "$w/public"
+# the markers are spelled in two parts: a literal marker here would be cut by the publish strip and refused by the
+# publish gate (git publish-check: no file carries a marker)
+mark_start='<!-- local-only'':start -->'
+mark_end='<!-- local-only'':end -->'
 for f in "$repo/README.md" "$repo/docs/TESTING.md" "$module/README.md" "$module/docs/DEVELOPMENT.md"; do
-  awk '/    > "$w/public/$(basename "$(dirname "$f")")-$(basename "$f")"
+  awk -v s="$mark_start" -v e="$mark_end" 'index($0, s) { skip = 1 } !skip { print } index($0, e) { skip = 0 }' "$f" \
+    > "$w/public/$(basename "$(dirname "$f")")-$(basename "$f")"
 done
 found=0
 while IFS= read -r t; do
