@@ -10,6 +10,7 @@ import { age, bubbles, cardHref, pillTotal, ring, topCount, totals, type Waiting
 const AT = Date.parse("2025-03-04T22:00:00Z") / 1000;
 const data: Waiting = {
   waiting_columns: ["ask_col", "check_col"],
+  launch_failures: [],
   total: 3,
   projects: [
     {
@@ -121,6 +122,7 @@ describe("waiting helpers", () => {
     });
     const w: Waiting = {
       waiting_columns: [],
+      launch_failures: [],
       total: 6,
       projects: [
         { slug: "a/ask-old", icon: null, count: 1, cards: [card(1, "ask", "2025-03-04T10:00:00Z")] },
@@ -285,7 +287,11 @@ describe("WaitingView", () => {
     expect(h).not.toMatch(/class="ww-chip[^"]*" title=/); // no native title doubling the tooltip
   });
   it("zero: a quiet 0 waiting, never gone, no panel even when open", () => {
-    const h = render({ data: { waiting_columns: [], total: 0, projects: [] }, error: null, open: true });
+    const h = render({
+      data: { waiting_columns: [], total: 0, projects: [], launch_failures: [] },
+      error: null,
+      open: true,
+    });
     expect(h).toContain("0 waiting");
     expect(h).toContain("ww-zero");
     expect(h).not.toContain('class="ww-panel"');
