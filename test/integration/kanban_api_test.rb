@@ -388,12 +388,12 @@ ans.values_at("body", "author")
                              finished_at: now)
   end
 
-  # workflow v3 asks the operator three times on a local board — the approve endpoint works at every step, withdraw too
-  def test_approve_at_every_step_of_a_local_v3_board
-    v3 = JSON.parse(File.read(File.join(__dir__, "../../vendor/agents_kanban/fixtures/boards/local_v3.board.json")))
+  # the local board (local_v4) asks the operator three times — the approve endpoint works at every step, withdraw too
+  def test_approve_at_every_step_of_a_local_board
+    v3 = JSON.parse(File.read(File.join(__dir__, "../../vendor/agents_kanban/fixtures/boards/local_v4.board.json")))
     j = api(:post, "/api/projects/g/r/workflow", v3)
     assert_equal 200, last_response.status
-    assert_equal [%w[local_human_review local_merged_pr deploy_check], %w[deploy_check public_agent_review public_human_review],
+    assert_equal [%w[local_human_review local_merged_pr deploy_check], %w[deploy_check public_create_pr public_agent_review],
                   %w[public_human_review awaiting_merge done],],
                  j["rules"]["gates"]["approvals"].map { |a| a.values_at("from", "to", "then") }
     assert_equal [false, false, true], j["rules"]["gates"]["approvals"].map { |a| a["final"] }

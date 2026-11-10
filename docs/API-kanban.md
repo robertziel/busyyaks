@@ -37,9 +37,11 @@ Types (the fixed set): `parked queued working review gate done cancelled` (engin
 a question for the operator is the card's `needs_operator` flag (`kanban_ask`; `asked*`, `question*` on the card JSON) and
 an external blocker its `blocked_external` flag (`kanban_block`; `blocked: {reason, url, by, at}`) — the card keeps its
 column, shows a badge, refuses agent moves, and counts as waiting. The private local-repo boards run the engine's
-`local_v3` board (14 states: Backlog · To do · In progress · Local: Agent review · Local: Author response · Local:
-Human review · Local: Merged · Local: Deploy check · Public: Agent review · Public: Author response · Public: Human review
-· Awaiting merge · Done · Cancelled; `review_round` per agent-review column, limit 3 → the handoff carries `unresolved`).
+`local_v4` board (15 states: Backlog · To do · In progress · Local: Agent review · Local: Author response · Local:
+Human review · Local: Merged · Local: Deploy check · Public: Create PR · Public: Agent review · Public: Author response ·
+Public: Human review · Awaiting merge · Done · Cancelled — the operator's "Open public PR" sends a card into Public:
+Create PR, the agent opens the public PR there and moves it on with "Public PR opened", card #271 — a stored board
+takes that shape through the workflow API, no migration; `review_round` per agent-review column, limit 3 → the handoff carries `unresolved`).
 
 `waiting_columns` = the gate columns (`human_check`, `ready`): "N waiting for you" = their cards + the flagged cards
 elsewhere (`waiting`, `flagged` on the board / boards JSON). `listened_columns` = `todo`, `doing`, `qa`, `human_check`,
