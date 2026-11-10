@@ -16,6 +16,7 @@ require "yaml"
 #   - a corrupt created.json refuses a launch before `tmux new-session` runs.
 class LauncherTrustTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
+  BOOT_SECONDS = 60 # the launcher's start, until its socket exists
   COPY = %w[bin/launcher lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml].freeze
 
   def setup
@@ -46,14 +47,27 @@ class LauncherTrustTest < Minitest::Test
       CLAUDE_SESSIONS_DIR=#{File.join(@base, 'sessions')}
       CLAUDE_SESSION_URL=https://claude.example/{id}
     ENV
-    # tmux: records every call; the pane shows Claude Code's trust prompt until Enter is pressed on it
+    # tmux: records every call; the pane shows Claude Code's trust prompt until Enter is pressed on it. new-session
+    # starts the pane's process: a `claude --remote-control <session>` (a copy of bash named claude, so /proc shows
+    # that argv), or — with the `refuse` file present — a bare shell, as when claude refused to start
     entered = File.join(@base, "entered")
+    @refuse = File.join(@base, "refuse")
+    @pids = File.join(@base, "pids")
+    FileUtils.cp(Open3.capture2("sh", "-c", "command -v bash").first.strip, File.join(@bin, "claude"))
     stub("tmux", <<~SH)
       echo "$*" >> #{@tmux_log}
       case "$1" in
-        has-session|ls|list-panes|display-message) exit 1 ;;
+        new-session)
+          while [ "$1" != -s ]; do shift; done
+          if [ -e #{@refuse} ]; then sleep 300 >/dev/null 2>&1 & else #{@bin}/claude -c 'sleep 300; :' --remote-control "$2" >/dev/null 2>&1 & fi
+          echo $! >> #{@pids}; echo $! > #{@base}/pane.pid; exit 0 ;;
+        list-panes) [ -e #{@base}/pane.pid ] && cat #{@base}/pane.pid && exit 0; exit 1 ;;
+        kill-session) [ -e #{@base}/nokill ] && echo "server busy" >&2 && exit 1; exit 0 ;;
+        has-session) [ -e #{@base}/nokill ] && [ -e #{@base}/pane.pid ] && exit 0; exit 1 ;;
+        ls|display-message) exit 1 ;;
         capture-pane)
-          if [ -e #{entered} ]; then echo "> "; else
+          if [ -e #{@refuse} ]; then echo "Temp directory /tmp/claude-1000 is owned by uid 0, expected 1000."; echo '$ '
+          elif [ -e #{entered} ]; then echo "> "; else
             printf '%s\\n' "Do you trust the files in this folder?" "❯ 1. Yes, I trust this folder" "  2. No, exit"
           fi
           exit 0 ;;
@@ -76,6 +90,7 @@ class LauncherTrustTest < Minitest::Test
   end
 
   def teardown
+    File.readlines(@pids).each { |p| Process.kill("TERM", p.to_i) rescue nil } if File.exist?(@pids)
     Process.kill("TERM", @pid) if @pid
     Process.wait(@pid) if @pid
     FileUtils.rm_rf(@base)
@@ -92,13 +107,16 @@ class LauncherTrustTest < Minitest::Test
             "GIT_CONFIG_COUNT" => "1", "GIT_CONFIG_KEY_0" => "protocol.file.allow", "GIT_CONFIG_VALUE_0" => "always", }
     @pid = Process.spawn(env, RbConfig.ruby, File.join(@co, "bin/launcher"), %i[out err] => [@log, "w"])
     sock = File.join(@base, "run/launcher.sock")
-    100.times do
+    # its boot (ruby + the engine) took > 10 s on the CI host under load (66 test workers, load 60 on 20 CPUs): wait
+    # for the socket or the process's exit, up to BOOT_SECONDS
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + BOOT_SECONDS
+    until Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
       return if File.socket?(sock)
       flunk "the launcher exited: #{File.read(@log)}" if Process.waitpid(@pid, Process::WNOHANG)
 
       sleep 0.1
     end
-    flunk "no socket: #{File.read(@log)}"
+    flunk "no socket after #{BOOT_SECONDS}s: #{File.read(@log)}"
   end
 
   def ask(req)
@@ -174,6 +192,35 @@ class LauncherTrustTest < Minitest::Test
                  (keys - %w[LANG SSH_AUTH_SOCK]).sort
     refute env.key?("GIT_SSH_COMMAND")
     refute env.key?("GIT_CONFIG_COUNT")
+  end
+
+  # claude never came up (it refused to start; the pane is a bare shell): the launch is refused with the pane's last
+  # lines and the session killed — never an ok the engine would register an owner on
+  def test_a_launch_without_claude_remote_control_is_refused_and_killed
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    File.write(@refuse, "")
+    r = launch("fresh")
+    refute r["ok"], r.inspect
+    assert_equal 422, r["status"]
+    assert_match(/\Afresh_s did not start: no claude --remote-control fresh_s after 12s \(Temp directory .* owned by uid 0/,
+                 r["error"])
+    assert_match(/kill-session -t =fresh_s/, tmux_calls)
+  end
+
+  def test_a_refused_launch_whose_kill_failed_says_the_session_still_runs
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    File.write(@refuse, "")
+    File.write(File.join(@base, "nokill"), "")
+    r = launch("fresh")
+    assert_equal [false, 422], r.values_at("ok", "status"), r.inspect
+    assert_match(/kill-session failed \(server busy\): the tmux session fresh_s is still running\z/, r["error"])
+  end
+
+  def test_a_launch_with_claude_remote_control_up_is_ok_and_kept
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    r = launch("fresh")
+    assert_equal [true, "on", "fresh_s"], r.values_at("ok", "remote_control", "remote_control_name"), r.inspect
+    refute_includes tmux_calls, "kill-session"
   end
 
   # a record the launcher cannot read refuses a launch before any session starts

@@ -3,7 +3,8 @@
 // and the cap state come with the page (/api/projects, /api/today, /api/projects/:slug: `launches`), so a table of
 // thirty repos makes no extra request; per-project counts are read off the engine's session list. A launch posts
 // /api/launch {slug, type, launcher}; the engine registers the session (a lead adopts the board's ownerless cards),
-// bin/launcher starts it, and its Remote Control verdict lands in the flash — never presented as fine when it failed.
+// bin/launcher starts it, and its Remote Control verdict lands in the flash — never presented as fine when it failed
+// (a claude that never came up is a 422 instead: the error shown verbatim; a 201 failed = up but waiting on a dialog).
 import { useMemo } from "react";
 import { apiPost, invalidate } from "../api";
 import type { LauncherStart, LaunchesData, LaunchResult } from "../types";

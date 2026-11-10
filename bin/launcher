@@ -189,7 +189,9 @@ def dialog_on_screen(name)
 end
 
 # Up to `wait` seconds for Remote Control to come up; else the pane's last lines say why (a refused start).
-def confirm_remote_control(name, wait: 12)
+RC_WAIT_S = 12 # seconds for `claude --remote-control <name>` to appear in the pane's tree (argv only: no network)
+
+def confirm_remote_control(name, wait: RC_WAIT_S)
   deadline = Time.now + wait
   loop do
     out, _e, ok = tmux("list-panes", "-t", "=#{name}", "-F", "\#{pane_pid}")
@@ -280,6 +282,16 @@ def launch(req)
   waiting = dialog_on_screen(name)
   rc = rc.merge(remote_control: "failed", reason: "waiting on a dialog: #{waiting}") if waiting && rc[:remote_control] == "on"
   puts "#{Time.now.iso8601} launched #{name} (#{t.key}/#{req['launcher']}) in #{dir} · trust #{trust[:trust] || 'not asked'} · remote control #{rc[:remote_control]}#{rc[:reason] ? " (#{rc[:reason]})" : ''}"
+  # no `claude --remote-control <name>` came up (it refused to start, exited, the pane is a bare shell): the launch
+  # FAILED — the session is killed and refused, so the engine ends the registration and releases what it adopted
+  # (never a registered owner nobody runs). A claude that is up but on a dialog is a live session: reported, kept.
+  unless rc[:remote_control] == "on" || waiting
+    _o, kerr, killed = tmux("kill-session", "-t", "=#{name}")
+    gone = killed || !tmux("has-session", "-t", "=#{name}")[2]
+    error = "#{name} did not start: no claude --remote-control #{name} after #{RC_WAIT_S}s (#{rc[:reason]})"
+    error += " — and kill-session failed (#{kerr.strip}): the tmux session #{name} is still running" unless gone
+    return { ok: false, error: error, status: 422 }
+  end
   { ok: true, session: name, type: t.key, launcher: t.launcher!(req["launcher"]), dir: dir, prompt: !prompt.nil?, **trust, **rc }
 end
 

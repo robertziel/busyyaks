@@ -65,6 +65,8 @@ class LaunchTest < Minitest::Test
       n = ((@names ||= Hash.new(0))[req["base"]] += 1)
       { ok: true, session: n == 1 ? req["base"] : "#{req["base"]}_#{n - 1}" }
     when "launch"
+      return @launch_refused if @launch_refused
+
       { ok: true, session: req["session"], type: req["type"], launcher: req["launcher"],
         prompt: !req["prompt_template"].nil?, **@remote_control, }
     when "sessions"
@@ -414,16 +416,26 @@ class LaunchTest < Minitest::Test
     req = @requests.reverse.find { |r| r["op"] == "launch" }
     assert_equal %w[worker localclaude], req.values_at("type", "launcher")
     assert_equal ["bash", "-ic", "localclaude --remote-control #{req['session']}"], req["argv"]
-    # a failed Remote Control is passed through, never presented as fine
-    @remote_control = { remote_control: "failed", reason: "no claude --remote-control group_repo process after 12s" }
     j = api(:post, "/api/launch", { slug: "group/repo", type: "plain" })
     refused = "agent type plain runs fullclaude, localclaude and none was named — name the launcher, or set " \
               "agent_types[plain].spawn_launcher"
     assert_equal [422, refused], [last_response.status, j["error"]], "never the first one"
+    # claude never came up (bin/launcher refuses the launch and kills the session): 422 with the launcher's reason,
+    # the registration ended — never a 201 with a registered owner nobody runs
+    @launch_refused = { ok: false, status: 422,
+                        error: "group_repo did not start: no claude --remote-control group_repo after 12s " \
+                               "(Temp directory /tmp/claude-1000 is owned by uid 0)", }
     j = api(:post, "/api/launch", { slug: "group/repo", type: "plain", launcher: "fullclaude" })
-    assert_equal 201, last_response.status
-    assert_equal ["group_repo", "failed", "no claude --remote-control group_repo process after 12s"],
-                 [j["session"], *j["result"].values_at("remote_control", "reason")]
+    assert_equal [422, @launch_refused[:error]], [last_response.status, j["error"]]
+    reg = Busyyaks::Kanban.store.sessions_t.where(session: "group_repo").order(:id).last
+    refute_nil reg[:ended_at], "the refused start's registration is ended"
+    # a spawn for a card the same way: released, the reason on the card as its owner note (retried later)
+    lost = k.create(slug: "group/repo", title: "spawn me", by: "op", column: "todo")
+    assert_equal [], api_spawn.spawn_pass(only: lost)
+    card = Busyyaks::Kanban.store.card(lost)
+    assert_nil card[:owner_session]
+    note = Busyyaks::Kanban.store.activity_t.where(card_id: lost, kind: "owner").order(:id).last[:body]
+    assert_equal "spawn failed: #{@launch_refused[:error]}", note
 
   end
 
