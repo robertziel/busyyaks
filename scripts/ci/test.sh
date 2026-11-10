@@ -32,7 +32,7 @@
 # as a GitHub-hosted runner, or a CI host that builds trusted branches only (never a stranger's fork on the
 # maintainer's Jenkins). On a ROOTLESS daemon (DOCKER_HOST = that user's socket) container root is that unprivileged
 # user, and the script hands it the rootless socket, never /var/run/docker.sock — the maintainer's Jenkins runs it so
-# (docs/CI-JENKINS.md § Isolation).
+# (private_notes/CI-JENKINS.md § Isolation).
 #
 # Every CPU is used: the Ruby suite runs one worker process per CPU (Rakefile test:parallel), vitest
 # --maxWorkers = the container's `nproc`; both read the count at run time, nothing is pinned here.
