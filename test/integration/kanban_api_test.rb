@@ -151,8 +151,15 @@ class KanbanApiTest < Minitest::Test
   def test_waiting_lists_the_operators_cards_and_its_rev_changes_with_them
     r0 = api(:get, "/api/waiting/rev")["rev"]
     assert_equal "no-store", last_response.headers["Cache-Control"]
-    assert_equal({ "waiting_columns" => %w[human_check ready], "total" => 0, "projects" => [], "held" => [] },
-                 api(:get, "/api/waiting"))
+    assert_equal({ "waiting_columns" => %w[human_check ready], "total" => 0, "projects" => [], "held" => [],
+                   "launch_failures" => [], }, api(:get, "/api/waiting"))
+    # card #273: a session whose start failed (claude never came up) is in the list the layout's alert modal reads
+    kb.register_session(session: "g_r_teamlead", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
+    kb.end_session("g_r_teamlead", reason: "start failed: Temp directory is owned by uid 0", by: "op")
+    f = api(:get, "/api/waiting")["launch_failures"]
+    assert_equal [["g_r_teamlead", "g/r", "lead", "Temp directory is owned by uid 0"]],
+                 f.map { |x| x.values_at("session", "project", "type", "reason") }
+    r0 = api(:get, "/api/waiting/rev")["rev"]
     id = kb.create(slug: "g/r", title: "check me", by: "op", column: "human_check")
     kb.create(slug: "g/r", title: "busy", by: "op", column: "doing")
     w = api(:get, "/api/waiting")

@@ -5,9 +5,10 @@
 // each with its owner agent's live state and what blocks it). Bubbles that do not fit fold into a "+N" bubble on the
 // left (the least important ones). A failed poll shows the error instead of the numbers — never stale counts as current.
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { apiGet, useResource } from "../api";
-import { now } from "../lib/format";
+import { now, projectPath } from "../lib/format";
 import { useLiveRev } from "../lib/live";
 import {
   age,
@@ -25,6 +26,7 @@ import {
 import type { AgentsData, AgentState } from "../types";
 import { why } from "./Agents";
 import { ProjectIcon } from "./ProjectIcon";
+import { LaunchFailureAlert } from "../vendor/agents_kanban";
 
 // the owner agent of a waiting card, as /api/agents sees it right now; the reason it is blocked is the sidebar's own
 const AGENT_LABEL: Record<AgentState, string> = {
@@ -347,6 +349,16 @@ export function WaitingWidget() {
         onFocus={toggleFocus}
         openerRef={openerRef}
       />
+      {/* a session the board started never came up: a modal over every page, not a line on the card */}
+      {data &&
+        createPortal(
+          <LaunchFailureAlert
+            failures={data.launch_failures}
+            storageKey="busyyaks.launch-failure-seen"
+            projectHref={(slug) => `${projectPath(slug)}?tab=board`}
+          />,
+          document.body,
+        )}
     </div>
   );
 }

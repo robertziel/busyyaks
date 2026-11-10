@@ -1,4 +1,5 @@
 // The "waiting for you" widget's data (GET /api/waiting, the engine's Api#waiting) and the pure bits the view shows.
+import type { LaunchFailure } from "../vendor/agents_kanban";
 import { projectPath } from "./format";
 
 // kind: "ask" = flagged needs_operator (a question, in whatever column) · "review" = in a gate column (work to check, a
@@ -18,7 +19,14 @@ export type WaitingCard = {
   owner_session: string | null;
 };
 export type WaitingProject = { slug: string; icon: string | null; count: number; cards: WaitingCard[] };
-export type Waiting = { waiting_columns: string[]; total: number; projects: WaitingProject[] };
+// launch_failures: the sessions whose start failed in the last day (a launch or a spawn: claude never came up) — the
+// layout's LaunchFailureAlert opens a modal for the ones this viewer has not dismissed
+export type Waiting = {
+  waiting_columns: string[];
+  total: number;
+  projects: WaitingProject[];
+  launch_failures: LaunchFailure[];
+};
 
 export const cardHref = (slug: string, id: number) => `${projectPath(slug)}?tab=board&card=${id}`;
 
