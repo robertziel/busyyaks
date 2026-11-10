@@ -6,6 +6,15 @@ All notable changes to busyyaks are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Public: Create PR** on the private local-repo boards (the engine's `local_v4` board): the operator's "Open public
+  PR" moves a card from Local: Deploy check into this new column, where the agent opens the public PR, then "Public PR
+  opened" moves it to Public: Agent review — no review of a PR that does not exist yet. A board is data: an existing
+  board takes the new shape in the Workflow editor (or `POST /api/projects/*slug/workflow`); no migration. The approve
+  button names its step ("✓ Open public PR → Public: Create PR"). The workflow graph folds for the box height too, so
+  the 15-column board shows whole at 1920 × 1080.
+
 ## [1.0.0-beta.1] - 2026-11-10
 
 Everything below ships as **1.0.0-beta.1**, the first public release: one self-hosted panel over every git repo on a

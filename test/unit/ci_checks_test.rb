@@ -169,12 +169,12 @@ class CiChecksTest < Minitest::Test
     assert_match(/local PR #112 is closed without merging/, @port.approval_checks(card, step)[:reason])
   end
 
-  # local v3: the board's first approval (Local: Human review) = the open local PR's checks; Local: Deploy check →
+  # the local board: its first approval (Local: Human review) = the open local PR's checks; Local: Deploy check →
   # Open public PR = the local PR merged + jenkins/ci of its MERGE commit (on the working branch) green. The steps are
   # the board's own approvals (Board#approvals), not written by hand.
-  def local_v3_steps
+  def local_steps
     enrol!
-    v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v3.board.json", __dir__)))
+    v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
     @kb.board_save("o-r", v3, by: "operator")
     @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r_local/pull/112")
     steps = @kb.board_of("o-r").approvals.map(&:to_h)
@@ -186,7 +186,7 @@ class CiChecksTest < Minitest::Test
                     "base" => { "ref" => "local" }).freeze
 
   def test_local_deploy_check_reads_the_merge_commits_ci
-    card, first, deploy = local_v3_steps
+    card, first, deploy = local_steps
     @http.pulls = [PR]
     @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
     @port.approval_checks(card, first)
@@ -210,7 +210,7 @@ class CiChecksTest < Minitest::Test
   # Jenkins coalesces the working branch's builds: a merge commit with no checks of its own passes on the branch HEAD's
   # green jenkins/ci only when that head CONTAINS it (compare: ahead / identical); otherwise refused naming both shas.
   def test_a_coalesced_merge_commit_passes_on_a_green_head_that_contains_it
-    card, _first, deploy = local_v3_steps
+    card, _first, deploy = local_steps
     @http.pulls = [MERGED]
     @http.statuses_by_sha["m1" * 20] = []
     @http.heads["local"] = "h2" * 20
@@ -240,7 +240,7 @@ class CiChecksTest < Minitest::Test
   end
 
   def test_the_first_gate_says_closed_without_merging
-    card, first, = local_v3_steps
+    card, first, = local_steps
     @http.pulls = [PR.merge("state" => "closed", "merged_at" => nil)]
     @port.approval_checks(card, first)
     @poller.run
@@ -285,7 +285,7 @@ class CiChecksTest < Minitest::Test
   # while the local PR is open, then on the public PR's CI; a failed or stale read is refused as unknown, never guessed.
   def test_the_store_gates_the_public_step_on_the_local_merge_and_the_public_ci
     enrol!
-    v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v3.board.json", __dir__)))
+    v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
     @kb.board_save("o-r", v3, by: "operator")
     @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r_local/pull/112", column: "public_human_review")
     refuse = lambda do |pattern, drag: false|
@@ -444,7 +444,7 @@ class CiChecksTest < Minitest::Test
   # again → counted, "ready for your approval" once
   def local_gate!
     enrol!
-    v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v3.board.json", __dir__)))
+    v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
     @kb.board_save("o-r", v3, by: "operator")
     @conn[:cards].where(id: @id).update(column: "local_agent_review")
     @http.pulls = [PR]
