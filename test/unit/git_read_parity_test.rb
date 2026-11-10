@@ -55,7 +55,8 @@ class GitReadParityTest < Minitest::Test
   def read(op, dir, **args)
     require "busyyaks/git_reader"
     out = GR.call(op, path: dir, root: @root, **args)
-    req = args.merge(op: op, path: dir, root: @root, max_blob: GR.limits[:max_blob], memory: GR.limits[:memory])
+    req = args.merge(op: op, path: dir, root: @root, host_root: GR.host_root, mount: GR.mount,
+                     max_blob: GR.limits[:max_blob], memory: GR.limits[:memory])
     assert_equal out, JSON.parse(Busyyaks::GitReader.serve(JSON.generate(req)))
     out
   end
@@ -123,6 +124,15 @@ class GitReadParityTest < Minitest::Test
     assert_equal({ "branch.main.pushRemote" => "mirror", "remote.pushDefault" => nil, "branch.main.remote" => "origin",
                    "guard.mode" => "own", "guard.mirrorRemote" => nil, }, got["config"])
     assert_equal({ "origin" => remote, "mirror" => "https://example.com/m.git" }, got["remotes"])
+
+    # `git push -u <url>` stores the URL as the branch's remote (card #268): no remote-tracking upstream, git's @{u}
+    # fails → unpushed unknown (nil); the same for a remote that was removed
+    git!(d, "config", "branch.main.remote", "https://example.com/r.git")
+    assert_parity(d, "upstream remote is a URL")
+    assert_nil read("scan", d, **SCAN)["unpushed"]
+    git!(d, "config", "branch.main.remote", "gone")
+    assert_parity(d, "upstream remote removed")
+    git!(d, "config", "branch.main.remote", "origin")
 
     git!(d, "stash", "-q", "-u") # refs/stash is a ref too: --all reads it
     assert_parity(d, "stashed")

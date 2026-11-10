@@ -16,6 +16,14 @@ module Busyyaks
   #   - a repo config with an include / includeIf section is refused (the include target is any file, any FIFO);
   #   - after open: repo.path and repo.workdir inside root, the work tree IS the repo dir (no core.worktree), no
   #     sparse checkout (libgit2 would count every skipped file as deleted).
+  # A path a git file holds (a `gitdir:` line, commondir, alternates, a linked worktree's back-pointer) may be an
+  # absolute HOST path — `git worktree add` writes them so (card #268): one under host_root (.env PROJECTS_ROOT) is
+  # read at the same place under mount (PROJECTS_MOUNT), where compose mounts it — not under root, which may be a
+  # dir below the mount (a nested `roots` entry); then contained in root as above. A repo
+  # whose .git is a `gitdir:` file is opened through that git dir with the repo dir as its work tree (libgit2 would
+  # follow the file's host path itself and find nothing); a linked worktree's git dir must point back at this repo
+  # dir's .git (else it belongs to another checkout: refused), and a git dir named `.git` is its own checkout's.
+  # host_root is matched as text: git writes real paths, so PROJECTS_ROOT must be a real path (.env.example).
   # Inputs that reach libgit2's revision grammar never come from a request: refs are looked up as reference NAMES
   # (Rugged::Reference.valid_name?), commits as 40-hex ids (repo.lookup), never rev_parse.
   # Residual risk (documented in docs/DEPLOY.md): a writer on the host can swap a symlink between the checks and
@@ -39,14 +47,19 @@ module Busyyaks
       req = JSON.parse(input.to_s)
       raise Refused, "the request is not an object" unless req.is_a?(Hash)
 
-      reader = new(root: req["root"], path: req["path"], max_blob: Integer(req["max_blob"]), memory: req["memory"])
+      reader = new(root: req["root"], host_root: req.fetch("host_root"), mount: req.fetch("mount"), path: req["path"],
+                   max_blob: Integer(req["max_blob"]), memory: req["memory"])
       JSON.generate({ ok: true }.merge(reader.run(req)))
-    rescue Refused, Rugged::Error, JSON::ParserError, ArgumentError, TypeError, SystemCallError, IOError, NoMemoryError => e
+    rescue Refused, Rugged::Error, JSON::ParserError, ArgumentError, TypeError, KeyError, SystemCallError, IOError,
+           NoMemoryError => e
       JSON.generate(ok: false, error: "#{e.class.name.split('::').last}: #{e.message}"[0, 2000])
     end
 
-    def initialize(root:, path:, max_blob:, memory: nil)
+    def initialize(root:, host_root:, mount:, path:, max_blob:, memory: nil)
       @root = real!(root.to_s, "root")
+      @host_root = absolute!(host_root, "host_root")
+      @mount = absolute!(mount, "mount")
+
       @path = inside!(path.to_s, "repo dir")
       @max_blob = max_blob
       # libgit2's pack windows must fit in the child's address-space limit (RLIMIT_AS): its 64-bit default maps up to
@@ -76,20 +89,26 @@ module Busyyaks
     end
 
     def open!
-      gitdir = git_dir!
+      gitdir, gitfile = git_dir!
       GIT_FILES.each { |f| regular!(File.join(gitdir, f), f) }
       common = gitdir
       cd = File.join(gitdir, "commondir")
       if File.exist?(cd)
-        common = inside!(File.expand_path(small(cd).strip, gitdir), "commondir")
+        common = inside!(as_written!(small(cd).strip, gitdir, "commondir"), "commondir")
         COMMON_FILES.each { |f| regular!(File.join(common, f), "commondir #{f}") }
+      end
+      if gitfile
+        back_pointer!(gitdir) if File.exist?(cd) || File.exist?(File.join(gitdir, "gitdir"))
+        not_borrowed!(gitdir)
       end
       [File.join(common, "config"), File.join(gitdir, "config.worktree")].uniq.each { |c| no_include!(c) }
       alternates!(File.join(common, "objects"), 0)
 
-      r = Rugged::Repository.new(@path)
+      r = Rugged::Repository.new(gitfile ? gitdir : @path)
       inside!(r.path, "the opened git dir")
-      raise Refused, "a bare repo has no work tree to read" unless r.workdir
+      raise Refused, "a bare repo has no work tree to read" if r.bare?
+
+      r.workdir = @path if gitfile
       if File.realpath(r.workdir) != @path || r.config["core.worktree"]
         raise Refused, "core.worktree is set (the work tree is not the repo dir): not read"
       end
@@ -103,11 +122,58 @@ module Busyyaks
       dot = File.join(@path, ".git")
       raise Refused, "#{@path} has no .git" unless File.symlink?(dot) || File.exist?(dot)
 
-      return inside!(dot, ".git") if File.directory?(dot)
+      return [inside!(dot, ".git"), false] if File.directory?(dot)
       raise Refused, ".git is neither a directory nor a regular file" unless File.file?(dot)
 
       line = small(dot)[/\Agitdir: *(.+?)\s*\z/, 1] or raise Refused, ".git is a file without a gitdir: line"
-      inside!(File.expand_path(line, @path), ".git's gitdir")
+      [inside!(located(line, @path), ".git's gitdir"), true]
+    end
+
+    # a linked worktree's git dir names the .git file of its checkout (its `gitdir` file): it must be this repo dir's
+    def back_pointer!(gitdir)
+      file = File.join(gitdir, "gitdir")
+      raise Refused, "the worktree's git dir has no gitdir file" unless File.exist?(file)
+
+      line = small(file).strip
+      target = real!(located(line, gitdir), "the worktree's gitdir file (#{line})")
+      return if target == File.join(@path, ".git")
+
+      raise Refused, "the worktree's git dir belongs to #{line}, not #{@path}"
+    end
+
+    # a `gitdir:` file naming the .git dir of another checkout (its index, its HEAD, read as this repo's) is refused
+    def not_borrowed!(gitdir)
+      owner = File.dirname(gitdir)
+      return unless File.basename(gitdir) == ".git" && owner != @path
+
+      raise Refused, "the git dir is #{owner}'s own .git, not #{@path}'s"
+    end
+
+    def absolute!(dir, what)
+      d = dir.to_s.chomp("/")
+      raise Refused, "#{what} must be an absolute path (got #{dir.inspect})" unless d.start_with?("/")
+
+      d
+    end
+
+    # a path read from a git file, relative to base, at its place under the mount when it is a host path under
+    # host_root
+    def located(line, base)
+      if line == @host_root || line.start_with?("#{@host_root}/")
+        File.join(@mount, line.delete_prefix(@host_root))
+      else
+        File.expand_path(line, base)
+      end
+    end
+
+    # a path libgit2 itself reads from a git file (commondir, alternates) is opened as written, never mapped: a host
+    # path under host_root would be checked at its place under the mount and opened at the host path — refused
+    # (git writes commondir relative; an absolute alternate is the host's)
+    def as_written!(line, base, what)
+      path = File.expand_path(line, base)
+      return path if located(line, base) == path
+
+      raise Refused, "#{what} names a host path (#{line}): libgit2 opens it as written, not under the mount"
     end
 
     def alternates!(objects, depth)
@@ -117,7 +183,7 @@ module Busyyaks
 
       regular!(file, "alternates")
       small(file).each_line.map(&:strip).reject { |l| l.empty? || l.start_with?("#") }.each do |l|
-        alternates!(inside!(File.expand_path(l, objects), "alternate object dir"), depth + 1)
+        alternates!(inside!(as_written!(l, objects, "an alternate object dir"), "alternate object dir"), depth + 1)
       end
     end
 
@@ -226,10 +292,15 @@ end }
 
     def code(status) = STATUS_CODE.fetch(status, "?")
 
-    # commits on the checked-out branch its upstream lacks (`rev-list --count @{u}..HEAD`); nil = no upstream / branch
+    # commits on the checked-out branch its upstream lacks (`rev-list --count @{u}..HEAD`); nil = no upstream / branch.
+    # A branch whose remote is no configured remote (`git push -u <url>` stores the URL; a removed remote) has no
+    # remote-tracking upstream — git's @{u} fails too — so nil (libgit2 would raise "not a valid remote name")
     def unpushed
       b = branch
       return nil if b.empty? || repo.head_unborn?
+
+      remote = repo.config["branch.#{b}.remote"]
+      return nil if remote && remote != "." && !repo.remotes.each_name.include?(remote)
 
       up = repo.branches[b]&.upstream or return nil
       repo.ahead_behind(repo.head.target_id, up.target_id).first
