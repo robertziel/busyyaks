@@ -38,6 +38,8 @@ class ComposeTest < Minitest::Test
     env = app.fetch("environment")
     assert_includes app.fetch("volumes"), "${PROJECTS_ROOT:?}:${PROJECTS_MOUNT:?}:ro"
     assert_equal "${PROJECTS_MOUNT:?}", env.fetch("PROJECTS_MOUNT")
+    # the host side of the mount, for the host paths git writes into a linked worktree's files (card #268)
+    assert_equal "${PROJECTS_ROOT:?}", env.fetch("PROJECTS_ROOT")
     git = { "GIT_CONFIG_COUNT" => "11", "GIT_CONFIG_KEY_0" => "safe.directory",
             "GIT_CONFIG_VALUE_0" => "${PROJECTS_MOUNT:?}/*", }
     assert_equal(git, env.slice("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"))

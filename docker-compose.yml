@@ -49,6 +49,9 @@ x-app: &app
     SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:?}
     SESSION_COOKIE_SAME_SITE: ${SESSION_COOKIE_SAME_SITE:?}
     PROJECTS_MOUNT: ${PROJECTS_MOUNT:?}   # where PROJECTS_ROOT is mounted (volumes below)
+    # the host path the mount shows: git writes absolute host paths into a repo's files (a linked worktree's `gitdir:`),
+    # which every git read finds again under PROJECTS_MOUNT (lib/busyyaks/git_reader.rb, card #268)
+    PROJECTS_ROOT: ${PROJECTS_ROOT:?}
     # git trusts the repos under the mount (owned by the host user) and nothing else: safe.directory "<mount>/*" in
     # command scope (git reads safe.directory only from system / global / command config), for every process — `exec` too
     # ... and never fetches on demand: a partial-clone repo (a promisor remote in its own config) would otherwise run
@@ -198,6 +201,7 @@ services:
       WEB_HOST_PORT: "4100"
       PUBLIC_HOST: example.org   # rack-test's default Host (test/unit/host_guard_test.rb covers the refusals); each card's `url` in the kanban MCP tools (lib/busyyaks/dashboard_url.rb)
       PROJECTS_MOUNT: /projects
+      PROJECTS_ROOT: /host/projects   # the host side of the mount a gitdir: line may name (test/unit/git_read_test.rb)
       TEAM_TERMINAL_URL: "https://term.test/code/#s={session}&sock={socket}"
       SSH_ATTACH_TEMPLATE: "ssh -t box tmux attach -t {session}"
       TZ: UTC

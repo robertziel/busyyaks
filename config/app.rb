@@ -30,6 +30,8 @@ module Busyyaks
     Busyyaks::Kanban.policy
     # the limits of every read of a scanned repo (GIT_READ_*): checked here, so a service never starts without them
     Busyyaks::GitRead.limits
+    # ... and the host path of the projects mount (PROJECTS_ROOT), where a linked worktree's gitdir: points
+    Busyyaks::GitRead.host_root
 
     # DNS rebinding: only the Hosts this deployment names (PUBLIC_HOST; 127.0.0.1 / localhost on WEB_HOST_PORT) are
     # answered, and a mutation's Origin / Referer must be that host's own — in front of every route and asset. Read at

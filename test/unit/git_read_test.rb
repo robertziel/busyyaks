@@ -47,12 +47,15 @@ class GitReadTest < Minitest::Test
     git(dir, "rev-parse", "HEAD")
   end
 
-  def read(op, dir, root: @root, limits: GR.limits, **args) = GR.call(op, path: dir, root: root, limits: limits, **args)
+  def read(op, dir, root: @root, host_root: GR.host_root, mount: GR.mount, limits: GR.limits, **args)
+    GR.call(op, path: dir, root: root, host_root: host_root, mount: mount, limits: limits, **args)
+  end
 
   # the child's library run in this (test) process: the same request, the same answer
-  def in_process(op, dir, root: @root, **args)
+  def in_process(op, dir, root: @root, host_root: GR.host_root, mount: GR.mount, **args)
     require "busyyaks/git_reader"
-    req = args.merge(op: op, path: dir, root: root, max_blob: GR.limits[:max_blob], memory: GR.limits[:memory])
+    req = args.merge(op: op, path: dir, root: root, host_root: host_root, mount: mount,
+                     max_blob: GR.limits[:max_blob], memory: GR.limits[:memory])
     JSON.parse(Busyyaks::GitReader.serve(JSON.generate(req)))
   end
 
@@ -226,6 +229,108 @@ touch(v)) }
     assert_equal %w[feature main], scan["branches"]
   end
 
+  # `git worktree add` on the host writes HOST paths (PROJECTS_ROOT/...) into the worktree's .git file and the git
+  # dir's back-pointer; inside the container the same files are under the mount (card #268: 130 repos refused)
+  def test_a_linked_worktree_whose_files_name_host_paths_is_read_under_the_mount
+    d = repo
+    commit(d, "a", "a\n")
+    wt = File.join(@root, "wt")
+    git(d, "worktree", "add", "-q", "-b", "feature", wt)
+    commit(wt, "b", "b\n")
+    host = "/host-side/projects"
+    admin = File.join(d, ".git", "worktrees", "wt")
+    File.write(File.join(wt, ".git"), "gitdir: #{host}/r/.git/worktrees/wt\n")
+    File.write(File.join(admin, "gitdir"), "#{host}/wt/.git\n")
+    scan = read("scan", wt, host_root: host, mount: @root, **SCAN)
+    assert_equal scan, in_process("scan", wt, host_root: host, mount: @root, **SCAN)
+    assert_equal ["feature", 0, []], [scan["branch"], scan["dirty"], scan["dirty_paths"]]
+    assert_equal %w[feature main], scan["branches"]
+    assert_equal "feature", read("head", wt, host_root: host, mount: @root)["branch"]
+
+    # a host path the mount does not hold is not found, loudly
+    refused("head", wt, /gitdir cannot be resolved/)
+  end
+
+  # a nested `roots` entry (root = mount/group): host paths name the mount's host side, so they are read under the
+  # mount, not under root (card #268: root /projects/group named /projects/group/group/...: refused after the first fix)
+  # commondir and alternates are read by libgit2 itself, at the path as written: a host path there is refused, never
+  # checked under the mount and then opened at the host path (review of the first fix)
+  def test_commondir_and_alternates_naming_a_host_path_are_refused
+    d = repo
+    commit(d, "a", "a\n")
+    wt = File.join(@root, "wt")
+    git(d, "worktree", "add", "-q", "-b", "feature", wt)
+    host = "/host-side/projects"
+    File.write(File.join(d, ".git", "worktrees", "wt", "commondir"), "#{host}/r/.git\n")
+    refused("head", wt, /commondir names a host path/, host_root: host, mount: @root)
+
+    a = repo("alt")
+    commit(a, "b", "b\n")
+    File.write(File.join(a, ".git", "objects", "info", "alternates"), "#{host}/r/.git/objects\n")
+    refused("head", a, /alternate object dir names a host path/, host_root: host, mount: @root)
+
+    # the same files written relative (git's own commondir) or inside the root as an absolute path are read
+    File.write(File.join(d, ".git", "worktrees", "wt", "commondir"), "../..\n")
+    File.write(File.join(a, ".git", "objects", "info", "alternates"), "#{d}/.git/objects\n")
+    assert_equal "feature", read("head", wt, host_root: host, mount: @root)["branch"]
+    assert read("head", a, host_root: host, mount: @root)
+  end
+
+  def test_a_linked_worktree_under_a_nested_root_is_read_under_the_mount
+    group = File.join(@root, "group")
+    Dir.mkdir(group)
+    d = repo(root: group)
+    commit(d, "a", "a\n")
+    wt = File.join(group, "wt")
+    git(d, "worktree", "add", "-q", "-b", "feature", wt)
+    host = "/host-side/projects"
+    File.write(File.join(wt, ".git"), "gitdir: #{host}/group/r/.git/worktrees/wt\n")
+    File.write(File.join(d, ".git", "worktrees", "wt", "gitdir"), "#{host}/group/wt/.git\n")
+    assert_equal "feature", read("head", wt, root: group, host_root: host, mount: @root)["branch"]
+    assert_equal read("scan", wt, root: group, host_root: host, mount: @root, **SCAN),
+                 in_process("scan", wt, root: group, host_root: host, mount: @root, **SCAN)
+
+    # the mount's host side mapped onto root instead (the bug) names group/group/r: not found, loudly
+    refused("head", wt, /gitdir cannot be resolved/, root: group, host_root: host, mount: group)
+  end
+
+  # a .git file that borrows another checkout's worktree git dir (its index, its HEAD) is refused
+  def test_a_worktree_git_dir_of_another_checkout_is_refused
+    d = repo
+    commit(d, "a", "a\n")
+    wt = File.join(@root, "wt")
+    git(d, "worktree", "add", "-q", "-b", "feature", wt)
+    other = File.join(@root, "borrower")
+    Dir.mkdir(other)
+    File.write(File.join(other, ".git"), "gitdir: #{d}/.git/worktrees/wt\n")
+    refused("head", other, /the worktree's git dir belongs to #{Regexp.escape(wt)}\/\.git, not #{Regexp.escape(other)}/)
+
+    # ... and so is one that borrows another checkout's plain .git dir (no worktree, no back-pointer)
+    File.write(File.join(other, ".git"), "gitdir: #{d}/.git\n")
+    refused("head", other, /the git dir is #{Regexp.escape(d)}'s own \.git, not #{Regexp.escape(other)}'s/)
+
+    # a separate git dir (`git init --separate-git-dir`) is this checkout's: read
+    sep = File.join(@root, "sep")
+    Dir.mkdir(sep)
+    git(sep, "init", "-q", "-b", "main", "--separate-git-dir", File.join(@root, "sep.git"))
+    commit(sep, "a", "a\n")
+    assert_equal "main", read("head", sep)["branch"]
+  end
+
+  # the mount and its host side are part of every request: never assumed
+  def test_a_request_without_an_absolute_host_root_is_refused
+    require "busyyaks/git_reader"
+    d = repo
+    req = { op: "head", path: d, root: @root, max_blob: 1 }
+    assert_match(/KeyError.*host_root/, JSON.parse(Busyyaks::GitReader.serve(JSON.generate(req)))["error"])
+    out = JSON.parse(Busyyaks::GitReader.serve(JSON.generate(req.merge(host_root: "projects"))))
+    assert_match(/KeyError.*mount/, out["error"])
+    out = JSON.parse(Busyyaks::GitReader.serve(JSON.generate(req.merge(host_root: "projects", mount: "/projects"))))
+    assert_equal "Refused: host_root must be an absolute path (got \"projects\")", out["error"]
+    out = JSON.parse(Busyyaks::GitReader.serve(JSON.generate(req.merge(host_root: "/h", mount: "projects"))))
+    assert_equal "Refused: mount must be an absolute path (got \"projects\")", out["error"]
+  end
+
   def test_sparse_checkout_and_a_bare_repo_are_refused
     d = repo
     commit(d, "a", "a\n")
@@ -299,10 +404,13 @@ touch(v)) }
   # the CPU limit, a flood of output and an answer that is not the protocol: each a Failed with the reason
   def test_cpu_limit_flood_and_garbage_are_failures
     child = ->(name, code) { File.join(@root, name).tap { |f| File.write(f, code) } }
-    lim = GR.limits.merge(cpu: 1, timeout: 20)
-    e = assert_raises(GR::Failed) { GR.call("head", path: @root, root: @root, limits: lim, bin: child.("spin.rb", "loop { }")) }
+    # the spinning child ends on its CPU-second whatever the host's load; the wall clock is only a hang guard here, far
+    # above it, so a CPU-starved CI host (card #268: load 55 on 20 CPUs, the 20 s clock won) cannot kill it first
+    spin = GR.limits.merge(cpu: 1, timeout: 300)
+    e = assert_raises(GR::Failed) { GR.call("head", path: @root, root: @root, limits: spin, bin: child.("spin.rb", "loop { }")) }
     assert_match(/git-read stopped: CPU limit 1 s/, e.message)
     flood = child.("flood.rb", "loop { $stdout.write('x' * 65_536) }")
+    lim = GR.limits.merge(cpu: 1, timeout: 20)
     e = assert_raises(GR::Failed) { GR.call("head", path: @root, root: @root, limits: lim, bin: flood) }
     assert_match(/answered more than #{GR::MAX_OUTPUT} bytes/, e.message)
     e = assert_raises(GR::Failed) { GR.call("head", path: @root, root: @root, bin: child.("junk.rb", "print 'hello'; exit 3")) }

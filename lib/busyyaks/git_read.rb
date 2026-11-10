@@ -55,12 +55,18 @@ module Busyyaks
     # The projects mount every listed repo lives under (compose PROJECTS_MOUNT) — the containment root of a read.
     def mount = ENV.fetch("PROJECTS_MOUNT")
 
+    # Where the projects mount is on the host (compose PROJECTS_ROOT): the absolute paths git writes into a repo's
+    # files (a linked worktree's `gitdir:`) are under it; the child reads them at their place under the mount.
+    def host_root = ENV.fetch("PROJECTS_ROOT")
+
     # One read: op (scan | head | churn | files_at) of the repo at path, which must resolve inside root. → the
     # answer Hash (string keys); Failed with the reason otherwise. (bin: the child's script — the tests run stand-in
     # children through the same spawn, limits and parsing.)
-    def call(op, path:, root:, limits: self.limits, bin: BIN, **args)
-      req = JSON.generate(args.merge(op: op, path: path.to_s, root: root.to_s, max_blob: limits[:max_blob],
-                                     memory: limits[:memory]))
+    # host_root is where mount is on the host; root may be a dir under the mount (a nested `roots` entry, card #268)
+    def call(op, path:, root:, host_root: self.host_root, mount: self.mount, limits: self.limits, bin: BIN, **args)
+      req = JSON.generate(args.merge(op: op, path: path.to_s, root: root.to_s, host_root: host_root.to_s,
+                                     mount: mount.to_s,
+                                     max_blob: limits[:max_blob], memory: limits[:memory]))
       out, status = run(req, limits, bin)
       answer = parse(out, status, limits)
       raise Failed, "#{path}: #{answer['error']}" unless answer["ok"]
