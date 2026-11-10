@@ -289,4 +289,105 @@ after.slice(:branches, :default_ref, :last_commit_at, :commits_window)
       refute File.exist?(marker), "a repo-config program (fsmonitor / filter) ran during the scan"
     end
   end
+
+  # card #278: one project per repo — a linked worktree (beside the repo, in a group, in a bin dir) is never listed,
+  # its repo is; a worktree that was a project before is hidden by the next scan; the scan reports no error for it
+  def test_linked_worktrees_are_never_projects
+    Dir.mktmpdir do |root|
+      repo = File.join(root, "app")
+      Dir.mkdir(repo); git(repo, "init", "-q", "-b", "main")
+      git(repo, "commit", "-q", "--allow-empty", "-m", "c")
+      bin = File.join(root, "worktrees_bin")
+      Dir.mkdir(bin)
+      git(repo, "worktree", "add", "-q", "-b", "card/1", File.join(root, "app_wt1"))
+      git(repo, "worktree", "add", "-q", "-b", "card/2", File.join(bin, "app-2"))
+      store.upsert_project(slug: "app_wt1", path: File.join(root, "app_wt1"), own: true, commits_window: 0, mine_window: 0,
+                           dirty: 0, scanned_at: 1)
+
+      assert_equal 1, Busyyaks::Scanner.new(scan_config([[root, ""]]), store).run
+      assert_equal ["app"], store.projects.map { |p| p[:slug] }
+      assert_nil store.last_scan[:error]
+    end
+  end
+
+  # a worktree whose git dir is gone (its repo pruned it, a dir rm -rf'd by hand) is an orphan: not a project, named
+  # in the scan's error with the git dir it points at, the other repos scanned as always
+  def test_an_orphaned_worktree_is_reported_not_listed
+    Dir.mktmpdir do |root|
+      repo = File.join(root, "app")
+      Dir.mkdir(repo); git(repo, "init", "-q", "-b", "main")
+      git(repo, "commit", "-q", "--allow-empty", "-m", "c")
+      wt = File.join(root, "app_wt9")
+      git(repo, "worktree", "add", "-q", "-b", "card/9", wt)
+      FileUtils.rm_rf(File.join(repo, ".git/worktrees/app_wt9"))
+
+      assert_equal 1, Busyyaks::Scanner.new(scan_config([[root, ""]]), store).run
+      assert_equal ["app"], store.projects.map { |p| p[:slug] }
+      assert_match(%r{\A1 orphaned worktrees .*app_wt9 → .*/app/\.git/worktrees/app_wt9\z}, store.last_scan[:error])
+    end
+  end
+
+  # a .git FILE that is not a worktree's (git clone --separate-git-dir) is still a project; a FIFO named .git never
+  # hangs the scan
+  def test_a_separate_git_dir_repo_is_a_project_and_a_fifo_git_is_not_read
+    Dir.mktmpdir do |root|
+      sep = File.join(root, "sep")
+      FileUtils.mkdir_p([sep, File.join(root, ".store")])
+      git(sep, "init", "-q", "-b", "main", "--separate-git-dir", File.join(root, ".store/sep.git"))
+      git(sep, "commit", "-q", "--allow-empty", "-m", "c")
+      fifo = File.join(root, "fifo")
+      Dir.mkdir(fifo)
+      File.mkfifo(File.join(fifo, ".git"))
+
+      scanner = Busyyaks::Scanner.new(scan_config([[root, ""]]), store)
+      assert_nil scanner.worktree(fifo)
+      assert_nil scanner.worktree(sep)
+      scanner.run
+      assert_includes store.projects.map { |p| p[:slug] }, "sep"
+    end
+  end
+
+  # what is on disk decides, never the gitdir text alone (card #278 review): a host-path gitdir is found under the
+  # mount (live / orphan, the orphan named by its host path), a relative one against the worktree dir, a bare repo's
+  # worktree is a worktree, a git dir under a `worktrees` dir without `commondir` (a separate git dir) is a repo, and
+  # a git dir this process cannot see (outside the mount) is scanned as a repo — its read error, never "gone"
+  def test_worktree_classification_follows_the_disk
+    Dir.mktmpdir do |root|
+      app = File.join(root, "app")
+      Dir.mkdir(app); git(app, "init", "-q", "-b", "main")
+      git(app, "commit", "-q", "--allow-empty", "-m", "c")
+      git(app, "worktree", "add", "-q", "-b", "card/1", File.join(root, "wt1"))
+      { "hostwt" => "gitdir: /host/p/app/.git/worktrees/wt1", "rel" => "gitdir: ../app/.git/worktrees/wt1",
+        "hostgone" => "gitdir: /host/p/app/.git/worktrees/gone",
+        "outside" => "gitdir: /nowhere-outside/app/.git/worktrees/x", }.each do |dir, line|
+        Dir.mkdir(File.join(root, dir))
+        File.write(File.join(root, dir, ".git"), "#{line}\n")
+      end
+      git(app, "clone", "-q", "--bare", app, File.join(root, "b.git"))
+      git(File.join(root, "b.git"), "worktree", "add", "-q", "-b", "card/2", File.join(root, "bwt"))
+      sep = File.join(root, "sepwt")
+      FileUtils.mkdir_p([sep, File.join(root, ".store/worktrees")])
+      git(sep, "init", "-q", "-b", "main", "--separate-git-dir", File.join(root, ".store/worktrees/sepwt"))
+      git(sep, "commit", "-q", "--allow-empty", "-m", "c")
+
+      Busyyaks::GitRead.stub(:mount, root) do
+        Busyyaks::GitRead.stub(:host_root, "/host/p") do
+          scanner = Busyyaks::Scanner.new(scan_config([[root, ""]]), store)
+          assert_equal :worktree, scanner.worktree(File.join(root, "hostwt"))&.first
+          assert_equal :worktree, scanner.worktree(File.join(root, "rel"))&.first
+          assert_equal :worktree, scanner.worktree(File.join(root, "bwt"))&.first
+          assert_equal :orphan, scanner.worktree(File.join(root, "hostgone"))&.first
+          assert_nil scanner.worktree(File.join(root, "outside"))
+          assert_nil scanner.worktree(sep)
+
+          scanner.run
+        end
+      end
+      assert_equal %w[app sepwt], store.projects.map { |p| p[:slug] }.sort
+      error = store.last_scan[:error]
+      assert_match(%r{1 orphaned worktrees .*— /host/p/hostgone → /host/p/app/\.git/worktrees/gone\z}, error)
+      assert_match(/outside: /, error, "a git dir out of sight is the repo's read error")
+      refute_match(/outside →/, error, "never reported as gone")
+    end
+  end
 end

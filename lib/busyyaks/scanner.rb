@@ -37,7 +37,7 @@ module Busyyaks
         slug
       end
       @store.mark_absent(except: seen)
-      error = failed.empty? ? nil : "#{failed.size} of #{repos.size} repos not read — #{failed.join('; ')}"[0, 4000]
+      error = scan_error(failed, repos.size)
       @store.scan_finished(scan_id, @clock.call, repos.size, error)
       repos.size
     rescue StandardError => e
@@ -45,11 +45,25 @@ module Busyyaks
       raise
     end
 
-    # A project is a directory with .git. Each child of a root is a tree: a repo itself, or searched
+    # A project is a directory with .git — never a linked worktree (card #278: one project per repo; a worktree is a
+    # checkout of one, skipped and not searched into; one whose git dir is gone is an orphan, listed in the scan's
+    # error). Each child of a root is a tree: a repo itself, or searched
     # search_depth subdirs further down for repos (a repo is never descended into); nothing found
     # within that depth = the tree is given up. Slugs are "<prefix><path below the root>".
     # A directory that is itself a configured root is left to that root (its own prefix). Dot dirs skipped.
+    # → nil, or the repos not read and the orphaned worktrees found (both: the operator acts on them)
+    def scan_error(failed, total)
+      parts = []
+      parts << "#{failed.size} of #{total} repos not read — #{failed.join('; ')}" unless failed.empty?
+      unless @orphans.empty?
+        parts << "#{@orphans.size} orphaned worktrees (their git dir is gone) — " \
+                 "#{@orphans.map { |path, gitdir| "#{on_host(path)} → #{gitdir}" }.join('; ')}"
+      end
+      parts.empty? ? nil : parts.join(" · ")[0, 4000]
+    end
+
     def repo_paths
+      @orphans = []
       roots = @config.roots.map { |r| File.expand_path(r[:path]) }
       @config.roots.flat_map do |root|
         dir = root[:path]
@@ -62,6 +76,9 @@ module Busyyaks
 
     def find_repos(base, rel, depth, roots)
       path = File.join(base, rel)
+      state, line = worktree(path)
+      @orphans << [path, line] if state == :orphan
+      return [] if state
       return [rel] if repo?(path)
       return [] if depth.zero? || roots.include?(File.expand_path(path))
 
@@ -75,6 +92,49 @@ module Busyyaks
     end
 
     def repo?(path) = File.exist?(File.join(path, ".git"))
+
+    # `git worktree add` writes `gitdir: <repo>/.git/worktrees/<name>` (or `<bare>/worktrees/<name>`; relative with
+    # --relative-paths) into the worktree's .git file. Decided by what is on disk, never by the text alone:
+    #   :worktree — that git dir exists and has a `commondir` file (a linked worktree's; a submodule's or a separate
+    #               git dir's has none)
+    #   :orphan   — that git dir is gone, but the repo that held it is here (`<common>/HEAD` beside `worktrees/`)
+    #   nil       — anything else: a .git dir, another `gitdir:` file, or a git dir this container cannot see (a repo
+    #               outside the projects mount) — scanned as a repo, so an unreadable one is the scan's error, never
+    #               a guessed "gone"
+    # → [state, the gitdir line] or nil. Opened non-blocking and checked a regular file after open: a FIFO named .git
+    # never hangs the scan (card #260).
+    WORKTREE_GITDIR = %r{\Agitdir: *(\S.*/worktrees/[^/]+?)/?\s*\z}
+    def worktree(path)
+      line = gitdir_line(path) or return nil
+      at = located(line, path)
+      return (File.file?(File.join(at, "commondir")) ? [:worktree, line] : nil) if File.directory?(at)
+
+      File.file?(File.join(File.dirname(File.dirname(at)), "HEAD")) ? [:orphan, line] : nil
+    end
+
+    def gitdir_line(path)
+      dot = File.join(path, ".git")
+      return nil unless File.file?(dot)
+
+      File.open(dot, File::RDONLY | File::NONBLOCK) do |f|
+        f.stat.file? ? f.read(4096).to_s[WORKTREE_GITDIR, 1] : nil
+      end
+    rescue SystemCallError, IOError
+      nil
+    end
+
+    # a path a git file holds, where this process finds it: a host path (git writes them, card #268) at its place
+    # under the projects mount, a relative one against the worktree dir
+    def located(line, path)
+      host = GitRead.host_root.chomp("/")
+      line.start_with?("#{host}/") ? File.join(GitRead.mount, line.delete_prefix(host)) : File.expand_path(line, path)
+    end
+
+    # a path under the projects mount, as the operator finds it on the host (PROJECTS_ROOT)
+    def on_host(path)
+      mount = GitRead.mount.chomp("/")
+      path.start_with?("#{mount}/") ? File.join(GitRead.host_root, path.delete_prefix(mount)) : path
+    end
 
     # → nil, or why the repo (or its daily series) was not read
     def scan_repo(path, slug, root, now)

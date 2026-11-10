@@ -3,6 +3,7 @@
 require "test_helper"
 require "json"
 require "open3"
+require "etc"
 require "tmpdir"
 require "sqlite3"
 require "busyyaks/sqlite"
@@ -119,7 +120,7 @@ class DatabaseConcurrencyTest < Minitest::Test
     writers&.each { |_, wait| Process.kill("KILL", wait.pid) if wait.alive? }
   end
 
-  BOOT_SECONDS = 60    # each writer's boot, until it says "ready"
+  BOOT_CPU_SECONDS = 30 # each writer's boot until it says "ready", in its own CPU seconds (a boot uses a few)
   WRITE_SECONDS = 120  # all writers' create+comment loops together (they take ~1 s); past it they are killed
 
   private
@@ -144,18 +145,29 @@ class DatabaseConcurrencyTest < Minitest::Test
     output
   end
 
-  # Lines before "ready" (a gem's warning on stderr) are kept for the failure message. A writer that has not said
-  # ready by the deadline is interrupted, so its backtrace says where it hung.
+  # Lines before "ready" (a gem's warning on stderr) are kept for the failure message. The bound is the writer's OWN
+  # CPU time, never the wall clock: on a loaded CI host (66 test workers beside 6 booting writers) a boot takes
+  # minutes of wall time but the same few CPU seconds. A writer that exits before ready fails at once; one that spins
+  # past BOOT_CPU_SECONDS is interrupted, so its backtrace says where; one that sleeps forever is the CI job's timeout.
   def assert_ready(stdout, wait)
-    deadline = now + BOOT_SECONDS
     seen = +""
-    while (left = deadline - now).positive? && stdout.wait_readable(left)
+    while wait.alive? && cpu_seconds(wait.pid) < BOOT_CPU_SECONDS
+      next unless stdout.wait_readable(1)
+
       line = stdout.gets or break
       return if line.chomp == "ready"
 
       seen << line
     end
     Process.kill("INT", wait.pid) if wait.alive?
-    flunk "writer #{wait.pid} did not boot in #{BOOT_SECONDS}s:\n#{seen}#{stdout.read}"
+    flunk "writer #{wait.pid} did not boot (#{BOOT_CPU_SECONDS} s of its CPU, or it exited):\n#{seen}#{stdout.read}"
+  end
+
+  # user + system CPU seconds the process has used (/proc/<pid>/stat fields 14 + 15, in clock ticks); 0 once it is gone
+  def cpu_seconds(pid)
+    fields = File.read("/proc/#{pid}/stat").split(") ", 2).last.split
+    (Integer(fields[11]) + Integer(fields[12])) / Etc.sysconf(Etc::SC_CLK_TCK).to_f
+  rescue Errno::ENOENT, Errno::ESRCH
+    0
   end
 end
