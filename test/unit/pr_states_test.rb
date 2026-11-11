@@ -59,13 +59,13 @@ class PrStatesTest < Minitest::Test
   end
 
   def test_head_lookup_finds_the_public_pr_or_none
-    @reader.lookup("o/p", "head:o:pub/card-7")
-    @reader.lookup("o/p", "head:o:pub/card-8")
-    @http.pulls = [pr(12, "o/p", head: "o:pub/card-7")]
+    @reader.lookup("o/p", "head:o:fix/settings-toggle")
+    @reader.lookup("o/p", "head:o:feature/board-filter")
+    @http.pulls = [pr(12, "o/p", head: "o:fix/settings-toggle")]
     @poller.run
     assert_equal({ state: "open", number: 12, url: "https://github.com/o/p/pull/12", checked_at: @now },
-                 @reader.lookup("o/p", "head:o:pub/card-7"))
-    assert_equal "none", @reader.lookup("o/p", "head:o:pub/card-8")[:state]
+                 @reader.lookup("o/p", "head:o:fix/settings-toggle"))
+    assert_equal "none", @reader.lookup("o/p", "head:o:feature/board-filter")[:state]
   end
 
   def test_failed_and_stale_reads_are_said_never_shown_as_a_state
@@ -126,88 +126,106 @@ class PrStatesTest < Minitest::Test
   def shown(links) = links.map { |l| l[:tags] ? "#{l[:label]} [#{l[:tags].map { |t| t[:text] }.join(' ')}]" : l[:label] }
   def detail(link) = link[:detail].to_h { |r| [r[:label], r[:value]] }
 
-  def links_for(project, links, id: 158)
+  PUB12 = { "prs" => { "public" => "https://github.com/o/widgets/pull/12" } }.freeze
+
+  def links_for(project, links, id: 158, metadata: nil)
     @branches[project[:path]] ||= Set.new if project && project[:path]
-    @flags.apply(links, { id: id }, project)
+    @flags.apply(links, { id: id, metadata: metadata }, project)
   end
 
+  # the public PR is the card's metadata prs.public (git mirror-publish names its branch after the change, not the card)
   def test_enrolled_project_flags_local_and_public_prs_with_their_state
     links = [{ kind: "repo", label: "g/widgets", url: "https://github.com/o/widgets_local" },
              { kind: "pr", label: "#5", url: "https://github.com/o/widgets_local/pull/5" },]
-    first = links_for(ENROLLED, links)
-    assert_equal ["g/widgets", "#5 [local checking]"], shown(first),
-                 "the public PR is listed once found, never while GitHub is still asked"
+    first = links_for(ENROLLED, links, metadata: PUB12)
+    assert_equal ["g/widgets", "#5 [local checking]", "#12 [public checking]"], shown(first)
     assert_equal "waiting for the github service", detail(first[1])["Read"]
-    assert_equal [%w[o/widgets head:o:pub/card-158], %w[o/widgets_local pr:5]],
-                 @db[:gh_pr_states].order(:repo).select_map(%i[repo ref]), "asked all the same"
+    assert_equal [%w[o/widgets pr:12], %w[o/widgets_local pr:5]],
+                 @db[:gh_pr_states].order(:repo).select_map(%i[repo ref]), "by number, never by a branch name"
     @http.pulls = [pr(5, "o/widgets_local", state: "closed", merged: "2026-11-08T11:00:00Z"),
-                   pr(12, "o/widgets", head: "o:pub/card-158"),]
+                   pr(12, "o/widgets", head: "o:fix/scanner-skips-worktrees"),]
     @poller.run
-    out = links_for(ENROLLED, links)
+    out = links_for(ENROLLED, links, metadata: PUB12)
     assert_equal ["#5 [local merged]", "#12 [public open]"], shown(out.drop(1))
     assert_equal [%w[local info], %w[merged done]], out[1][:tags].map { |t| t.values_at(:text, :tone) }
     assert_equal({ "Repo" => "o/widgets_local", "Role" => "private local repo", "State" => "merged",
                    "Read" => "#{Time.at(@now).strftime('%Y-%m-%d %H:%M:%S %Z')} (GitHub)", },
                  detail(out[1]))
     @now += 30
-    assert_equal out, links_for(ENROLLED, links),
+    assert_equal out, links_for(ENROLLED, links, metadata: PUB12),
                  "no clock in the JSON: the card rev changes only with a new GitHub read"
-    assert_equal "o:pub/card-158", detail(out[2])["Branch"]
+    assert_equal "public repo", detail(out[2])["Role"]
     assert_equal "https://github.com/o/widgets/pull/12", out.last[:url]
     assert_equal %w[repo pr pr], out.map { |l| l[:kind] }
   end
 
-  # no public PR yet → no row at all (a "pub/card-N · no PR" placeholder is not a pull request)
-  def test_public_pr_not_opened_yet_shows_no_row_and_a_listed_one_is_not_duplicated
-    links_for(ENROLLED, [])
-    @poller.run
-    assert_equal "none", @reader.lookup("o/widgets", "head:o:pub/card-158")[:state]
+  # no public PR recorded → no row and nothing asked (a placeholder is not a pull request, a branch name is not
+  # guessed); one the text already lists is not repeated
+  def test_no_public_pr_recorded_shows_no_row_and_a_listed_one_is_not_duplicated
     assert_equal [], links_for(ENROLLED, [])
-    @http.pulls = [pr(12, "o/widgets", head: "o:pub/card-158")]
-    @db[:gh_pr_states].update(state: nil, checked_at: nil)
-    # pasted in a comment
+    assert_equal [], links_for(ENROLLED, [], metadata: { "prs" => { "local" => "x" } })
+    assert_equal [], @db[:gh_pr_states].select_map(:ref)
+    @http.pulls = [pr(12, "o/widgets")]
     listed = [{ kind: "url", label: "github.com/o/widgets/pull/12", url: "https://github.com/o/widgets/pull/12" }]
-    links_for(ENROLLED, listed)
+    links_for(ENROLLED, listed, metadata: PUB12)
     @poller.run
-    assert_equal ["#12 [public open]"], shown(links_for(ENROLLED, listed))
-    assert_equal ["pr"], links_for(ENROLLED, listed).map { |l| l[:kind] }
+    assert_equal ["#12 [public open]"], shown(links_for(ENROLLED, listed, metadata: PUB12))
+    assert_equal ["pr"], links_for(ENROLLED, listed, metadata: PUB12).map { |l| l[:kind] }
   end
 
-  # upstream mode before the fork exists — roles still known, the public PR's head is said unknown
-  def test_upstream_mode_without_a_fork_keeps_the_roles_and_says_why
-    up = ENROLLED.merge(local_mode: "upstream", public_repo: "https://github.com/ruby/ruby.git", public_head: nil,
-                      local_error: 'guard.publicRemote names remote "fork", which has no URL')
+  # review round 1: a raw `cards` row carries metadata as JSON text (the engine's watch pass, waiting counts)
+  def test_public_pr_reads_a_raw_rows_json_metadata
+    assert_equal ["o/widgets", 12], PS.public_pr({ id: 158, metadata: JSON.generate(PUB12) }, "o/widgets")
+    assert_nil PS.public_pr({ id: 158, metadata: nil }, "o/widgets")
+    mixed = { "prs" => { "public" => "https://github.com/O/Widgets/pull/12" } }
+    assert_equal ["o/widgets", 12], PS.public_pr({ id: 158, metadata: mixed }, "o/widgets"), "owner/name in any case"
+    e = assert_raises(PS::Invalid) { PS.public_pr({ id: 158, metadata: "{nope" }, "o/widgets") }
+    assert_match(/\Acard #158 metadata is not JSON: /, e.message)
+  end
+
+  # a prs.public that is no PR of the public repo is said on the card, never followed
+  def test_a_public_pr_on_another_repo_is_said
+    out = links_for(ENROLLED, [], metadata: { "prs" => { "public" => "https://github.com/o/widgets_local/pull/5" } })
+    assert_equal ["public [public unknown]"], shown(out)
+    assert_match(/card #158 metadata prs.public is not a PR on o\/widgets: /, detail(out[0])["Why"])
+    assert_equal [], @db[:gh_pr_states].select_map(:ref)
+  end
+
+  # upstream mode with no readable public repo — roles still known, the public PR said unknown with the reason
+  def test_an_unreadable_public_repo_keeps_the_roles_and_says_why
+    up = ENROLLED.merge(local_mode: "upstream", public_repo: nil, public_head: nil,
+                        local_error: 'guard.upstream names remote "upstream", which has no URL')
     out = links_for(up, [{ kind: "pr", label: "#3", url: "https://github.com/o/widgets_local/pull/3" }], id: 9)
-    assert_equal ["#3 [local checking]", "pub/card-9 [public unknown]"], shown(out)
-    assert_equal 'guard.publicRemote names remote "fork", which has no URL', detail(out.last)["Why"]
+    assert_equal ["#3 [local checking]", "public [public unknown]"], shown(out)
+    assert_equal 'guard.upstream names remote "upstream", which has no URL', detail(out.last)["Why"]
     assert_equal "warn", out.last[:tags].last[:tone]
-    assert_equal "https://github.com/ruby/ruby/pulls?q=is%3Apr+head%3Apub%2Fcard-9", out.last[:url]
+    assert_equal "/projects/g/widgets", out.last[:url]
   end
 
   # review: another PR of the public repo named in the text (background, a follow-up) does not hide the card's own
   def test_another_public_pr_in_the_text_keeps_the_cards_own_public_row
-    @http.pulls = [pr(4, "o/widgets"), pr(12, "o/widgets", head: "o:pub/card-158")]
+    @http.pulls = [pr(4, "o/widgets"), pr(12, "o/widgets")]
     named = [{ kind: "url", label: "github.com/o/widgets/pull/4", url: "https://github.com/o/widgets/pull/4" }]
-    links_for(ENROLLED, named)
+    links_for(ENROLLED, named, metadata: PUB12)
     @poller.run
-    assert_equal ["#4 [public open]", "#12 [public open]"], shown(links_for(ENROLLED, named))
+    assert_equal ["#4 [public open]", "#12 [public open]"], shown(links_for(ENROLLED, named, metadata: PUB12))
   end
 
-  def test_upstream_mode_looks_for_the_head_on_the_fork_owner
+  def test_upstream_mode_reads_the_public_pr_on_the_upstream_repo
     up = ENROLLED.merge(local_mode: "upstream", public_repo: "https://github.com/ruby/ruby.git",
-                      public_head: "https://github.com/me/ruby.git")
-    links_for(up, [], id: 9)
-    assert_equal [%w[ruby/ruby head:me:pub/card-9]], @db[:gh_pr_states].select_map(%i[repo ref])
+                        public_head: "https://github.com/me/ruby.git")
+    links_for(up, [], id: 9, metadata: { "prs" => { "public" => "https://github.com/ruby/ruby/pull/77" } })
+    assert_equal [%w[ruby/ruby pr:77]], @db[:gh_pr_states].select_map(%i[repo ref])
   end
 
   # before the handoff names it, the local PR opened from the card's branch (card/<id>-*, in the repo) is
   # found on GitHub by its head and listed with its state; nothing is listed while GitHub has not answered
   def test_the_pr_opened_from_the_cards_branch_is_listed_before_the_handoff
-    @branches["/repos/widgets"] = Set["main", "card/158-gate-files", "card/7-other", "pub/card-158"]
+    @branches["/repos/widgets"] = Set["main", "card/158-gate-files", "card/7-other", "fix/settings-toggle"]
     assert_equal [], links_for(ENROLLED, []), "asked, not answered: no row"
-    assert_equal [%w[o/widgets head:o:pub/card-158], %w[o/widgets_local head:o:card/158-gate-files]],
+    assert_equal [%w[o/widgets_local head:o:card/158-gate-files]],
                  @db[:gh_pr_states].order(:repo, :ref).select_map(%i[repo ref]),
-                 "the card's own branch only — not main, not another card's, not the public branch (asked on the public repo)"
+                 "the card's own branch only — not main, not another card's, not a branch the text does not name"
     @http.pulls = [pr(45, "o/widgets_local", head: "o:card/158-gate-files"), pr(3, "o/widgets_local", head: "o:card/7-other")]
     @poller.run
     out = links_for(ENROLLED, [])

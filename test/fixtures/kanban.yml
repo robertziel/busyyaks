@@ -70,7 +70,7 @@ idle_watch: { ci_ping_after_minutes: 10, ci_comment_after_minutes: 20, owner_idl
 handoff: { requires_pr_url: true, requires_ci_url: true, qa_min_chars: 20, ui_change_needs_screenshots: true }
 # the approval gate: every approval step (Approve button or a drag along it) is refused until the PR it is about has
 # green checks — the open local PR at Local: Human review, its merge commit's jenkins/ci on `local` at Local deploy
-# check, the public pub/card-<id> PR at Public: Human review (the final step, once the local PR is merged) — read from the github service through lib/busyyaks/ci_checks.rb (approval_checks);
+# check, the public PR (the card's metadata prs.public) at Public: Human review (the final step, once the local PR is merged) — read from the github service through lib/busyyaks/ci_checks.rb (approval_checks);
 # null = no gate
 approval: { requires_green_ci: true }
 # parent dependencies: recorded and shown only (false); true enforces them

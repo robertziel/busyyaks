@@ -56,8 +56,9 @@ module Busyyaks
       #     of the approval → refused);
       #   - a later non-final step (Local: Deploy check → Open public PR) = the local PR MERGED and the CI of its merge
       #     commit on the working branch green (`merge:<N>` — jenkins/ci on `local`);
-      #   - the final step (the public merge) = the public PR, `pub/card-<id>` on the public repo (git publish-private's
-      #     branch, head = public_head's owner), and only once the local PR is MERGED.
+      #   - the final step (the public merge) = the public PR = the card's metadata `prs.public` (a PR on the public
+      #     repo; git mirror-publish names its branch after the change, never the card), and only once the local PR is
+      #     MERGED. None recorded, or not a PR of the public repo → Unavailable with the reason.
       # An enrolment the scanner could not read, or a card with no local PR → Unavailable with the reason.
       def approval_checks(card, step)
         project = @projects.call(card[:project_slug])
@@ -86,13 +87,17 @@ module Busyyaks
         return unmerged if unmerged
 
         repo = PrStates.slug(project[:public_repo])
-        head = PrStates.slug(project[:public_head])&.split("/")&.first
-        unless repo && head
+        unless repo
           raise Unavailable, "the public PR of card ##{card[:id]} cannot be found: " \
                              "#{project[:local_error] || 'the public repo is not on github.com'}"
         end
 
-        read(repo, "head:#{head}:#{PrStates.pub_branch(card[:id])}")
+        _, number = PrStates.public_pr(card, repo)
+        raise Unavailable, "card ##{card[:id]} records no public PR (metadata prs.public, a PR on #{repo})" unless number
+
+        read(repo, "pr:#{number}")
+      rescue PrStates::Invalid => e
+        raise Unavailable, e.message
       end
 
       def last_commit_at(card)
