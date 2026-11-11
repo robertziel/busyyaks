@@ -134,6 +134,14 @@ class AgentSettingsTest < Minitest::Test
     assert_equal %w[lead worker team plain], S.template["agent_types"].map { |t| t["key"] }
   end
 
+  # the worker's PR subagents (QA + Reviewer) run on haiku, never on the worker's own model
+  def test_the_worker_prompt_runs_its_qa_and_reviewer_subagents_on_haiku
+    prompt = S.template["agent_types"].find { |t| t["key"] == "worker" }.fetch("prompt")
+    qa = prompt.lines.find { |l| l.include?("independent QA agent") }
+    reviewer = prompt.lines.find { |l| l.include?("dispatch a REVIEWER AGENT") }
+    [qa, reviewer].each { |line| assert_includes line, 'Agent tool `model: "haiku"`' }
+  end
+
   # the move off config/kanban.yml: an old file's launchers + agent_types become a revision, the rest is ignored
   def test_bin_agent_settings_imports_an_old_kanban_yml_and_shows_the_current_revision
     root = File.expand_path("../..", __dir__)
