@@ -6,6 +6,7 @@ require_relative "agent_collector"
 require_relative "daily_report_config"
 require_relative "owner_remotes"
 require_relative "launch_trust"
+require_relative "launcher_rules"
 
 module Busyyaks
   # The deployment's YAML (config/busyyaks.yml). Every key required, unknown keys refused,
@@ -16,7 +17,7 @@ module Busyyaks
     KEYS = %w[roots search_depth owner_remotes author_emails window_days reap_protect auth agents launch].freeze
     OPTIONAL = %w[engines daily_report].freeze
     attr_reader :roots, :search_depth, :owner_remotes, :author_emails, :window_days, :reap_protect, :engines, :daily_report,
-                :auth, :agent_collector, :trusted_paths
+                :auth, :agent_collector, :trusted_paths, :launch_start_seconds
 
     # mount: where compose mounts PROJECTS_ROOT (.env PROJECTS_MOUNT, the one place it is set): every root is under it.
     def self.load(path = ENV.fetch("BUSYYAKS_CONFIG"), mount: ENV.fetch("PROJECTS_MOUNT"))
@@ -50,6 +51,12 @@ module Busyyaks
       @trusted_paths = begin
         LaunchTrust.parse!(hash["launch"])
       rescue LaunchTrust::Invalid => e
+        raise Invalid, e.message
+      end
+      # launch.start_seconds: how long bin/launcher waits for a started claude to come up (LauncherRules)
+      @launch_start_seconds = begin
+        LauncherRules.start_seconds!(hash["launch"]["start_seconds"])
+      rescue LauncherRules::Invalid => e
         raise Invalid, e.message
       end
       @search_depth = hash["search_depth"]

@@ -21,7 +21,7 @@ class ScannerTest < Minitest::Test
     Busyyaks::Config.new("roots" => roots.map { |path, prefix| { "path" => path, "prefix" => prefix } }, "search_depth" => 2,
                          "owner_remotes" => owner_remotes, "author_emails" => ["me@x.io"], "window_days" => 7,
                          "reap_protect" => [], "auth" => { "provider" => "none" },
-                         "agents" => { "collector" => "none" }, "launch" => { "trusted_paths" => [] })
+                         "agents" => { "collector" => "none" }, "launch" => { "trusted_paths" => [], "start_seconds" => 30 })
   end
 
   def test_scans_own_and_upstream_repos

@@ -14,6 +14,19 @@ module Busyyaks
 
     module_function
 
+    # config/busyyaks.yml `launch.start_seconds` (required, no default): how long bin/launcher waits after `tmux
+    # new-session` for claude to come up (`claude --remote-control <session>` in the pane's tree) while the launcher's
+    # command is still working (a shell function may start a gateway or an ssh forward first). A command that exits
+    # into the pane's bare shell is refused at once, whatever this says.
+    START_SECONDS = (1..600)
+
+    def start_seconds!(value)
+      return value if value.is_a?(Integer) && START_SECONDS.cover?(value)
+
+      raise Invalid, "launch.start_seconds must be an integer #{START_SECONDS.min}..#{START_SECONDS.max} " \
+                     "(seconds bin/launcher waits for a started agent to come up; got #{value.inspect})"
+    end
+
     # A container path under container_root → the repo dir's REAL path under projects_root (what tmux and the trust
     # check then use: a symlink swapped after this check is never followed). Refused: a path outside the root, an
     # empty / . / .. segment, a dir that is no git repo, and a symlink that leads out of projects_root.

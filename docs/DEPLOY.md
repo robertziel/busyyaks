@@ -136,6 +136,9 @@ $EDITOR config/busyyaks.yml                       # owner_remotes: host/owner pr
                                                   # substring entry ("you/") now stops the boot: it could never match;
                                                   # add  launch: { trusted_paths: [/projects/<repo>, …] }  (repo roots
                                                   # you trust; [] for none; § Folder trust)
+                                                  # and  launch: { start_seconds: 30 }  (required,
+                                                  # 1..600: how long a launch waits for its agent to
+                                                  # come up; missing → the launcher refuses to start)
 deploy/install-launcher.sh                        # creates both dirs (0700), restarts the launcher on the new socket
 docker build -t busyyaks:local . && docker compose up -d --no-build web mcp notifier scanner github   # new mounts + env
 deploy/install-daily-timer.sh                     # the timer, checked with the new token

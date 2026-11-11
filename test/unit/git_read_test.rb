@@ -350,11 +350,14 @@ touch(v)) }
   def test_a_huge_file_counts_as_binary_and_never_loads
     d = repo
     big = commit(d, "big.txt", "x\n" * 75_000_000) # 150 MB, 75 M lines
-    assert_equal [["big.txt", 0, 0, true, true]], read("churn", d, shas: [big])["files"]
+    # the clock sized for the work (a scan hashes the 150 MB file; > 20 s on a loaded CI host): what is tested here is
+    # the cap and the memory limit, not the time — the timeout has its own tests (… is killed on the timeout)
+    roomy = GR.limits.merge(timeout: 300)
+    assert_equal [["big.txt", 0, 0, true, true]], read("churn", d, shas: [big], limits: roomy)["files"]
     assert_equal [["big.txt", 0, 0, true, true]], in_process("churn", d, shas: [big])["files"]
     File.write(File.join(d, "big.txt"), "y\n" * 75_000_000)
-    assert_equal 1, read("scan", d, **SCAN)["dirty"]
-    uncapped = GR.limits.merge(max_blob: 1 << 30)
+    assert_equal 1, read("scan", d, limits: roomy, **SCAN)["dirty"]
+    uncapped = roomy.merge(max_blob: 1 << 30)
     e = assert_raises(GR::Failed) { read("churn", d, shas: [big], limits: uncapped) }
     assert_match(/NoMemoryError|out of memory/, e.message)
     e = assert_raises(GR::Failed) do

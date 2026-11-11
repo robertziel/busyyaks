@@ -6,9 +6,10 @@ require "socket"
 require "tmpdir"
 
 class ConfigTest < Minitest::Test
+  LAUNCH = { "trusted_paths" => [], "start_seconds" => 30 }.freeze
   OK = { "roots" => [{ "path" => "/p", "prefix" => "" }], "search_depth" => 2, "owner_remotes" => ["github.com/me/"],
          "author_emails" => ["Me@x.io"], "window_days" => 7, "reap_protect" => [], "auth" => { "provider" => "none" },
-         "agents" => { "collector" => "none" }, "launch" => { "trusted_paths" => [] }, }.freeze
+         "agents" => { "collector" => "none" }, "launch" => LAUNCH, }.freeze
 
   def test_valid = assert_equal ["me@x.io"], Busyyaks::Config.new(OK).author_emails
 
@@ -210,12 +211,25 @@ class ConfigTest < Minitest::Test
     [nil, {}, { "trusted_paths" => ["rel"] }, { "trusted_paths" => "/p" }].each do |v|
       assert_raises(Busyyaks::Config::Invalid, v.inspect) { Busyyaks::Config.new(OK.merge("launch" => v)) }
     end
-    assert_equal ["/p/a"], Busyyaks::Config.new(OK.merge("launch" => { "trusted_paths" => ["/p/a"] })).trusted_paths
+    assert_equal ["/p/a"], Busyyaks::Config.new(OK.merge("launch" => LAUNCH.merge("trusted_paths" => ["/p/a"]))).trusted_paths
     Dir.mktmpdir do |d|
       f = File.join(d, "c.yml")
-      File.write(f, YAML.dump(OK.merge("launch" => { "trusted_paths" => ["/elsewhere/a"] })))
+      File.write(f, YAML.dump(OK.merge("launch" => LAUNCH.merge("trusted_paths" => ["/elsewhere/a"]))))
       e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.load(f, mount: "/p") }
       assert_match(/not under PROJECTS_MOUNT/, e.message)
+    end
+  end
+
+  # launch.start_seconds: required, an integer 1..600, no default
+  def test_launch_start_seconds_is_required_and_validated
+    assert_equal 30, Busyyaks::Config.new(OK).launch_start_seconds
+    [nil, "30", 30.0, 0, -1, 601, true].each do |v|
+      launch = v.nil? ? LAUNCH.except("start_seconds") : LAUNCH.merge("start_seconds" => v)
+      e = assert_raises(Busyyaks::Config::Invalid, v.inspect) { Busyyaks::Config.new(OK.merge("launch" => launch)) }
+      assert_match(/launch.start_seconds must be an integer 1..600/, e.message, v.inspect)
+    end
+    [1, 600].each do |v|
+      assert_equal v, Busyyaks::Config.new(OK.merge("launch" => LAUNCH.merge("start_seconds" => v))).launch_start_seconds
     end
   end
 end

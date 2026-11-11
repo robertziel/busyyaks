@@ -20,12 +20,13 @@ module Busyyaks
 
     module_function
 
-    # config/busyyaks.yml `launch` (required): {trusted_paths: [absolute paths]} — shape only ([] allowed); Config.load
-    # checks them against PROJECTS_MOUNT (under_mount!), bin/launcher against the disk (host_paths!).
+    # config/busyyaks.yml `launch` (required): {trusted_paths: [absolute paths], start_seconds: N} — trusted_paths'
+    # shape only ([] allowed); Config.load checks them against PROJECTS_MOUNT (under_mount!), bin/launcher against the
+    # disk (host_paths!). `start_seconds` is LauncherRules.start_seconds!'s.
     def parse!(value)
-      raise Invalid, "launch must be a mapping {trusted_paths: [...]}" unless value.is_a?(Hash)
+      raise Invalid, "launch must be a mapping {trusted_paths: [...], start_seconds: N}" unless value.is_a?(Hash)
 
-      extra = value.keys - %w[trusted_paths]
+      extra = value.keys - %w[trusted_paths start_seconds]
       raise Invalid, "launch: unknown keys #{extra.join(', ')}" if extra.any?
 
       paths = value["trusted_paths"]
