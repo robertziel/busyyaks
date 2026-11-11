@@ -21,11 +21,11 @@ while these ids do not. `scripts/vendor-kanban-engine.sh` compares each copy her
 
 | path in the source repo | pinned id (git tree / blob, same in the public repo and its private local repo) |
 |---|---|
-| `ruby` | `3c6e5083e4bd2c884dabecbc5137dce95a63e48a` |
+| `ruby` | `a3d29e28341294faba8f0e23f8e4d4c978e1a4c2` |
 | `fixtures` | `807b2050636857a08dd21dbc1374e8225c38021c` |
-| `react/src` | `86f0104616b86bd1097bec01bea1e0d0f7902904` |
-| `SPEC.md` | `a47ee25e86288acb9c6e7e9e5825cea6fe17fe5d` |
+| `react/src` | `88aeb3098e5ccb05f377852d310cfa9cf7a8e5c4` |
+| `SPEC.md` | `be00cf05f45417a8936b4f640892045b1c9c5a2f` |
 | `config.example.yml` | `c0553d33d177e12b3279a76b4122ef064fd8f791` |
 | `LICENSE` | `9ef5b284fd11a7ce6383c5f2dbc91c0cf84bd40f` |
 
-Synced from source commit `619fbf217a0cc00805aa4c0c8ad99ac792e63536` (information only: a commit sha of the private local repo is not in the public repo and vice versa; the ids above are in both).
+Synced from source commit `3d8b84da64f95943e16452b9a2c4071820832a7d` (information only: a commit sha of the private local repo is not in the public repo and vice versa; the ids above are in both).
