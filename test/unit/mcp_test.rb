@@ -122,6 +122,8 @@ class McpTest < Minitest::Test
   def test_report_components_lists_every_component
     text = tool("report_components")["content"][0]["text"]
     Busyyaks::ReportBlocks::CATALOG.each { |c| assert_includes text, "```tl:#{c[:name]}" }
+    # a blocked_external card waits for the world — the layout puts it under At risk, never Needs you
+    assert_match(/"## At risk" — .*daily_facts\.blocked_external.*never under Needs you/, text)
   end
 
   def test_claim_with_tmux_session_sets_the_owner
@@ -150,7 +152,7 @@ class McpTest < Minitest::Test
     held = k.create(slug: "a", title: "ci first", by: "agent", column: "qa")
     k.move(held, column: "human_check", by: "op")
     db = Hanami.app["db.gateway"].connection
-    { id => [7, "success"], held => [8, "pending"] }.each do |card, (n, state)| # the github service's answers (card #248)
+    { id => [7, "success"], held => [8, "pending"] }.each do |card, (n, state)| # the github service's answers
       db[:cards].where(id: card).update(pr_url: "https://github.com/o/a/pull/#{n}")
       db[:gh_pr_checks].insert(repo: "o/a", ref: "pr:#{n}", requested_at: t, checked_at: t, number: n, state: state,
                                finished_at: state == "success" ? t : nil)
@@ -205,13 +207,14 @@ class McpTest < Minitest::Test
     assert_equal [], f["human_check"]
     assert_equal [true, "In progress", nil], hi[0].values_at("needs_operator", "column", "blocked")
     assert_equal 1, f["kanban_columns"]["In progress"], "the flagged card keeps its column"
-    # a blocked card (external) is a "needs you" fact too, with its reason
+    # a card only blocked_external waits for the world, not for the operator: its own list, with its reason
     b = k.create(slug: "a", title: "ci", by: "agent", column: "doing")
     k.block(b, reason: "CI runner down", url: "https://ci.example.com/job/x/3/", by: "agent")
     f = JSON.parse(tool("daily_facts", hours: 24, series: "Daily report")["content"][0]["text"])
-    row = f["human_input"].find { |c| c["card"] == b }
-    assert_equal [false, "CI runner down", "https://ci.example.com/job/x/3/"],
-                 [row["needs_operator"], row["blocked"]["reason"], row["blocked"]["url"]]
+    assert_equal [id], f["human_input"].map { |c| c["card"] }
+    assert_equal [[b, "In progress", "CI runner down", "https://ci.example.com/job/x/3/", "agent"]],
+                 f["blocked_external"].map { |c| c.values_at("card", "column", "reason", "url", "by") }
+    refute_nil f["blocked_external"][0]["since"]
   end
 
   def test_check_report_lists_broken_blocks_and_untracked_repos

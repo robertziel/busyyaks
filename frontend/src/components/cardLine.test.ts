@@ -4,13 +4,19 @@ import { cardLine } from "./Agents";
 
 const s = (extra: Partial<AgentSession>) =>
   ({ cards_known: true, cards: [], cards_finished: 0, asks: [], reviews: [], ...extra }) as AgentSession;
-const c = (id: number, column_label: string, gate_hold: string | null = null) => ({
+const c = (
+  id: number,
+  column_label: string,
+  gate_hold: string | null = null,
+  blocked_external: string | null = null,
+) => ({
   id,
   slug: "p",
   title: "t",
   column_label,
   column_type: null,
   gate_hold,
+  blocked_external,
   path: "/",
 });
 
@@ -21,9 +27,14 @@ describe("cardLine", () => {
     );
     expect(cardLine(s({ cards_finished: 3 }))).toBe("+3 done");
   });
-  it("a gate card that cannot be approved now says it waits for CI (card #248)", () => {
+  it("a gate card that cannot be approved now says it waits for CI", () => {
     expect(cardLine(s({ cards: [c(4, "Local: Human review", "PR #7: CI is still running")] }))).toBe(
       "#4 Local: Human review · waiting for CI",
+    );
+  });
+  it("a card blocked on the world says so: it waits for no operator", () => {
+    expect(cardLine(s({ cards: [c(12, "Public: Create PR", null, "waits for card #9")] }))).toBe(
+      "#12 Public: Create PR · blocked externally",
     );
   });
   it("no cards is said; a card already on the why line is not repeated", () => {

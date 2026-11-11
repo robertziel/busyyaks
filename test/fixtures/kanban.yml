@@ -148,8 +148,8 @@ dependencies: false
 # the question quotes the agent's last comment on the card from the last 10 min, or says it gave no reason
 session_dialogs: { settle_seconds: 30, context_minutes: 10 }
 # the cross-cutting card flags (workflow v3): needs_operator (kanban_ask, a session dialog) and blocked_external
-# (kanban_block). A flagged card keeps its column, refuses agent moves and counts as waiting for you; after 24 h
-# without an answer the notifier posts ONE reminder comment on it.
+# (kanban_block). A flagged card keeps its column and refuses agent moves; a needs_operator card counts as waiting for
+# you, a blocked_external one waits for the world and does not; after 24 h the notifier posts ONE reminder.
 flags: { reminder_hours: 24 }
 # the agent review loop (Local / Public: Agent review ↔ Author response — the loop columns; the coding board's QA has
 # no limit): 3 rounds per loop column, then the reviewer must hand the card to Human review; at the limit the handoff

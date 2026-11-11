@@ -185,6 +185,27 @@ class LaunchTest < Minitest::Test
                  s["asks"].map { |a| a.values_at("id", "question", "path") }
   end
 
+  # a card blocked on the world (another card, CI, a third party) is not the operator's to answer — its owner
+  # session is not "needs input", the totals do not count it, its card row says it is blocked externally
+  def test_a_blocked_external_card_does_not_block_its_owner_session
+    fake_launcher
+    kb = Busyyaks::Kanban.default
+    id = kb.create(slug: "group/repo", title: "held back", by: "op", column: "doing")
+    kb.register_session(session: "elsewhere", project: "group/repo", type: "plain", launcher: "fullclaude", by: "op")
+    kb.set_owner(id, session: "elsewhere", by: "op")
+    before = api(:get, "/api/agents")["totals"].values_at("blocked", "you")
+    kb.block(id, reason: "waits for card #9 to merge", url: "https://github.com/o/r/pulls", by: "elsewhere")
+    j = api(:get, "/api/agents")
+    s = agent(j, "elsewhere")
+    refute_equal "blocked", s["state"]
+    assert_equal [[], before], [s["asks"], j["totals"].values_at("blocked", "you")]
+    assert_equal [[id, "waits for card #9 to merge"]], s["cards"].map { |c| c.values_at("id", "blocked_external") }
+    # the same card with a question waits for the operator again
+    kb.ask(id, question: "Unblock it?", by: "elsewhere")
+    s = agent(api(:get, "/api/agents"), "elsewhere")
+    assert_equal ["blocked", [id], nil], [s["state"], s["asks"].map { |a| a["id"] }, s["cards"][0]["blocked_external"]]
+  end
+
   # a session's handed-over card (the handoff column) waits for the operator's review: state review, the card + its PR linked
   def test_a_handed_over_card_puts_its_owner_session_in_review
     fake_launcher
@@ -201,6 +222,14 @@ class LaunchTest < Minitest::Test
     assert_equal ["review", "card ##{id} in review"], s.values_at("state", "state_by")
     assert_equal [[id, "https://github.com/o/r/pull/5"]], s["reviews"].map { |r| r.values_at("id", "pr_url") }
     assert_equal 1, j["totals"]["review"]
+    # blocked on the world while in the gate: no review for the operator, not counted, not blocked on the operator
+    kb.block(id, reason: "waits for card #9 to merge", url: "https://github.com/o/r/pulls", by: "elsewhere")
+    j = api(:get, "/api/agents")
+    s = agent(j, "elsewhere")
+    assert_equal [[], [], 0], [s["reviews"], s["asks"], j["totals"]["review"]]
+    refute_includes %w[review blocked], s["state"]
+    kb.unblock(id, by: "elsewhere")
+    assert_equal "review", agent(api(:get, "/api/agents"), "elsewhere")["state"]
     # card #248: its CI re-runs (pending): not approvable now — no review, its row says it waits for CI
     Hanami.app["db.gateway"].connection[:gh_pr_checks].where(repo: "o/r", ref: "pr:5").update(state: "pending",
                                                                                             finished_at: nil)

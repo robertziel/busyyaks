@@ -29,6 +29,7 @@ title: 9 commits exist only on this box — acme/shop has no remote
 - { level: warn, kind: unpushed, repo: acme/site, text: "8 commits ahead of `origin/main`" }
 - { level: warn, kind: unpushed, repo: acme/auth, sha: 7b1d04aa, text: "3 commits + 5 dirty" }
 - { level: info, kind: security, repo: acme/api, sha: 5c0e8f12, text: "Hardcoded test key removed before it reached the remote" }
+- { level: info, kind: blocked externally, repo: acme/shop, text: "card #12 waits for card #9 to merge" }
 ```
 
 ## Shipped

@@ -298,12 +298,14 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
 export function cardLine(s: AgentSession): string {
   if (!s.cards_known) return "not registered: cards unknown";
   const shown = new Set([...s.asks, ...s.reviews].map((c) => c.id)); // already on the why line
-  const parts = s.cards
-    .filter((c) => !shown.has(c.id))
-    .map((c) => `#${c.id} ${c.column_label}${c.gate_hold ? " · waiting for CI" : ""}`);
+  const parts = s.cards.filter((c) => !shown.has(c.id)).map((c) => `#${c.id} ${c.column_label}${tail(c)}`);
   if (s.cards_finished > 0) parts.push(`+${s.cards_finished} done`);
   return parts.length ? parts.join(" · ") : shown.size ? "" : "no cards";
 }
+
+// what a card's row adds: it waits for CI or for the world — neither for you
+const tail = (c: AgentSession["cards"][number]) =>
+  `${c.gate_hold ? " · waiting for CI" : ""}${c.blocked_external ? " · blocked externally" : ""}`;
 
 // the one line under a blocked session's title: what it waits for
 export function why(s: AgentSession): string {

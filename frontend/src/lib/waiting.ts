@@ -3,7 +3,7 @@ import type { LaunchFailure } from "../vendor/agents_kanban";
 import { projectPath } from "./format";
 
 // kind: "ask" = flagged needs_operator (a question, in whatever column) · "review" = in a gate column (work to check, a
-// PR to merge) · "blocked" = flagged blocked_external · else the column key
+// PR to merge) · else the column key. A card only blocked_external waits for the world, not for you: never listed
 export type WaitingCard = {
   id: number;
   title: string;

@@ -8,11 +8,12 @@ module Busyyaks
       module Waiting
         # GET /api/waiting → {waiting_columns, total, projects: [{slug, icon, count, cards: [{id, title, column, column_label,
         # kind, since, needs_operator, blocked, question_first_line, blocked_first_line, handoff_first_line}]}]} — the cards
-        # waiting for the operator on every board (the engine's Api#waiting: the flagged cards in any column + the cards
-        # in the gate columns). busyyaks adds each project's icon, each card's kind: "ask" = flagged needs_operator (a
-        # question, in whatever column), "review" = in a gate column (work to check / a PR to merge), "blocked" = flagged
-        # blocked_external, else the column's own key — and its owner_session (null = none), which the widget matches
-        # against /api/agents to show whether that agent is running / blocked.
+        # waiting for the operator on every board (the engine's Api#waiting: the needs_operator cards in any column + the
+        # cards in the gate columns; a card only blocked_external waits for the world and is in `external`, not here).
+        # busyyaks adds each project's icon, each card's kind: "ask" = flagged needs_operator (a question, in
+        # whatever column), "review" = in a gate column (work to check / a PR to merge), else the column's own key — and
+        # its owner_session (null = none), which the widget matches against /api/agents to show whether that agent is
+        # running / blocked.
         class Index < Busyyaks::Action
           include KanbanAPI
 
@@ -36,7 +37,6 @@ module Busyyaks
 
           def self.kind(card, board)
             return "ask" if card[:needs_operator]
-            return "blocked" if card[:blocked] # a flag beats the column: the card waits for the blocker, not a review
             return "review" if board.gate?(card[:column])
 
             card[:column]

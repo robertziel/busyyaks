@@ -36,7 +36,8 @@ board JSON carries `config` (the board config the React side renders with).
 Types (the fixed set): `parked queued working review gate done cancelled` (engine SPEC § 2a). **Human input is no column**:
 a question for the operator is the card's `needs_operator` flag (`kanban_ask`; `asked*`, `question*` on the card JSON) and
 an external blocker its `blocked_external` flag (`kanban_block`; `blocked: {reason, url, by, at}`) — the card keeps its
-column, shows a badge, refuses agent moves, and counts as waiting. The private local-repo boards run the engine's
+column, shows a badge and refuses agent moves; a needs_operator card counts as waiting for you, a blocked_external one
+waits for the world and is listed as `external` ("N blocked externally"), never as waiting. The private local-repo boards run the engine's
 `local_v4` board (15 states: Backlog · To do · In progress · Local: Agent review · Local: Author response · Local:
 Human review · Local: Merged · Local: Deploy check · Public: Create PR · Public: Agent review · Public: Author response ·
 Public: Human review · Awaiting merge · Done · Cancelled — the operator's "Open public PR" sends a card into Public:
@@ -241,7 +242,7 @@ Every tool takes `author` (the agent or tmux session name) for writes; refusals 
 | `kanban_update(id, author, title?, description?, labels?, priority?, due?, due_done?, cover?)` | Card; `assignee` refused: "use kanban_claim(id, assignee, tmux_session)" |
 | `kanban_claim(id, assignee, tmux_session)` | Card with `assignee` + `owner_session` set; gaining an owner queues ONE ping with the operator's comments that reached nobody. `tmux_session` required and must be live (launcher `sessions` op); unknown → refused with the live list, launcher down → refused. The owner is the lead's session: subagents comment under their own names, replies route to the lead |
 | `kanban_ask(id, question, author, options?, tmux_session?)` | Card FLAGGED `needs_operator` in its own column (`tmux_session` given + no owner → claimed first) with `question` / `question_options` / `asked*`; a `comment` "**Question for the operator:**" + a `flag` entry. Requires an owner session; refused in a terminal column; a new ask replaces the question; the operator's comment clears it (`answer` entry, one `ANSWERED` ping). One reminder comment after `flags.reminder_hours` (24). `options`: ≤ 8 distinct strings ≤ 200 chars |
-| `kanban_block(id, reason, url, author)` · `kanban_unblock(id, author, note?)` | Card FLAGGED `blocked_external` (reason + http(s) url required; a `comment` "**Blocked (external):**" + a `flag` entry) / cleared. Counts as waiting; reminded after 24 h |
+| `kanban_block(id, reason, url, author)` · `kanban_unblock(id, author, note?)` | Card FLAGGED `blocked_external` (reason + http(s) url required; a `comment` "**Blocked (external):**" + a `flag` entry) / cleared. Waits for the world, not for the operator: never counted as waiting, listed as `external` / "N blocked externally"; reminded after 24 h |
 | `kanban_handoff(id, qa, pr_url, ci_url, ui_change, author, transition?, column?)` | Card in a gate: the one its column has a named agent transition into (several → `transition` or `column`); screenshots attached first when `ui_change`. At the review loop's round limit the card gets the `unresolved` label |
 | `kanban_comment(id, body, author)` | `{id, delivered}` (comment id; who it pings); markdown, rendered for the operator exactly like the web's |
 | `kanban_comment_edit(comment_id, body, author)` | the entry (author must match) |

@@ -50,7 +50,8 @@ module Busyyaks
                      "pending work over every repo (dirty / unpushed / " \
                      "own repos with no upstream), kanban cards waiting for the operator on every board " \
                      "(human_input: an agent's open question; human_check: work to check that can be approved now; " \
-                     "waiting_for_ci: gate cards whose CI is not green yet, not counted) and per-column card " \
+                     "waiting_for_ci: gate cards whose CI is not green yet, not counted; blocked_external: cards " \
+                     "waiting for another card, CI or a third party, not counted) and per-column card " \
                      "counts, the previous report of `series` with its headline figures, the last scan.",
         inputSchema: { type: "object", properties: {
           hours: { type: "integer", description: "window length, 1-168 (24 for a daily report)" },
@@ -300,8 +301,9 @@ module Busyyaks
       no_up = projects.select { |p| p[:own] && p[:unpushed].nil? && p[:last_commit_at].to_i >= week }
       kanban = Kanban.default
       slugs = projects.map { |p| p[:slug] }
-      # the daily report's two "needs you" lists: the FLAGGED cards (needs_operator: an agent's open question, in whatever
-      # column; blocked_external: waiting for the world) and the cards in the boards' gate columns (a check)
+      # the daily report's two "needs you" lists: the cards flagged needs_operator (an agent's open question, in whatever
+      # column) and the cards in the boards' gate columns (a check); a card only blocked_external waits for the world,
+      # not for the operator: its own list, never "needs you"
       w = kanban.waiting_cards(slugs)
       by_slug = w.by_slug
       boards = w.boards
@@ -309,7 +311,7 @@ module Busyyaks
       checks = []
       by_slug.each do |slug, cs|
         cs.each do |c|
-          if kanban.flagged?(c) then asks << c
+          if kanban.needs_operator?(c) then asks << c
           elsif boards[slug].gate?(c[:column]) then checks << c
           end
         end
@@ -327,10 +329,14 @@ module Busyyaks
         { card: c[:id], repo: c[:project_slug], title: c[:title], since: iso(c[:since]), assignee: c[:assignee],
           priority: c[:priority], comments: c[:comments], }
       end
-      # gate cards whose Approve would not pass now (card #248): waiting for CI, not for the operator
+      # gate cards whose Approve would not pass now: waiting for CI, not for the operator
       waiting_for_ci = w.held.values.flatten.map do |c|
         { card: c[:id], repo: c[:project_slug], title: c[:title], column: c[:column_label], hold: c[:gate_hold],
           owner_session: c[:owner_session], }
+      end
+      blocked_external = w.external.values.flatten.map do |c|
+        { card: c[:id], repo: c[:project_slug], title: c[:title], column: c[:column_label], since: iso(c[:since]),
+          reason: c[:blocked_reason], url: c[:blocked_url], by: c[:blocked_author], owner_session: c[:owner_session], }
       end
       columns = kanban.counts(slugs: slugs).each_with_object(Hash.new(0)) do |(slug, cols), acc|
         b = kanban.board_of(slug)
@@ -352,6 +358,7 @@ module Busyyaks
            human_input: questions,
            human_check: human_check,
            waiting_for_ci: waiting_for_ci,
+           blocked_external: blocked_external,
            kanban_columns: columns,
            previous_report: before && { id: before[:id], title: before[:title], created_at: iso(before[:created_at]),
                                         figures: ReportBlocks.digest(before[:body_md], Markdown.report_ctx(store))[:figures], },
