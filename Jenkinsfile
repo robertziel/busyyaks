@@ -4,9 +4,9 @@
 //
 // Jenkins side: a multibranch job reading this file from SCM (this repository's own branches and pull requests; a
 // fork's pull request is GitHub Actions', never here), an agent with a Docker CLI on a daemon it may start containers
-// on — chosen by the controller's
-// global env BUSYYAKS_CI_AGENT_LABEL (unset → the build fails; docs/CI-JENKINS.md § Isolation: which agents, why never
-// the controller) — and the Secret Text credential `github-pat` (a token allowed to post statuses on this repo).
+// on — chosen by the controller's global env BUSYYAKS_CI_AGENT_LABEL (unset → the build fails: an agent, never the
+// controller, runs the builds) — and the Secret Text credential `github-pat` (a token allowed to post statuses on this
+// repo).
 // The repo the status goes to is read from the checkout's origin remote — nothing about the deployment is written here.
 //
 // README badges (coverage · branches · tests): after the gates pass on the repository's DEFAULT branch (asked from
@@ -114,7 +114,7 @@ pipeline {
 String requiredAgentLabel() {
   String label = env.BUSYYAKS_CI_AGENT_LABEL
   if (!label?.trim()) {
-    error('BUSYYAKS_CI_AGENT_LABEL is not set on this Jenkins (Manage Jenkins → System → Global properties) — see docs/CI-JENKINS.md § Isolation')
+    error('BUSYYAKS_CI_AGENT_LABEL is not set on this Jenkins (Manage Jenkins → System → Global properties) — the label of the agents that run this job')
   }
   return label.trim()
 }
