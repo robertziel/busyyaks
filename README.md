@@ -1,6 +1,6 @@
 <div align="center">
 
-<b>Read first: <a href="https://robertz.co/feeds/architecture/how-i-reached-100-prs-a-day/">How I reached 100 quality PRs a day with an agents kanban</a></b>
+<b>Read first: <a href="https://robertz.co/feeds/architecture/how-i-reached-100-prs-a-day/">My agent agency merged 100 PRs in one day. I built them a kanban board so I can micro-manage them like a real boss.</a></b>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="public/static/logo-dark.svg">
