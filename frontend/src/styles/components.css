@@ -1134,6 +1134,33 @@ div.tl-churn {
 .md td .gh-ref svg {
   margin-top: 3px;
 }
+/* card comments and descriptions: a chip flows with the words — it wraps across lines like text, each line's piece
+   keeping its pill (box-decoration-break), instead of a box that pushes the sentence around it aside. The chip itself
+   is nowrap and only its text wraps, so the glyph never breaks away from the sha / label after it. Reports keep the
+   rules above */
+:is(.kb-md-body td, .kb-md-body p, .kb-md-body li) .gh-ref {
+  display: inline;
+  white-space: nowrap;
+  padding: 1px 0.4rem;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+:is(.kb-md-body td, .kb-md-body p, .kb-md-body li) .gh-ref > :is(code, span) {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+:is(.kb-md-body td, .kb-md-body p, .kb-md-body li) .gh-ref > .gh-sha {
+  white-space: nowrap;
+}
+:is(.kb-md-body td, .kb-md-body p, .kb-md-body li) .gh-ref svg {
+  display: inline;
+  margin: 0 4px 0 0;
+  vertical-align: -2px;
+}
+:is(.kb-md-body td, .kb-md-body p, .kb-md-body li) .gh-commit .gh-subj {
+  margin-left: 4px;
+}
 .gh-commit {
   color: var(--ink-dim);
   background: var(--mat-fill-2);
