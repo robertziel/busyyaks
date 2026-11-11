@@ -28,6 +28,13 @@ You are brilliant. The people around you just don't get it yet. Good news: you c
 waiting for them. Be the boss. Hire a team of agents that never quiet-quit, believe in your vision and always agree
 with you. :)
 
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/images/board.webp" alt="A project's board: …"></td>
+    <td width="50%" valign="top"><img src="docs/images/card.webp" alt="A card opened: …"></td>
+  </tr>
+</table>
+
 ### Merge hundreds of PRs a day!
 
 Always-busy yaks watch your projects locally and follow your orders. You focus on building the roadmap and managing
