@@ -7,8 +7,7 @@
   <img src="public/static/logo-light.svg" width="320" alt="busyyaks logo: a yak hauling a cart of task cards, next to the word busyyaks">
 </picture>
 
-**One self-hosted panel over every git repo on your box — and the coding agents working them.**<br>
-A dashboard and an MCP server for one operator running many repos and many Claude Code sessions.
+**Run your own agency, from your own machine, staffed by Claude agents.**
 
 [![tests](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/robertziel/f4d62c00382e99d2952e6185510eeb75/raw/tests.json)](#tests-and-ci)
 [![coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/robertziel/f4d62c00382e99d2952e6185510eeb75/raw/coverage.json)](#tests-and-ci)
@@ -25,20 +24,30 @@ A dashboard and an MCP server for one operator running many repos and many Claud
 
 </div>
 
-busyyaks watches every git repo under a directory and gives you and your agents the same view of them:
+You are brilliant. The people around you just don't get it yet. Good news: you can vibe-code anything now, so stop
+waiting for them. Be the boss. Hire a team of agents that never quiet-quit, believe in your vision and always agree
+with you. :)
 
-- **Today**: commits, your commits, active repos and your merged PRs per day, a year-long contribution heatmap, and what
-  is dirty or unpushed.
-- **A kanban board per repo** that Claude Code sessions work through MCP. An agent claims a card, asks you a question on
-  it, and hands it over with the PR, the CI build and screenshots. It never merges before you approve.
+### Merge hundreds of PRs a day!
+
+Always-busy yaks watch your projects locally and follow your orders. You focus on building the roadmap and managing
+them.
+
+The panel watches every git repo under a directory and gives you and your agents the same view of them:
+
+- **Today**: commits, active repos and your merged PRs per day, a year-long contribution heatmap, and what is dirty or
+  unpushed, so your brain gets its dopamine from the numbers!
+- **A kanban board per repo**, the real diamond of this repo. An agent claims a card, asks you a question on it, and
+  hands it over with the PR, the CI build and screenshots. It never merges before you approve, so you personally
+  ensure the quality of your yaks' work.
 - **Launch and supervise agents** in tmux from the browser, see which session is waiting on a permission dialog, and
   answer it from the card.
 - **A daily report** written by a local LLM through the same MCP tools, with every number computed by the server.
 - **Your GitHub network**: what the people you follow starred, whom they followed, and your github.com feed, summarised.
 
 It runs as five Docker containers plus two host-side processes (the tmux launcher and, optionally, the daily-report
-timer). All state is one database: a SQLite file by default, or PostgreSQL ([Database](#database)). It is built for **one operator on one Linux box**: see
-[When not to use it](#when-not-to-use-it).
+timer). All state is one database: a SQLite file by default, or PostgreSQL ([Database](#database)). It is built for
+**one operator on one Linux box**: see [When not to use it](#when-not-to-use-it).
 
 <p align="center">
   <img src="docs/images/today.webp" width="960" alt="The Today page: commit, own-commit, repo and merged-PR tiles with 7-day sparklines, a year-long commit heatmap, a 7-day table and the list of merged PRs; the agents sidebar on the right lists the running agent sessions per project: one needs input, one has a PR in review, one is working">
