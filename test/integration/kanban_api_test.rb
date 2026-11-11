@@ -151,7 +151,7 @@ class KanbanApiTest < Minitest::Test
   def test_waiting_lists_the_operators_cards_and_its_rev_changes_with_them
     r0 = api(:get, "/api/waiting/rev")["rev"]
     assert_equal "no-store", last_response.headers["Cache-Control"]
-    assert_equal({ "waiting_columns" => %w[human_check ready], "total" => 0, "projects" => [], "held" => [],
+    assert_equal({ "waiting_columns" => %w[human_check ready], "total" => 0, "projects" => [], "held" => [], "external" => [],
                    "launch_failures" => [], }, api(:get, "/api/waiting"))
     # card #273: a session whose start failed (claude never came up) is in the list the layout's alert modal reads
     kb.register_session(session: "g_r_teamlead", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
@@ -175,8 +175,8 @@ class KanbanApiTest < Minitest::Test
     assert_equal [id, "check me", "human_check", "Human Check", nil],
                  w["projects"][0]["cards"][0].values_at("id", "title", "column", "column_label", "question_first_line")
     refute_equal r0, api(:get, "/api/waiting/rev")["rev"]
-    # each card's kind (ask = flagged needs_operator, review = in a gate, blocked = flagged blocked_external) and the
-    # project's icon key
+    # each card's kind (ask = flagged needs_operator, review = in a gate) and the project's icon key; a card only
+    # blocked_external waits for the world: in `external`, not in the list, a gate card too
     assert_equal "review", w["projects"][0]["cards"][0]["kind"]
     assert w["projects"][0].key?("icon")
     ask = kb.create(slug: "g/r", title: "which?", by: "op", column: "doing")
@@ -186,12 +186,13 @@ class KanbanApiTest < Minitest::Test
     kb.block(blocked, reason: "runner offline", url: "https://ci.example.com/x", by: "agent")
     gate_blocked = kb.create(slug: "g/r", title: "deploy box down", by: "op", column: "ready")
     kb.block(gate_blocked, reason: "deploy host offline", url: "https://status.example.com", by: "agent")
-    kinds = api(:get, "/api/waiting")["projects"][0]["cards"].to_h { |c| [c["id"], c.values_at("kind", "owner_session")] }
-    assert_equal({ ask => %w[ask lead_1], id => ["review", nil], blocked => ["blocked", nil],
-                   gate_blocked => ["blocked", nil], }, kinds, "a blocked card in a gate is blocked, not a review")
-    first = api(:get, "/api/waiting")["projects"][0]["cards"].find { |c| c["id"] == blocked }
-    assert_equal [false, true, "runner offline", nil],
-first.values_at("needs_operator", "blocked", "blocked_first_line", "question_first_line")
+    w = api(:get, "/api/waiting")
+    kinds = w["projects"][0]["cards"].to_h { |c| [c["id"], c.values_at("kind", "owner_session")] }
+    assert_equal({ ask => %w[ask lead_1], id => ["review", nil] }, kinds, "a blocked card is no review, no ask")
+    assert_equal 2, w["total"]
+    ext = w["external"][0]["cards"]
+    assert_equal [[blocked, false, true, "runner offline"], [gate_blocked, false, true, "deploy host offline"]],
+                 ext.map { |c| c.values_at("id", "needs_operator", "blocked", "blocked_first_line") }
     clear_cookies
     get "/api/waiting", nil, "HTTP_ACCEPT" => "application/json"
     assert_equal 401, last_response.status

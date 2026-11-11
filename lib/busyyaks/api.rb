@@ -115,7 +115,8 @@ module Busyyaks
         state: s.state, state_by: s.state_by, unread: s.unread?, turn_ended_at: s.turn_ended_at, seen_at: s.seen_at,
         cards_known: s.cards_known?,
         cards: s.open_cards.map do |c|
-          agent_card(c, column_label: c[:column_label], column_type: c[:column_type], gate_hold: c[:gate_hold])
+          agent_card(c, column_label: c[:column_label], column_type: c[:column_type], gate_hold: c[:gate_hold],
+                        blocked_external: c[:blocked_external])
         end,
         cards_finished: s.finished_cards.size,
         subagents: s.subagents, engines: s.engines, title: s.title, cwd: s.cwd, model: s.model,

@@ -714,7 +714,7 @@ module Busyyaks
         1. tl:stats — totals with prev (from daily_facts.previous): Commits 24h (good: up), Repos active, Uncommitted (good: down), Unpushed (good: down), No upstream (good: down), Human Check.
         2. tl:callout — only when something failed or is at risk today; one line title.
         3. "## Needs you" — tl:needs from daily_facts.human_input (agents' open questions, column Human input) then daily_facts.human_check (card ids link to the card) + decisions only the operator can take; none → `ok:0 cards waiting for you`.
-        4. "## At risk" — tl:flags, worst first: no upstream, unpushed, breaking, security, secrets, failed scans.
+        4. "## At risk" — tl:flags, worst first: no upstream, unpushed, breaking, security, secrets, failed scans; then one `info` flag per daily_facts.blocked_external card (kind `blocked externally`, text `card #<id>` + its reason: it waits for the world — another card, CI, a third party —, never under Needs you).
         5. "## Shipped" — tl:cards, one per active own repo: numbers + ≤ 4 shipped lines + risks + 1-2 shas.
         6. "## Changes" — tl:churn (files / +/− per repo).
         7. "## Upstream" — tl:flags for breaking/security upstream changes; none → `info:0 upstream flags`.

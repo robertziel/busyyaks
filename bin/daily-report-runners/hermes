@@ -78,7 +78,7 @@ Tools: the busyyaks MCP tools are named mcp__busyyaks__<tool>; delegate_task spa
 1. FACTS. Call mcp__busyyaks__daily_facts with hours=24, series="Daily report" (the last scan's figures: its last_scan
    says when; never ask for a new scan).
    Every number in the report comes from daily_facts (totals, previous_window, repos, pending, human_input, human_check,
-   previous_report.figures) or from the children's summaries — never count by hand, never estimate ("18+" is wrong).
+   blocked_external, previous_report.figures) or from the children's summaries — never count by hand, never estimate ("18+" is wrong).
    A number you could not get is left out and said missing, never guessed.
 2. ONE CHILD PER ACTIVE REPO: for every entry in daily_facts.repos, one task in a SINGLE delegate_task call
    (tasks=[...], toolsets=["busyyaks"], context_files=false; at most $RUNNER_MAX_CHILDREN tasks per call — more repos →
@@ -117,7 +117,8 @@ Tools: the busyyaks MCP tools are named mcp__busyyaks__<tool>; delegate_task spa
    (count of human_check). prev for Uncommitted / Unpushed / No upstream = the same label in previous_report.figures;
    no such figure → no prev (unknown, not 0).
    At risk: every repo in pending.no_upstream_active_own with commits is a bad "no upstream" flag; unpushed > 0 is warn;
-   then the children's flags; failed last_scan is bad. Empty sections get one inline pill (\`ok:0 cards waiting for you\`,
+   then the children's flags; failed last_scan is bad; then one info flag per daily_facts.blocked_external card (kind
+   "blocked externally", text "card #<id>" + its reason ≤ 12 words: it waits for the world, never a Needs you row). Empty sections get one inline pill (\`ok:0 cards waiting for you\`,
    \`info:0 upstream flags\`), never a placeholder row. Act on: ≤ 5, command-sized, priority high|med|low.
    End with a tl:kv "Window" row (daily_facts.window from → to).
 5. Call mcp__busyyaks__check_report(body_markdown) and fix every broken block it lists until it lists none.

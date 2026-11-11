@@ -171,8 +171,10 @@ export type AgentCard = {
   title: string;
   column_label: string;
   column_type: string | null;
-  // in an approval gate but not approvable now (card #248): why — it waits for CI, not for the operator
+  // in an approval gate but not approvable now: why — it waits for CI, not for the operator
   gate_hold: string | null;
+  // flagged blocked_external only: its reason — it waits for the world, not for the operator
+  blocked_external: string | null;
   path: string;
 };
 export type AgentAsk = { id: number; slug: string; title: string; question: string; path: string };
@@ -274,7 +276,7 @@ export type BoardsData = {
     waiting_columns: string[];
     counts: Record<string, number>;
     total: number;
-    waiting: number; // the waiting columns' cards + the flagged cards elsewhere (needs_operator / blocked_external)
+    waiting: number; // the waiting columns' cards + the needs_operator cards elsewhere (never a blocked_external-only one)
     flagged: number;
     backlog_md: boolean;
   }[];
