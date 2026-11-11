@@ -23,9 +23,10 @@ module Busyyaks
     # A malformed JSON body (Hanami's body parser, before any action) is the client's fault: 400, not 500.
     config.render_error_responses["Hanami::Middleware::BodyParser::BodyParsingError"] = :bad_request
 
-    # The kanban engine's config (KANBAN_CONFIG) and the attachments' env (ATTACHMENTS_DIR, the size cap, the type
+    # The kanban engine's config file (KANBAN_CONFIG; its launchers / agent types are database revisions, checked on
+    # use and on save: AgentSettings) and the attachments' env (ATTACHMENTS_DIR, the size cap, the type
     # allowlist) are read at boot: a missing key, an unknown column or type fails the boot, never a default.
-    Busyyaks::Kanban.config
+    Busyyaks::Kanban.check_file!
     ENV.fetch("ATTACHMENTS_DIR")
     Busyyaks::Kanban.policy
     # the limits of every read of a scanned repo (GIT_READ_*): checked here, so a service never starts without them

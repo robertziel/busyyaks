@@ -29,8 +29,9 @@ owner_remotes:
 author_emails:
   - you@example.com
 window_days: 7
-# (launchers — what the "Launch" button may start — live in config/kanban.yml `launchers` (from config/kanban.example.yml), the board config:
-#  ONE source for how a session is started; bin/launcher builds the argv with the engine's Launch.)
+# (launchers — what the "Launch" button may start — and the agent types live in the database (Settings → Agents &
+#  launchers; repo default config/agents.template.yml): ONE source for how a session is started; bin/launcher builds
+#  the argv with the engine's Launch, only for an invocation on launch.commands below.)
 # auth:          sign-in (README "Sign-in"). `provider: none` = no sign-in: every request is the operator — only for a
 #                deployment reachable from localhost / an ssh tunnel, never behind a public proxy. It needs the explicit
 #                `allow_unauthenticated: true` beside it (a boot without it stops), and every boot logs AUTH DISABLED. A custom provider:
@@ -65,6 +66,17 @@ agents:
 #                as a question for you.
 launch:
   trusted_paths: []
+  # the INVOCATIONS any agent launcher may be on this host, each exactly {kind, command, args, via_shell}.
+  # The launchers + agent types are edited on Settings → Agents & launchers (the database); a launcher must equal one
+  # of these entries, or it is refused when saved and when bin/launcher starts it — a dashboard user picks among them
+  # and names them, but cannot add an argument (a --settings with hooks, an --mcp-config, a permission mode) you did
+  # not list here. A host file: no dashboard user can widen it. Never list a shell or an interpreter as a command
+  # (bash, sh, python, …). Restart the launcher after an edit. More, e.g.:
+  #   - { kind: claude_code, command: claude, args: ["--permission-mode", "bypassPermissions"], via_shell: false }
+  #   - { kind: claude_code, command: my_claude_function, args: [], via_shell: true }
+  #   - { kind: hermes, command: hermes, args: [chat], via_shell: false }
+  commands:
+    - { kind: claude_code, command: claude, args: [], via_shell: false }
   # trusted_paths: [/projects/my-app, /projects/group/tool]
   # seconds bin/launcher waits after starting a session for claude to come up (claude --remote-control <session>)
   # while the launcher's command is still running — a shell function that starts a gateway or opens an ssh forward

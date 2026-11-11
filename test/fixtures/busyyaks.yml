@@ -7,4 +7,9 @@ window_days: 7
 reap_protect: ["svc-*"]
 auth: { provider: test/fixtures/auth_stub, allowed_emails: [owner@example.com] }
 agents: { collector: none }
-launch: { trusted_paths: [], start_seconds: 30 }
+launch:
+  trusted_paths: []
+  start_seconds: 30
+  commands: # the invocations of test/fixtures/agents.yml's launchers
+    - { kind: claude_code, command: claude, args: ["--permission-mode", "bypassPermissions"], via_shell: false }
+    - { kind: claude_code, command: localclaude, args: [], via_shell: true }

@@ -1,17 +1,14 @@
-// The frame every route shares: frosted header (brand, segmented nav, agents toggle, sign out), the page,
+// The frame every route shares: frosted header (brand, segmented nav, agents toggle, settings cog), the page,
 // the agents rail (a drawer below 1180px), the flash.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, NavigationType, NavLink, Outlet, useLocation, useNavigationType } from "react-router-dom";
-import { csrfToken, signOutPath, userEmail } from "../api";
 import { Agents, type AgentTotals } from "./Agents";
 import { FlashView, useFlash } from "./Flash";
 import { Search } from "./Search";
-import { SkinSwitch } from "./Skin";
+import { Settings } from "./Settings";
 import { WaitingWidget } from "./Waiting";
 
 export function Layout() {
-  const email = userEmail();
-  const signOut = signOutPath();
   const location = useLocation();
   const navType = useNavigationType();
   const { flash, setFlash } = useFlash();
@@ -97,15 +94,8 @@ export function Layout() {
               </b>
             )}
           </button>
-          <SkinSwitch />
-          <span className="who">{email}</span>
-          {signOut && (
-            <form method="post" action={signOut}>
-              <input type="hidden" name="_csrf_token" value={csrfToken()} />
-              <button className="btn">Sign out</button>
-            </form>
-          )}
           <div data-auth-launcher />
+          <Settings />
         </div>
       </header>
       <div className="shell">

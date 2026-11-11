@@ -13,11 +13,17 @@ import { useFlash } from "./Flash";
 
 export function launchFlash(r: LaunchResult) {
   const s = r.result as LauncherStart;
-  const ok = s.remote_control === "on" && s.trust !== "failed" && s.trust !== "left";
+  // a hermes launcher (kind hermes) has no remote control: its start check is its process in the pane
+  const up = s.process !== undefined ? s.process === "on" : s.remote_control === "on";
+  const ok = up && s.trust !== "failed" && s.trust !== "left";
   const rc =
-    s.remote_control === "on"
-      ? `remote control ${s.remote_control_name}`
-      : `REMOTE CONTROL FAILED: ${s.reason ?? "no reason given"}`;
+    s.process === "on"
+      ? `${s.process_name} running · no remote control`
+      : s.process !== undefined
+        ? `START CHECK FAILED: ${s.reason ?? "no reason given"}`
+        : s.remote_control === "on"
+          ? `remote control ${s.remote_control_name}`
+          : `REMOTE CONTROL FAILED: ${s.reason ?? "no reason given"}`;
   const trust =
     s.trust === "accepted"
       ? " · folder trusted"

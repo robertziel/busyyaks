@@ -15,6 +15,11 @@ require "yaml"
 #   - a clone is never trusted, of an owner_remotes URL included, and runs with nothing inherited;
 #   - a corrupt created.json refuses a launch before `tmux new-session` runs.
 class LauncherTrustTest < Minitest::Test
+  # the agent settings revision a launch carries: the suite's, test/fixtures/agents.yml
+  AGENTS = YAML.safe_load_file(File.expand_path("../fixtures/agents.yml", __dir__))
+  # the host allowlist (launch.commands): the fixture's two launchers + a hermes one
+  INVOCATIONS = [*YAML.safe_load_file(File.expand_path("../fixtures/busyyaks.yml", __dir__)).dig("launch", "commands"),
+                 { "kind" => "hermes", "command" => "hermes", "args" => ["chat"], "via_shell" => false },].freeze
   ROOT = File.expand_path("../..", __dir__)
   BOOT_SECONDS = 60 # the launcher's start, until its socket exists
   # launch.start_seconds of the sandbox: far above the 13 s a slow wrapper below takes, so a refusal "at
@@ -54,6 +59,8 @@ class LauncherTrustTest < Minitest::Test
     @pane = File.join(@base, "pane.sh") # a pane command of a test's own: `sh pane.sh <session>`
     @dialog = File.join(@base, "dialog") # the pane shows a permission dialog
     FileUtils.cp(Open3.capture2("sh", "-c", "command -v bash").first.strip, File.join(@bin, "claude"))
+    FileUtils.cp(File.join(@bin, "claude"), File.join(@bin, "hermes")) # a hermes launch: its pane runs `hermes`
+    @hermes = File.join(@base, "hermes_mode")
     stub("tmux", <<~SH)
       echo "$*" >> #{@tmux_log}
       case "$1" in
@@ -61,6 +68,7 @@ class LauncherTrustTest < Minitest::Test
           while [ "$1" != -s ]; do shift; done
           if [ -e #{@pane} ]; then sh #{@pane} "$2" >/dev/null 2>&1 &
           elif [ -e #{@refuse} ]; then sleep 300 >/dev/null 2>&1 &
+          elif [ -e #{@hermes} ]; then #{@bin}/hermes -c 'sleep 300; :' >/dev/null 2>&1 &
           else #{@bin}/claude -c 'sleep 300; :' --remote-control "$2" >/dev/null 2>&1 & fi
           echo $! >> #{@pids}; echo $! > #{@base}/pane.pid; date +%s.%N > #{@base}/started_at; exit 0 ;;
         list-panes) [ -e #{@base}/pane.pid ] && cat #{@base}/pane.pid && exit 0; exit 1 ;;
@@ -100,7 +108,7 @@ class LauncherTrustTest < Minitest::Test
   end
 
   def write_config(start_seconds)
-    launch = { "trusted_paths" => [], "start_seconds" => start_seconds }.compact
+    launch = { "trusted_paths" => [], "commands" => INVOCATIONS, "start_seconds" => start_seconds }.compact
     File.write(File.join(@co, "config/busyyaks.yml"), YAML.dump(
       "roots" => [{ "path" => "/projects", "prefix" => "" }], "search_depth" => 2,
       "owner_remotes" => ["github.com/you/"], "author_emails" => ["you@example.com"], "window_days" => 7,
@@ -161,7 +169,7 @@ class LauncherTrustTest < Minitest::Test
 
   def launch(name)
     ask("op" => "launch", "path" => "/projects/#{name}", "session" => "#{name}_s", "type" => "lead",
-        "launcher" => "fullclaude",
+        "launcher" => "fullclaude", "settings" => { "id" => 1, "doc" => AGENTS },
         "vars" => { "slug" => name, "session" => "#{name}_s", "agent" => "a", "type" => "lead", "cards" => "-" })
   end
 
@@ -261,6 +269,56 @@ class LauncherTrustTest < Minitest::Test
     calls = File.exist?(@tmux_log) ? File.read(@tmux_log) : ""
     assert_includes calls, "has-session"
     refute_includes calls, "new-session", "nothing was started"
+  end
+
+  # a launch runs the agent settings revision it carries, and only commands on launch.commands — a revision
+  # naming any other command (written from the dashboard) is refused before tmux starts anything; none carried → refused
+  def test_a_revision_with_a_command_off_the_host_allowlist_is_refused_before_tmux
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    launchers = AGENTS["launchers"].map { |l| l["key"] == "fullclaude" ? l.merge("command" => "bash") : l }
+    doc = AGENTS.merge("launchers" => launchers)
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "lead", "launcher" => "fullclaude",
+            "settings" => { "id" => 7, "doc" => doc },
+            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
+    refute r["ok"], r.inspect
+    assert r["error"].start_with?("agent settings revision 7: launcher fullclaude " \
+                                  "(claude_code: bash --permission-mode bypassPermissions): not an invocation on this " \
+                                  "host's allowlist config/busyyaks.yml launch.commands"), r["error"]
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "lead", "launcher" => "fullclaude",
+            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
+    assert_match(/settings \{id, doc\} are required/, r["error"])
+    # a prompt starting with "-" (an option of the allowlisted command) is refused before tmux too
+    types = AGENTS["agent_types"].map { |t| t["key"] == "lead" ? t.merge("prompt" => "--mcp-config=/tmp/x {slug}") : t }
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "lead", "launcher" => "fullclaude",
+            "settings" => { "id" => 8, "doc" => AGENTS.merge("agent_types" => types) },
+            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
+    assert_match(/agent settings revision 8: agent_types\[lead\].prompt must not start with "-"/, r["error"])
+    refute_includes tmux_calls, "new-session", "nothing was started"
+  end
+
+  # a hermes launcher (kind hermes): the prompt goes as -q, no trust prompt is answered (it is Claude Code's), and the
+  # start counts as up when the pane runs hermes — there is no remote control to wait for
+  def test_a_hermes_launch_is_up_when_its_pane_runs_hermes
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    FileUtils.touch(@hermes)
+    hermes = { "key" => "hermes", "label" => "hermes", "kind" => "hermes", "command" => "hermes", "args" => ["chat"],
+               "via_shell" => false, }
+    types = AGENTS["agent_types"].map do |t|
+      next t unless t["key"] == "plain" # no type follows plain's launcher
+
+      t.merge("launchers" => t["launchers"] + ["hermes"], "prompt" => "work on {slug}",
+              "model" => t["model"].is_a?(Hash) ? t["model"].merge("hermes" => nil) : t["model"])
+    end
+    doc = AGENTS.merge("launchers" => AGENTS["launchers"] + [hermes], "agent_types" => types)
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "plain", "launcher" => "hermes",
+            "settings" => { "id" => 3, "doc" => doc },
+            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "plain", "cards" => "-" })
+    assert_equal [true, "hermes", "on", "hermes"], r.values_at("ok", "kind", "process", "process_name"), r.inspect
+    refute r.key?("remote_control"), r.inspect
+    started = tmux_calls.lines.find { |l| l.start_with?("new-session") }
+    assert_match(/hermes chat -q work\\ on\\ fresh/, started)
+    refute_match(/--remote-control/, started)
+    refute_match(/send-keys/, tmux_calls, "no trust prompt answered for hermes")
   end
 
   # the start check waits on the REAL signal, not a fixed window — a planted repo (trust left: no trust wait)

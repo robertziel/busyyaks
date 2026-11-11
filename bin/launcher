@@ -47,6 +47,7 @@ require_relative "../lib/busyyaks/env_file"
 require_relative "../lib/busyyaks/private_socket"
 require_relative "../lib/busyyaks/launcher_rules"
 require_relative "../lib/busyyaks/launch_trust"
+require_relative "../lib/busyyaks/agent_settings"
 
 $stdout.sync = true
 ROOT = File.expand_path("..", __dir__)
@@ -87,7 +88,7 @@ rescue Busyyaks::LaunchTrust::Invalid => e
   abort "folder trust: #{e.message}"
 end
 # config/busyyaks.yml launch.start_seconds (required, LauncherRules.start_seconds!): how long a launch waits for its
-# claude to come up while the launcher's command still runs; a bad or missing value stops the start.
+# agent to come up while the launcher's command still runs; a bad or missing value stops the start.
 START_SECONDS = begin
   launch_cfg = YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["launch"]
   Busyyaks::LauncherRules.start_seconds!(launch_cfg.is_a?(Hash) ? launch_cfg["start_seconds"] : nil)
@@ -112,32 +113,32 @@ CLAUDE_SESSION_URL = ENV_FILE.fetch("CLAUDE_SESSION_URL") { abort "CLAUDE_SESSIO
 ENGINES = Busyyaks::Engines.load(YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["engines"])
 PANE_KEYS = %w[target cwd engine model context effort status waiting_for title status_at subagents_running].freeze
 
-# The host config's launchers (config/kanban.yml): the keys the Launch button offers; Launch builds each argv
-# with `--remote-control <session>` LAST (the one effective name — Claude Code takes a repeated option's last value).
-# Read ONCE, at start, beside the engine code it is parsed by: the checkout under ROOT changes under a running
-# launcher (a merge, another session's branch), and a config re-read per launch against the engine loaded at start
-# refused every spawn with "unknown keys session_dialogs" once the checkout gained a key the running engine did not know. New config or engine = restart the launcher
-# (deploy/install-launcher.sh), the same as any code change.
-BOARD_CONFIG = AgentsKanban::HostConfig.load(File.join(ROOT, "config/kanban.yml")) # a broken config fails at start
-
-# The pane's process tree, read from /proc: the pane's process and every descendant
-def tree(root)
-  kids = Hash.new { |h, k| h[k] = [] }
-  Dir.glob("/proc/[0-9]*/stat").each do |f|
-    st = File.read(f) rescue next
-    kids[st.sub(/\A.*\) /m, "").split[1].to_i] << f[%r{/proc/(\d+)/}, 1].to_i
-  end
-  out = []
-  todo = [root]
-  until todo.empty?
-    pid = todo.shift
-    out << pid
-    todo.concat(kids[pid])
-  end
-  out
+# The host config FILE (config/kanban.yml): read ONCE, at start, beside the engine code it is parsed by — the checkout
+# under ROOT changes under a running launcher (a merge, another session's branch), and a file re-read per launch
+# against the engine loaded at start refused every spawn with "unknown keys session_dialogs" once the checkout gained
+# a key the running engine did not know. New file or engine = restart the launcher (deploy/install-launcher.sh).
+# Its launchers + agent types are NOT in it: each launch hands over the database revision it was planned
+# from, and the engine config is rebuilt from FILE + that revision — refused unless every launcher's command is on
+# COMMANDS, this host's allowlist (config/busyyaks.yml launch.commands, a host file: the containers mount it read-only,
+# and no revision written from the dashboard can widen it).
+BOARD_FILE = Busyyaks::AgentSettings.file_hash(File.join(ROOT, "config/kanban.yml")) # a broken file fails at start
+COMMANDS = begin
+  Busyyaks::AgentSettings.commands!(YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml")).dig("launch", "commands"))
+rescue Busyyaks::AgentSettings::Error => e
+  abort "config/busyyaks.yml: #{e.message}"
 end
 
-# Does a `claude` in the pane's tree run with --remote-control <name>?
+# The engine config a launch runs on: FILE + the revision the request carries, every command allowlisted.
+def board_config(settings)
+  doc = settings.is_a?(Hash) ? settings["doc"] : nil
+  raise ArgumentError, "settings {id, doc} are required: the agent settings revision the launch was planned from" if doc.nil?
+
+  Busyyaks::AgentSettings.allowed!(Busyyaks::AgentSettings.host(BOARD_FILE, doc), COMMANDS)
+rescue AgentsKanban::ConfigError, AgentsKanban::Invalid, Busyyaks::AgentSettings::Error => e
+  raise ArgumentError, "agent settings revision #{settings.is_a?(Hash) ? settings['id'] : '?'}: #{e.message}"
+end
+
+# The pane's process tree, read from /proc: does a `claude` in it run with --remote-control <name>?
 def remote_control_running?(pane_pid, name)
   tree(pane_pid).any? do |pid|
     argv = (File.read("/proc/#{pid}/cmdline") rescue "").split("\0")
@@ -207,7 +208,7 @@ def dialog_on_screen(name)
   text.lines.map(&:rstrip).reject(&:empty?).last(3).join(" · ")[0, 300]
 end
 
-# Claude coming up after `tmux new-session`: every second, `up` (pane_pid → true) is asked of the
+# The pane's agent coming up after `tmux new-session` (both kinds): every second, `up` (pane_pid → true) is asked of the
 # pane's process — the `bash -ic "<cmd>; exec bash"` — until it holds (→ nil), or the start failed (→ the reason, with
 # the real elapsed seconds and the pane's last lines):
 #   - the command exited: the pane's process has had NO child for BARE_CHECKS checks in a row — `<cmd>` is over and
@@ -255,7 +256,7 @@ def pane_tail(name)
   tail.empty? ? "the pane is empty" : tail
 end
 
-# `claude --remote-control <name>` in the pane's tree, on the launch's start clock
+# claude_code: `claude --remote-control <name>` in the pane's tree
 def confirm_remote_control(name, clock)
   why = await_start(name, clock, "claude --remote-control #{name}", ->(pid) { remote_control_running?(pid, name) })
   why ? { remote_control: "failed", reason: why } : { remote_control: "on", remote_control_name: name }
@@ -300,11 +301,52 @@ def name_op(req)
   { ok: true, session: session_name(base) }
 end
 
+# The pane's process tree, read from /proc: does a process in it run `command` (its argv's program or script)?
+def command_running?(pane_pid, command)
+  tree(pane_pid).any? do |pid|
+    argv = (File.read("/proc/#{pid}/cmdline") rescue "").split("\0")
+    argv.first(2).any? { |a| File.basename(a) == command } # a program, or the script an interpreter runs (hermes: python)
+  end
+end
+
+def tree(root)
+  kids = Hash.new { |h, k| h[k] = [] }
+  Dir.glob("/proc/[0-9]*/stat").each do |f|
+    st = File.read(f) rescue next
+    kids[st.sub(/\A.*\) /m, "").split[1].to_i] << f[%r{/proc/(\d+)/}, 1].to_i
+  end
+  out = []
+  todo = [root]
+  until todo.empty?
+    pid = todo.shift
+    out << pid
+    todo.concat(kids[pid])
+  end
+  out
+end
+
+# A kind with no remote control (hermes): its command running in the pane's tree
+def confirm_process(name, command, clock)
+  why = await_start(name, clock, "#{command} process", ->(pid) { command_running?(pid, command) })
+  why ? { process: "failed", reason: why } : { process: "on", process_name: command }
+end
+
+# What this host checks after a start, per launcher KIND (the engine's Launch::KINDS; a kind missing here refuses the
+# launch): claude_code = Claude Code's folder-trust prompt answered (LaunchTrust) + `claude --remote-control <name>`
+# up; hermes = no trust prompt, no remote control: its command running in the pane.
+HOST_KINDS = {
+  "claude_code" => { trust: true, up: ->(name, _launcher, clock) { confirm_remote_control(name, clock) },
+                     up?: ->(r) { r[:remote_control] == "on" }, },
+  "hermes" => { trust: false, up: ->(name, launcher, clock) { confirm_process(name, launcher.command, clock) },
+                up?: ->(r) { r[:process] == "on" }, },
+}.freeze
+
 # The start of a session the engine already registered (Api#launch → this): the type's argv from the board config
-# (the prompt — the type's template rendered with the engine's values + {dir}, which only this side knows — as the
-# positional prompt, `--remote-control <session>` still LAST), in a detached tmux session named as the engine said.
+# (the prompt — the type's template rendered with the engine's values + {dir}, which only this side knows — passed
+# the way the launcher's kind takes it: claude_code positional with `--remote-control <session>` still LAST, hermes
+# `-q`), in a detached tmux session named as the engine said.
 def launch(req)
-  cfg = BOARD_CONFIG
+  cfg = board_config(req["settings"])
   dir = host_dir(req["path"])
   name = req["session"].to_s
   raise ArgumentError, "session must match the tmux name alphabet" unless name.match?(AgentsKanban::Launch::SESSION)
@@ -314,8 +356,12 @@ def launch(req)
   vars = Busyyaks::LauncherRules.launch_vars(req["vars"], dir: dir) # the engine's keys; {dir} is ours
   begin
     t = cfg.agent_type(req["type"])
+    launcher = cfg.launcher(t.launcher!(req["launcher"]))
+    host_kind = HOST_KINDS.fetch(launcher.kind) do
+      raise ArgumentError, "launcher #{launcher.key}: kind #{launcher.kind} has no start check on this host (#{HOST_KINDS.keys.join(', ')})"
+    end
     prompt = t.prompt && AgentsKanban::Launch.render(t.prompt, **vars)
-    argv = AgentsKanban::Launch.argv(cfg, type: t.key, launcher: req["launcher"], session: name, extra: prompt ? [prompt] : [])
+    argv = AgentsKanban::Launch.argv(cfg, type: t.key, launcher: launcher.key, session: name, prompt: prompt)
   rescue AgentsKanban::Invalid => e
     raise ArgumentError, e.message
   end
@@ -331,18 +377,18 @@ def launch(req)
   raise "tmux failed: #{err.strip}" unless ok
 
   clock = start_clock
-  trust = accept_trust(name, refusal, clock) || {}
-  rc = confirm_remote_control(name, clock)
-  up = rc[:remote_control] == "on"
+  trust = host_kind[:trust] ? accept_trust(name, refusal, clock) || {} : {}
+  rc = host_kind[:up].call(name, launcher, clock)
+  up = host_kind[:up?].call(rc)
   # a dialog on a claude that is up (its permission / question prompt): a live session — kept (below), the dialog
   # reported to the operator as the result's verdict + reason (information only: it never decides the keep)
   waiting = up ? dialog_on_screen(name) : nil
-  rc = rc.merge(remote_control: "failed", reason: "waiting on a dialog: #{waiting}") if waiting
-  puts "#{Time.now.iso8601} launched #{name} (#{t.key}/#{req['launcher']}) in #{dir} · trust #{trust[:trust] || 'not asked'} · remote control #{rc[:remote_control]}#{rc[:reason] ? " (#{rc[:reason]})" : ''}"
-  # no `claude --remote-control <name>` came up (it refused to start, exited, the pane is a bare shell): the launch
-  # FAILED — the session is killed and refused, so the engine ends the registration and releases what it adopted
-  # (never a registered owner nobody runs). Only a running claude is kept: a pane that merely LOOKS like a dialog with
-  # no claude process is a failed start.
+  rc = rc.merge(remote_control: "failed", reason: "waiting on a dialog: #{waiting}") if waiting && rc[:remote_control] == "on"
+  puts "#{Time.now.iso8601} launched #{name} (#{t.key}/#{launcher.key}, #{launcher.kind}) in #{dir} · trust #{trust[:trust] || 'not asked'} · #{rc.except(:reason).map { |k, v| "#{k} #{v}" }.join(' · ')}#{rc[:reason] ? " (#{rc[:reason]})" : ''}"
+  # the kind's start check failed (claude: no `claude --remote-control <name>` came up — it refused to start, exited,
+  # the pane is a bare shell; hermes: no hermes process): the launch FAILED — the session is killed and refused, so
+  # the engine ends the registration and releases what it adopted (never a registered owner nobody runs). Only a
+  # running agent is kept: a pane that merely LOOKS like a dialog with no agent process is a failed start.
   unless up
     _o, kerr, killed = tmux("kill-session", "-t", "=#{name}")
     gone = killed || !tmux("has-session", "-t", "=#{name}")[2]
@@ -350,7 +396,7 @@ def launch(req)
     error += " — and kill-session failed (#{kerr.strip}): the tmux session #{name} is still running" unless gone
     return { ok: false, error: error, status: 422 }
   end
-  { ok: true, session: name, type: t.key, launcher: t.launcher!(req["launcher"]), dir: dir, prompt: !prompt.nil?, **trust, **rc }
+  { ok: true, session: name, type: t.key, launcher: launcher.key, kind: launcher.kind, dir: dir, prompt: !prompt.nil?, **trust, **rc }
 end
 
 NAME = /\A[A-Za-z0-9][A-Za-z0-9._-]{0,99}\z/

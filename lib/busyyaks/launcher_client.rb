@@ -39,14 +39,19 @@ module Busyyaks
 
     # The engine's LAUNCH port (AgentsKanban::Api launcher:): a free session name for the board, then the start of the
     # session the engine registered — the host renders the type's prompt ({dir} is the host's) and confirms Remote Control.
-    module LaunchPort
-      module_function
+    # One per api, holding the agent settings revision {id, doc} that api's config was built from: the plan and the
+    # registration are that revision's, so the start is too — bin/launcher rebuilds the engine config from it and
+    # refuses a command that is not on the host allowlist (config/busyyaks.yml launch.commands).
+    class LaunchPort
+      def initialize(revision)
+        @revision = revision
+      end
 
       def name(project:, base:) = LauncherClient.call(op: "name", base: base)["session"]
 
       def start(session:, project:, type:, launcher:, argv:, prompt_template:, vars:)
         LauncherClient.call(op: "launch", path: project[:path], session: session, type: type, launcher: launcher, argv: argv,
-                            prompt_template: prompt_template, vars: vars)
+                            prompt_template: prompt_template, vars: vars, settings: @revision)
       end
     end
 

@@ -7,7 +7,7 @@ require "busyyaks/kanban"
 # kills the notifier, the launcher and the MCP spawn path, so pings and the watchdog stop. Caught here, before deploy.
 class KanbanConfigTest < Minitest::Test
   def test_committed_config_loads_with_the_vendored_engine
-    cfg = AgentsKanban::HostConfig.load(Busyyaks::Kanban::CONFIG_PATH)
+    cfg = Busyyaks::Kanban.config # the file + the suite's agent settings revision (test/fixtures/agents.yml)
     assert_equal %w[lead worker team plain], cfg.agent_type_keys
     assert_equal %w[gate], cfg.agent_type("lead").takes
     assert_equal %w[queued working review gate], cfg.agent_type("worker").spawns_for

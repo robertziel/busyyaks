@@ -27,4 +27,20 @@ describe("launchFlash", () => {
     expect(f.ok).toBe(false);
     expect(f.text).toContain(`TRUST PROMPT LEFT FOR YOU: ${why}`);
   });
+
+  it("a hermes start says it runs with no remote control; a failed one is not ok", () => {
+    const hermes = (process: "on" | "failed") =>
+      ({
+        session: "g_r_plain",
+        type: "plain",
+        launcher: "hermes",
+        agent: "claude-g_r_plain",
+        adopted: [],
+        result: { kind: "hermes", process, process_name: "hermes", reason: "no hermes process after 12s" },
+      }) as unknown as LaunchResult;
+    expect(launchFlash(hermes("on"))).toMatchObject({ ok: true });
+    expect(launchFlash(hermes("on")).text).toContain("hermes running · no remote control");
+    expect(launchFlash(hermes("failed")).ok).toBe(false);
+    expect(launchFlash(hermes("failed")).text).toContain("START CHECK FAILED: no hermes process after 12s");
+  });
 });

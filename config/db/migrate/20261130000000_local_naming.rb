@@ -2,6 +2,7 @@
 
 require_relative "../../../vendor/agents_kanban/ruby/lib/agents_kanban/schema"
 require_relative "../../../vendor/agents_kanban/ruby/lib/agents_kanban/host_config"
+require_relative "../../../lib/busyyaks/agent_settings" # the file is read without its agent part
 require_relative "../../../vendor/agents_kanban/ruby/lib/agents_kanban/board_repo"
 
 # The private side is named "local", not "mirror" (card #249):
@@ -35,7 +36,7 @@ ROM::SQL.migration do
     # the label of deploy_check changes only on a board that has the renamed columns (a key named deploy_check on
     # another board is that board's own column)
     cols["deploy_check"] = { "label" => "Local: Deploy check" }
-    host = AgentsKanban::HostConfig.load(ENV.fetch("KANBAN_CONFIG"))
+    host = Busyyaks::AgentSettings.migration_host(ENV.fetch("KANBAN_CONFIG"))
     repo = AgentsKanban::BoardRepo.new(self, tables: AgentsKanban::Schema.tables(""), host: host, known: ->(_) { true })
     keyed = self[:board_columns].where(key: cols.keys - ["deploy_check"]).select_map(:project_slug).uniq
     stale = keyed.empty? || host.review_loop.nil? ? [] : host.review_loop.columns & cols.keys
@@ -66,7 +67,7 @@ ROM::SQL.migration do
       "local_merged_pr" => { "key" => "mirror_merged", "label" => "Mirror merged" },
     }
     cols["deploy_check"] = { "label" => "Local deploy check" }
-    host = AgentsKanban::HostConfig.load(ENV.fetch("KANBAN_CONFIG"))
+    host = Busyyaks::AgentSettings.migration_host(ENV.fetch("KANBAN_CONFIG"))
     repo = AgentsKanban::BoardRepo.new(self, tables: AgentsKanban::Schema.tables(""), host: host, known: ->(_) { true })
     keyed = self[:board_columns].where(key: cols.keys - ["deploy_check"]).select_map(:project_slug).uniq
     stale = keyed.empty? || host.review_loop.nil? ? [] : host.review_loop.columns & cols.keys

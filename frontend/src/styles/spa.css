@@ -191,9 +191,6 @@ div.launch {
     flex: 1 1 auto;
     text-align: center;
   }
-  .top .in form {
-    margin-left: auto;
-  }
 }
 
 /* project icons (components/ProjectIcon.tsx) */
@@ -288,18 +285,84 @@ a.termbadge:hover {
   background: color-mix(in srgb, var(--vivid-red) 14%, transparent);
 }
 
-/* the skin switch (Skin.tsx): a compact pill in the header, never a full-width field */
-.top .sel:has(> .skin-switch) {
-  width: auto;
+/* the settings cog (Settings.tsx): always the header's last item, its menu drops from the right edge */
+.top .settings {
+  position: relative;
+  margin-left: auto;
 }
-.top .sel-btn.skin-switch {
-  width: auto;
-  min-width: 0;
-  gap: 8px;
-  padding: 0.3rem 0.75rem;
-  border-radius: var(--radius-pill);
+.top .settings-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.top .settings-toggle[aria-expanded="true"] {
+  color: var(--ink);
+  background: var(--mat-fill-2);
+}
+.settings-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  min-width: 220px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius-band);
+  background: var(--panel); /* opaque: the agents rail's text never shows through */
+  border: 0.5px solid var(--line-strong);
+  box-shadow: var(--shadow-card);
+}
+.settings-menu[hidden] {
+  display: none;
+}
+.settings-who {
+  color: var(--ink-faint);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.settings-label {
+  color: var(--ink-dim);
+  font-weight: 500;
+}
+.settings-menu form .btn {
+  width: 100%;
+}
+/* the skin choice inside it: a segmented control like the nav */
+.seg.skin-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-ctl);
+  background: var(--mat-fill);
+}
+.seg.skin-switch button {
+  font: inherit;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--radius-ctl-sm);
+  padding: 0.2rem 0.65rem;
   font-weight: 500;
   color: var(--ink-dim);
+}
+.seg.skin-switch button:hover {
+  color: var(--ink);
+  background: var(--mat-fill-2);
+}
+.seg.skin-switch button.on {
+  background: var(--mat-thumb);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: var(--shadow-thumb);
 }
 
 /* home: per-day figures + merged PRs */
@@ -385,4 +448,106 @@ table.daily tfoot td {
     padding-left: 6px;
     padding-right: 6px;
   }
+}
+
+/* the cog menu's link to Settings → Agents & launchers */
+.settings-link {
+  font-weight: 500;
+}
+
+/* /settings — Agents & launchers (routes/Settings.tsx) */
+.as-meta code {
+  font-size: 12px;
+}
+.as-stale {
+  color: var(--vivid-red);
+}
+.as-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0;
+}
+.as-section {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.as-section h2 {
+  margin: 0;
+}
+.as-item {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px 14px;
+  margin: 0;
+  padding: 12px;
+  border: 0.5px solid var(--line-strong);
+  border-radius: var(--radius-band);
+  min-width: 0;
+}
+.as-item legend {
+  font-weight: 600;
+  padding: 0 4px;
+}
+.as-item label,
+.as-item .as-wide {
+  display: grid;
+  gap: 4px;
+  color: var(--ink-dim);
+  font-weight: 500;
+  min-width: 0;
+}
+.as-item .as-wide {
+  grid-column: 1 / -1;
+}
+.as-item .as-inline {
+  display: block;
+}
+.as-item input:not([type="checkbox"]),
+.as-item select,
+.as-item textarea {
+  font: inherit;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.3rem 0.5rem;
+  border: 0.5px solid var(--line-strong);
+  border-radius: var(--radius-ctl-sm);
+  background: var(--panel);
+  color: var(--ink);
+}
+.as-item textarea {
+  font-family: "Fragment Mono", ui-monospace, monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+.as-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-weight: 400;
+  color: var(--ink);
+}
+.as-checks label {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.as-item > .btn {
+  justify-self: start;
+  align-self: end;
+}
+table.as-preview {
+  width: 100%;
+  table-layout: fixed;
+}
+table.as-preview td code {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+table.as-preview th:nth-child(1),
+table.as-preview th:nth-child(2) {
+  width: 18%;
 }
