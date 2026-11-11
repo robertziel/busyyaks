@@ -5,76 +5,7 @@ priorities: [high, medium, low]
 label_colors: [green, yellow, orange, red, purple, blue, teal, pink, gray]
 system_author: busyyaks
 attachment_url_prefix: /api/attachments
-# two launchers, so the suite exercises the launcher menu, the follow rule and the via_shell (`bash -ic`) path:
-# `fullclaude` = claude + flags, `localclaude` = a profile function standing for a gateway launcher
-launchers:
-  - { key: fullclaude, label: fullclaude, command: claude, args: ["--permission-mode", "bypassPermissions"], via_shell: false }
-  - { key: localclaude, label: localclaude, command: localclaude, args: [], via_shell: true }
-# the agent types the Launch bar offers (one split pill each; the menu = the type's launchers). A launch registers
-# the session with the engine BEFORE tmux starts it: a `lead` adopts the project's ownerless cards in the columns of
-# the TYPES in `takes` (gate = the columns that wait for the operator: Human Check / Ready to merge, the local
-# boards' Human review / Local: Deploy check / Awaiting merge; the work types are the worker's spawns_for) by rule — no
-# prompt asks it to claim; the prompt's {cards} tells it what it owns. Workflow v3 (card #233): a question for the
-# operator is the card's needs_operator FLAG (kanban_ask), never a column — the card keeps its place.
-# Caps: none (0 = no cap) except one lead per board.
-#
-agent_types:
-  - key: lead
-    label: Launch
-    launchers: [fullclaude, localclaude]
-    model: null   # stays null: a --model would override localclaude's gateway model (Claude takes the LAST --model) — test/unit/no_kanban_code_test.rb
-    prompt: |
-      Test {type} session for {slug} ({dir}): tmux {session}, board name {agent}, cards {cards}.
-    agent_name: "claude-{session}"
-    session_name: "{slug}_teamlead"
-    takes: [gate]
-    max: 0
-    # ONE lead per board, always: two leads adopt the same cards (seen twice). Not a capacity cap.
-    max_per_project: 1
-  # ONE session per card: a card ownerless in a work column — entering the queued column (To do), or LOST later (its
-  # owner gone: a watchdog release, the operator's Approve landing it in a review column with nobody left to carry on)
-  # — gets a new worker session started for it alone by the engine (spawns_for, by column TYPE). A flagged card
-  # (needs_operator / blocked_external) waits for the answer first. The lead never takes these (it takes the gates).
-  # Caps below; a full cap = the card waits, its note says why.
-  - key: worker
-    label: Worker
-    launchers: [fullclaude, localclaude]
-    # --model on its launch → the collector reads it → the card face shows it; none under localclaude: a
-    # --model would override the gateway's model (Claude takes the LAST --model)
-    model: { fullclaude: opus, localclaude: null }
-    # the board's running lead decides the launcher: a lead started on localclaude → its workers run localclaude; no lead running → fullclaude
-    launcher_follows: lead
-    spawn_launcher: fullclaude   # no lead to follow → fullclaude (the operator's explicit choice, no code default)
-    prompt: |
-      Test {type} session for {slug} ({dir}): tmux {session}, board name {agent}, cards {cards}.
-    agent_name: "worker-{session}"
-    session_name: "{slug}_worker"
-    takes: []
-    spawns_for: [queued, working, review, gate]   # gate: only an APPROVED card (Awaiting merge / Ready to merge)
-    max: 0
-    max_per_project: 0
-  - key: team
-    label: Sub team
-    launchers: [fullclaude, localclaude]
-    model: { fullclaude: opus, localclaude: null }   # none under localclaude (see worker)
-    launcher_follows: lead   # a sub team runs the board's lead's launcher; another one asked for → 422
-    prompt: |
-      Test {type} session for {slug} ({dir}): tmux {session}, board name {agent}, cards {cards}.
-    agent_name: "team-{session}"
-    session_name: "{slug}_team"
-    takes: []
-    max: 0
-    max_per_project: 0
-  - key: plain
-    label: Plain
-    launchers: [fullclaude, localclaude]
-    model: null   # same: localclaude
-    prompt: null
-    agent_name: "claude-{session}"
-    session_name: "{slug}"
-    takes: []
-    max: 0
-    max_per_project: 0
+# launchers / agent_types: test/fixtures/agents.yml (the database holds them)
 # registered agent sessions running at once on this host, every type and project together (the sidebar shows
 # "running / cap"); a launch or kanban_register beyond it is refused with who runs
 concurrency:

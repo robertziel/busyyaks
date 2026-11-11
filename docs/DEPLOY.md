@@ -155,6 +155,49 @@ rm -rf data/run                                   # the old socket dir: nothing 
 | dialog answers | the launcher's `answer` op presses a key on any dialog a session shows — Claude Code's folder-trust prompt included — when the caller sends the dialog's current hash, which its `dialog` op returns. The web UI calls it for the operator only, but any client of the launcher socket (web · mcp · notifier, and code running in them) can call both ops: a prompt "left for the operator" is not a boundary against those containers. The socket mount is the boundary (§ git on untrusted repos). Open |
 | a hung git | a repo whose `.git` holds a FIFO (or anything git blocks reading) hangs the git that reads it, with no per-git timeout: the scanner's whole scan, a `scan_now` or churn in mcp, and the request in web (the kanban card links) that reads that repo. Open until repos are read with a library instead of the git CLI |
 
+## Agent settings (launchers + agent types) and the command allowlist
+
+the launchers (the commands that start an agent session) and the agent types live in the database (table
+`agent_settings`, one row per saved revision, the newest is current), edited on **Settings → Agents & launchers**
+(the header's cog). `config/kanban.yml` no longer holds them — a file that still has `launchers` / `agent_types` stops
+the boot with the steps below.
+
+- **Allowlist** — `config/busyyaks.yml` `launch.commands` (required): the whole INVOCATIONS a launcher may be on this
+  host, each exactly `{kind, command, args, via_shell}`, e.g.
+  `- { kind: claude_code, command: claude, args: ["--permission-mode", "bypassPermissions"], via_shell: false }`.
+  A launcher must equal one entry: the Settings page offers only these (a dashboard user picks one and names it), a
+  save of anything else is refused (422), and `bin/launcher` refuses to start one (it rebuilds the engine config from
+  the revision each launch carries and checks it again). So no dashboard user can add an argument you did not list —
+  a `--settings` with hooks, an `--mcp-config`, a permission mode. A host file, read-only in the containers. Never list
+  a shell or an interpreter (`bash`, `sh`, `python`) as a command. What stays editable on the page is the model id
+  (the engine's model alphabet: no option can hide in it) and the prompt, which is ONE argv word and refused when it
+  starts with `-` (as a template and as rendered), so it cannot become an option of the command either: it is what
+  the session is told, the reach a card comment to that session already has. After an edit:
+  `deploy/install-launcher.sh` (the launcher reads it at start) and restart web.
+- **Kinds** — `claude_code` (Claude Code: `--model`, the prompt, `--remote-control <session>` last; the launcher checks
+  that process came up) or `hermes` (Hermes Agent, args `[chat]`: `-m <model>`, `-q <prompt>`; no remote control —
+  the launcher checks the pane runs the command, so a hermes launcher must not be `via_shell`).
+- **Moving an existing deployment** — ONE maintenance window: the old code refuses the new `launch.commands` key and
+  the new code refuses the old `launchers` / `agent_types` keys, so nothing may restart between the edits and the new
+  image being up. In this order:
+  1. back up the database (§ The database) and both files:
+     `cp config/kanban.yml data/backups/kanban-pre-agent-settings.yml; cp config/busyyaks.yml data/backups/busyyaks-pre-agent-settings.yml`;
+  2. build the new image (`docker build -t busyyaks:local .`) — nothing restarts yet;
+  3. stop what starts sessions: `docker compose stop notifier` and `systemctl --user stop busyyaks-launcher`;
+  4. add `kind: claude_code` to each launcher in `data/backups/kanban-pre-agent-settings.yml` (the copy that gets imported);
+     add `launch.commands` to `config/busyyaks.yml`: one entry per launcher in that copy, its exact
+     `{kind, command, args, via_shell}`; delete `launchers:` and `agent_types:` (with their comments) from
+     `config/kanban.yml`;
+  5. `docker compose up -d --no-build web` (it migrates: the first revision is the template, plain `claude`), then
+     `docker compose exec -T web bin/agent-settings import < data/backups/kanban-pre-agent-settings.yml`;
+  6. `docker compose up -d --no-build mcp scanner github notifier` and `deploy/install-launcher.sh` (the launcher on
+     the new code); Settings → Agents & launchers shows the imported revision and the argv of every type × launcher.
+- **Rollback** — inside the window, before step 6: restore the two backed-up files and the database backup, then
+  `docker compose up -d` the previous image and `deploy/install-launcher.sh` from the previous checkout. After the
+  window: `bin/agent-settings show > data/backups/agents-<date>.yml` first (the launchers + agent types as YAML) — the
+  migration's `down` drops the table and every revision; put them back into `config/kanban.yml` (without `kind`, which
+  the old engine refuses) and drop `launch.commands` from `config/busyyaks.yml`.
+
 ## Folder trust (the launcher)
 
 The launcher answers Claude Code's "Yes, I trust this folder" prompt, which lets the repo's `.claude` settings, hooks

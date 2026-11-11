@@ -3,6 +3,7 @@
 require "json"
 require_relative "../../../vendor/agents_kanban/ruby/lib/agents_kanban/schema"
 require_relative "../../../vendor/agents_kanban/ruby/lib/agents_kanban/host_config"
+require_relative "../../../lib/busyyaks/agent_settings" # the file is read without its agent part
 require_relative "../../../vendor/agents_kanban/ruby/lib/agents_kanban/board_repo"
 
 # agents_kanban Schema v8 + workflow v3 (card #233). The column types become the fixed set parked · queued · working ·
@@ -40,7 +41,7 @@ ROM::SQL.migration do
     }
     AgentsKanban::Schema.migrate!(self, prefix: "", to: 8)
     root = File.expand_path("../../..", __dir__)
-    host = AgentsKanban::HostConfig.load(ENV.fetch("KANBAN_CONFIG"))
+    host = Busyyaks::AgentSettings.migration_host(ENV.fetch("KANBAN_CONFIG"))
     v3 = JSON.parse(File.read(File.join(root, "vendor/agents_kanban/fixtures/boards/mirror_v3.board.json")))
     repo = AgentsKanban::BoardRepo.new(self, tables: AgentsKanban::Schema.tables(""), host: host, known: ->(_) { true })
     keys_of = self[:board_columns].all.group_by { |c| c[:project_slug] }.transform_values { |cs| cs.map { |c| c[:key] } }

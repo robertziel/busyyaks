@@ -12,18 +12,28 @@ grace = Integer(ENV.fetch("WATCHDOG_GRACE_SECONDS"))
 $stdout.sync = true
 Busyyaks::Kanban.watch_fits!(watch: watch_every, interval: interval) # the watch pass keeps the gated cards' CI requests inside the poll window
 n = Busyyaks::Kanban.notifier(grace: grace)
+n_rev = Busyyaks::Kanban.config_revision[:id]
 last_watch = 0
 puts "notifier up: deliver every #{interval}s, watchdog every #{watch_every}s, grace #{grace}s"
 loop do
+  # a newer agent settings revision (Settings → Agents & launchers): the notifier's store, api and spawn
+  # pass run on the engine config built from it from this turn on
+  rev = Busyyaks::Kanban.config_revision[:id]
+  if rev != n_rev
+    n = Busyyaks::Kanban.notifier(grace: grace)
+    n_rev = rev
+    puts "notifier: agent settings revision #{rev}"
+  end
   n.deliver
   if Time.now.to_i - last_watch >= watch_every
-    # Re-read config/kanban.yml with the vendored engine every watch pass (Kanban.config is memoized at boot, the host
-    # launcher reads it fresh): a config the engine refuses stops the notifier loudly instead of leaving pings and the
-    # watchdog silently dead.
+    # Re-read config/kanban.yml with the vendored engine every watch pass (the file part is memoized at boot), with the
+    # current agent settings revision: a config the engine refuses stops the notifier loudly instead of leaving pings
+    # and the watchdog silently dead.
     begin
-      AgentsKanban::HostConfig.load(Busyyaks::Kanban::CONFIG_PATH)
+      Busyyaks::AgentSettings.host(Busyyaks::AgentSettings.file_hash(Busyyaks::Kanban::CONFIG_PATH),
+                                   Busyyaks::AgentSettings.current(Busyyaks::Kanban.db)[:doc])
     rescue StandardError => e
-      warn "notifier: config/kanban.yml refused by the vendored engine: #{e.class}: #{e.message}"
+      warn "notifier: config/kanban.yml + agent settings refused by the vendored engine: #{e.class}: #{e.message}"
       exit 1
     end
     n.watch

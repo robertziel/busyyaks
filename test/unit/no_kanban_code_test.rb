@@ -104,12 +104,13 @@ class NoKanbanCodeTest < Minitest::Test
     refute_empty cfg["theme"]
   end
 
-  # config/kanban.example.yml is what a stranger copies (README Quickstart): it loads on the vendored engine and carries
-  # nothing of one operator's box or workflow — one plain `claude` launcher in Claude Code's default permission mode,
-  # no model names, prompts that name no column (an agent reads a card's transitions from kanban_card).
+  # config/kanban.example.yml is what a stranger copies (README Quickstart) and config/agents.template.yml the agent
+  # settings a fresh database starts with: together they load on the vendored engine and carry nothing of
+  # one operator's box or workflow — one plain `claude` launcher in Claude Code's default permission mode, no model
+  # names, prompts that name no column (an agent reads a card's transitions from kanban_card).
   def test_the_example_config_loads_and_is_generic
     path = File.join(ROOT, "config/kanban.example.yml")
-    ex = AgentsKanban::HostConfig.load(path)
+    ex = Busyyaks::AgentSettings.host(Busyyaks::AgentSettings.file_hash(path), Busyyaks::AgentSettings.template)
     assert_equal [["claude", "claude", [], false]], ex.launchers.map { |l| [l.key, l.command, l.args, l.via_shell] }
     assert_equal %w[lead worker team plain], ex.agent_type_keys
     assert(ex.agent_types.all? { |t| t.launchers == ["claude"] && t.model.nil? }, "one launcher, no model names")
@@ -117,7 +118,9 @@ class NoKanbanCodeTest < Minitest::Test
     # a repo without CI must work: no CI URL demanded at handoff, no green-checks gate on approval (both commented options)
     assert_equal [false, nil], [ex.handoff.requires_ci_url, ex.approval]
     assert_nil ex.review_loop, "no review-loop columns of one operator's board (a commented option)"
-    uncommented = File.readlines(path).reject { |l| l.lstrip.start_with?("#") }.join
+    uncommented = [path, Busyyaks::AgentSettings::TEMPLATE].map do |f|
+      File.readlines(f).reject { |l| l.lstrip.start_with?("#") }.join
+    end.join
     forbidden = /bypassPermissions|localclaude|fullclaude|\bopus\b|\bsonnet\b|Local:|local board|Deployed locally|
                  jenkins|qa-cookie|https?:\/\/|Ready to merge|Human Check|In progress|local_(?:agent|author|human|merged)|
                  Awaiting merge|Human input/xi

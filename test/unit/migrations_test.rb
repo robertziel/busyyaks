@@ -69,7 +69,7 @@ class MigrationsTest < Minitest::Test
   def coding = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/coding.board.json", __dir__)))
 
   def store
-    host = AgentsKanban::HostConfig.load(Busyyaks::Kanban::CONFIG_PATH)
+    host = Busyyaks::AgentSettings.migration_host(Busyyaks::Kanban::CONFIG_PATH)
     AgentsKanban::Store.new(@db, config: host, markdown: Busyyaks::Kanban.markdown,
                                  boards: ->(s) { @db[:projects].where(slug: s).any? }, ci: Busyyaks::Kanban.ci_port(@db))
   end
@@ -296,7 +296,7 @@ class MigrationsTest < Minitest::Test
     migrate(BEFORE_LOCAL)
     %w[m/p plain].each { |s| project(s) }
     store.board_of("plain")
-    host = AgentsKanban::HostConfig.load(Busyyaks::Kanban::CONFIG_PATH)
+    host = Busyyaks::AgentSettings.migration_host(Busyyaks::Kanban::CONFIG_PATH)
     repo = AgentsKanban::BoardRepo.new(@db, tables: AgentsKanban::Schema.tables(""), host: host, known: ->(_) { true })
     repo.save("m/p", v3, by: "op", cards_in: ->(*) { {} })
     @db[:projects].where(slug: "m/p").update(mirror_mode: "own", mirror_repo: "https://github.com/o/p_local.git")
@@ -332,7 +332,7 @@ class MigrationsTest < Minitest::Test
     migrate(BEFORE_LOCAL)
     project("m/p")
     store.board_of("m/p")
-    host = AgentsKanban::HostConfig.load(Busyyaks::Kanban::CONFIG_PATH)
+    host = Busyyaks::AgentSettings.migration_host(Busyyaks::Kanban::CONFIG_PATH)
     AgentsKanban::BoardRepo.new(@db, tables: AgentsKanban::Schema.tables(""), host: host, known: ->(_) { true })
                            .save("m/p", v3, by: "op", cards_in: ->(*) { {} })
     e = assert_raises(Sequel::Error) { with_old_review_loop { migrate } }

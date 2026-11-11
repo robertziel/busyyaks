@@ -3,6 +3,7 @@
 require "json"
 require_relative "../../../vendor/agents_kanban/ruby/lib/agents_kanban/schema"
 require_relative "../../../vendor/agents_kanban/ruby/lib/agents_kanban/host_config"
+require_relative "../../../lib/busyyaks/agent_settings" # the file is read without its agent part
 require_relative "../../../vendor/agents_kanban/ruby/lib/agents_kanban/board_repo"
 
 # agents_kanban Schema v6: the BOARDS move into the database — `boards` / `board_columns` /
@@ -21,7 +22,7 @@ ROM::SQL.migration do
   up do
     AgentsKanban::Schema.migrate!(self, prefix: "", to: 6)
     root = File.expand_path("../../..", __dir__)
-    host = AgentsKanban::HostConfig.load(ENV.fetch("KANBAN_CONFIG"))
+    host = Busyyaks::AgentSettings.migration_host(ENV.fetch("KANBAN_CONFIG"))
     template = JSON.parse(File.read(File.join(root, "vendor/agents_kanban/fixtures/boards/coding.board.json")))
     repo = AgentsKanban::BoardRepo.new(self, tables: AgentsKanban::Schema.tables(""), host: host, known: ->(_) { true })
     report = repo.seed!(template: template, projects: self[:projects].select_map(:slug), by: "migration 20261116000000")

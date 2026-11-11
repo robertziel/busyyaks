@@ -14,13 +14,16 @@ class DeployUnitsTest < Minitest::Test
   end
 
   # A launcher that re-read config/kanban.yml per launch against the engine it loaded at start failed
-  # every spawn once the checkout gained a key the old engine did not know. Config and engine are read together, once.
-  def test_launcher_reads_the_board_config_once_at_start
+  # every spawn once the checkout gained a key the old engine did not know. The file and engine are read together,
+  # once; the agent part is the revision each launch carries, allowlisted by launch.commands read at start.
+  def test_launcher_reads_the_board_config_file_once_at_start
     src = File.read(File.expand_path("../../bin/launcher", __dir__))
-    loads = src.scan(/HostConfig\.load\(/).size
-    assert_equal 1, loads
-    assert_match(/^BOARD_CONFIG = AgentsKanban::HostConfig\.load\(/, src)
-    refute_match(/\bdef board_config\b/, src)
+    refute_match(/HostConfig\.load\(/, src)
+    assert_equal 1, src.scan(/AgentSettings\.file_hash\(/).size
+    assert_match(/^BOARD_FILE = Busyyaks::AgentSettings\.file_hash\(/, src)
+    assert_match(/^COMMANDS = begin/, src)
+    assert_includes src, "Busyyaks::AgentSettings.allowed!(Busyyaks::AgentSettings.host(BOARD_FILE, doc), COMMANDS)"
+    assert_includes src, 'cfg = board_config(req["settings"])'
   end
 
   # The socket goes through PrivateSocket.bind (test/unit/private_socket_test.rb); .env through the one reader.

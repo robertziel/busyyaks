@@ -6,6 +6,16 @@ All notable changes to busyyaks are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed (breaking for hosts)
+
+- **Agent settings in the database**: the launchers and agent types left `config/kanban.yml` (a file that still has
+  `launchers` / `agent_types` stops the boot) for table `agent_settings` (one row per saved revision, newest =
+  current), edited on **Settings → Agents & launchers** (the header's new cog menu, which also holds the skin switch
+  and Sign out) or with `bin/agent-settings show | import < file`. Every launcher has a `kind`: `claude_code` (as
+  before) or `hermes` (Hermes Agent, no remote control). **Required:** `config/busyyaks.yml` `launch.commands`, the
+  host allowlist of whole invocations `{kind, command, args, via_shell}` a launcher may be — refused on save and by
+  the launcher. **Migrating:** one maintenance window, `docs/DEPLOY.md` § Agent settings.
+
 ### Changed
 
 - **Public: Create PR** on the private local-repo boards (the engine's `local_v4` board): the operator's "Open public

@@ -1,8 +1,7 @@
-// The skin switch in the header: Light (the default) · Dark · Auto (follow the system) over public/static/skin.js,
-// which owns the choice (this browser's localStorage) and puts the skin on <html data-skin> before first paint. This
-// only drives it.
+// The skin choice in the settings menu (Settings.tsx): Light (the default) · Dark · Auto (follow the system) over
+// public/static/skin.js, which owns the choice (this browser's localStorage) and puts the skin on <html data-skin>
+// before first paint. This only drives it.
 import { useEffect, useState } from "react";
-import { Select } from "./Select";
 
 export type SkinChoice = "auto" | "light" | "dark";
 type SkinApi = { choices: SkinChoice[]; get(): SkinChoice; set(c: SkinChoice): void };
@@ -30,13 +29,19 @@ export function SkinSwitch() {
     return () => document.removeEventListener("busyyaks:skin", on);
   }, []);
   return (
-    <Select
-      ariaLabel="Skin"
-      align="end"
-      className="sel-btn skin-switch"
-      value={choice}
-      options={skin.choices.map((c) => ({ value: c, label: LABELS[c] }))}
-      onChange={(v) => skin.set(v as SkinChoice)}
-    />
+    <div className="seg skin-switch" role="radiogroup" aria-label="Skin">
+      {skin.choices.map((c) => (
+        <button
+          key={c}
+          type="button"
+          role="radio"
+          aria-checked={choice === c}
+          className={choice === c ? "on" : undefined}
+          onClick={() => skin.set(c)}
+        >
+          {LABELS[c]}
+        </button>
+      ))}
+    </div>
   );
 }

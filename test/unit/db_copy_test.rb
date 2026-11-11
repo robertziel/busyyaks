@@ -76,10 +76,12 @@ class DBCopyTest < Minitest::Test
       assert_match msg, e.message
       dst = Sequel.connect(target.url, **target.options)
       begin
-        # nothing of the SQLite file committed: only what the migrations seed (the template board, project_slug "")
+        # nothing of the SQLite file committed: only what the migrations seed (the template board, project_slug ""; the
+        # first agent settings revision)
         left = (dst.tables - [:schema_migrations]).to_h do |t|
           ds = dst[t]
           ds = ds.exclude(project_slug: "") if dst.schema(t).any? { |c, _| c == :project_slug }
+          ds = ds.exclude(author: "migration 20261202000000") if t == :agent_settings
           [t, ds.count]
         end
         assert_equal({}, left.reject { |_, n| n.zero? }, "nothing committed")

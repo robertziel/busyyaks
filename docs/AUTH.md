@@ -15,7 +15,7 @@ for anything it does not accept. It answers:
 | `endpoint(verb, path, req, res)` | `GET`/`POST /auth/<path>`: your own endpoints (a token exchange, a script). Sign in with `Busyyaks::Auth.sign_in(res.session, email)`; return `true` when handled, `false` → 404. POSTs carry the page's CSRF token (`<meta name="csrf-token">`) as `X-CSRF-Token` |
 | `scripts(page)` | script URLs (`defer`) for `:login` (the sign-in page) and `:app` (the SPA shell) |
 | `csp` | extra CSP sources: `{ connect_src: [...], script_src: [...], img_src: [...] }` |
-| `sign_out?` | whether the header shows **Sign out** (`POST /logout` clears the session) |
+| `sign_out?` | whether the header's settings menu shows **Sign out** (`POST /logout` clears the session) |
 | `qa_email` | the identity `bin/qa-cookie` mints a cookie for (read from your settings, never an argument) |
 
 The smallest working example is the test suite's provider,

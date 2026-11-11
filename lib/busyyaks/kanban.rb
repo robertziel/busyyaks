@@ -8,6 +8,7 @@
 # engine code grows back here.
 require "monitor"
 require_relative "../../vendor/agents_kanban/ruby/lib/agents_kanban"
+require_relative "agent_settings"
 require_relative "launcher_client"
 require_relative "store"
 require_relative "ci_checks"
@@ -40,13 +41,47 @@ module Busyyaks
     # The memos below are built on first use, which may be on any Puma / notifier thread; the first caller builds
     # each one, the others wait for it. A Monitor: `markdown` reads `config` while it holds the lock.
     MEMO = Monitor.new
+    # each host config `config` built → the {id, doc} revision it was built from; the key is weak (a config nobody
+    # holds any more goes), the value strong (a WeakMap would collect the revision while its config is still in use)
+    REVISIONS = ObjectSpace::WeakKeyMap.new
 
     module_function
 
-    def config = MEMO.synchronize { @config ||= AgentsKanban::HostConfig.load(CONFIG_PATH) }
+    # The host config FILE (without launchers / agent_types, which are revisions in the database: AgentSettings), read once.
+    def file_config = MEMO.synchronize { @file_config ||= AgentSettings.file_hash(CONFIG_PATH) }
+
+    # Boot: the file must load on the engine with a valid agent part (the repo template's, only to validate the file's
+    # own keys — the running config is always the database's revision: `config`). No database is touched here, so
+    # `hanami db migrate` boots before the agent_settings table exists.
+    def check_file! = AgentSettings.host(file_config, AgentSettings.template)
+
+    # The engine's host config = the file + the newest agent settings revision. Rebuilt when a newer revision is saved
+    # (one indexed max(id) per call), so web, mcp and the notifier run what Settings saved without a restart.
+    def config(conn = db)
+      rev = AgentSettings.current_id(conn)
+      MEMO.synchronize do
+        if @config.nil? || @config_rev != rev
+          cur = AgentSettings.current(conn)
+          @config = AgentSettings.host(file_config, cur[:doc])
+          @config_rev = cur[:id]
+          REVISIONS[@config] = { id: cur[:id], doc: cur[:doc] }.freeze
+        end
+        @config
+      end
+    end
+
+    # {id, doc} of the revision `config` was built from.
+    def config_revision(conn = db) = revision_of(config(conn))
+
+    # {id, doc} of the revision a host config (a store's, an api's) was built from — what a launch planned on that
+    # config hands bin/launcher (which rebuilds the same config from it and checks every command against the host
+    # allowlist), so a revision saved between the plan and the start never runs under the plan's registration.
+    def revision_of(cfg)
+      MEMO.synchronize { REVISIONS[cfg] } or raise ArgumentError, "no agent settings revision recorded for this config"
+    end
 
     def markdown
-      MEMO.synchronize { @markdown ||= AgentsKanban::Markdown.new(attachment_url_prefix: config.attachment_url_prefix) }
+      MEMO.synchronize { @markdown ||= AgentsKanban::Markdown.new(attachment_url_prefix: file_config["attachment_url_prefix"]) }
     end
     def db = Hanami.app["db.gateway"].connection
 
@@ -62,7 +97,7 @@ module Busyyaks
     # A store over the app's connection (or any Sequel db, with a settable clock — tests).
     def store(conn = db, clock: -> { Time.now.to_i })
       boards = ->(slug) { conn[:projects].where(slug: slug.to_s).any? }
-      AgentsKanban::Store.new(conn, config: config, markdown: markdown, clock: clock, boards: boards,
+      AgentsKanban::Store.new(conn, config: config(conn), markdown: markdown, clock: clock, boards: boards,
                               ci: ci_port(conn, clock: clock)) # approval.requires_green_ci
     end
     def default = store
@@ -87,7 +122,8 @@ module Busyyaks
     def api(st = default, **extras)
       AgentsKanban::Api.new(store: st, attachments: attachments(st), markdown: markdown, projects: method(:project),
                             backlog: method(:backlog),
-                            sessions: -> { LauncherClient.session_names }, launcher: LauncherClient::LaunchPort, grace: grace,
+                            sessions: -> { LauncherClient.session_names },
+                            launcher: LauncherClient::LaunchPort.new(revision_of(st.config)), grace: grace,
                             press: ->(**kw) { LauncherClient.answer(**kw) }, **extras)
     end
 

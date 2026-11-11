@@ -429,6 +429,12 @@ CREATE TABLE `gh_pr_states`(
   `error` text,
   UNIQUE(`repo`, `ref`)
 );
+CREATE TABLE `agent_settings`(
+  `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+  `doc` text NOT NULL,
+  `author` varchar(255) NOT NULL,
+  `created_at` integer NOT NULL
+);
 INSERT INTO schema_migrations (filename) VALUES
 ('20261101000000_create_core.rb'),
 ('20261101230000_create_daily.rb'),
@@ -460,4 +466,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261125000000_agents_kanban_gate_head.rb'),
 ('20261127000000_projects_git_read.rb'),
 ('20261130000000_local_naming.rb'),
-('20261201000000_projects_dirty_paths.rb');
+('20261201000000_projects_dirty_paths.rb'),
+('20261202000000_agent_settings.rb');

@@ -228,10 +228,6 @@ a:hover {
 .spacer {
   flex: 1;
 }
-.who {
-  color: var(--ink-faint);
-  font-weight: 500;
-}
 .top form {
   margin: 0;
 }
@@ -632,9 +628,6 @@ form.note textarea {
 @media (max-width: 600px) {
   .top .in {
     gap: 10px;
-  }
-  .who {
-    display: none;
   }
   .top nav a {
     padding: 0.3rem 0.7rem;

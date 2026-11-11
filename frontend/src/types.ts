@@ -239,7 +239,11 @@ export type TeamData = {
 
 // bin/launcher's answer to the engine's start (inside the engine's LaunchResult.result): the Remote Control verdict
 export type LauncherStart = {
+  kind?: string; // the launcher's kind (claude_code, hermes)
   remote_control?: "on" | "failed" | null;
+  // a kind without remote control (hermes): its command running in the pane is the start check
+  process?: "on" | "failed";
+  process_name?: string;
   remote_control_name?: string | null;
   reason?: string | null;
   // left = not trusted from outside the repo (launch.trusted_paths / created by the launcher): the prompt stays on screen

@@ -73,6 +73,8 @@ module Busyyaks
     post "/api/labels/:id", to: "api.labels.update"
     patch "/api/labels/:id", to: "api.labels.update"
     delete "/api/labels/:id", to: "api.labels.destroy"
+    get "/api/settings/agents", to: "api.agent_settings.show"   # Settings → Agents & launchers
+    post "/api/settings/agents", to: "api.agent_settings.save"
     post "/api/markdown", to: "api.markdown.preview"           # editor Preview: the server's render, never a JS markdown lib
 
     # the SPA shell: every other signed-in GET (the client router owns the path)

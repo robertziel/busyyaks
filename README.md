@@ -103,7 +103,8 @@ git clone https://github.com/robertziel/busyyaks && cd busyyaks
 cp .env.example .env
 # roots, owner_remotes, author_emails, window_days, auth (none + allow_unauthenticated), agents (collector: none)
 cp config/busyyaks.example.yml config/busyyaks.yml
-# launchers, agent types, prompts, caps — the example runs plain `claude`; edit the launchers for your box
+# board-wide kanban settings: caps, theme, gates (the launchers + agent types are edited on Settings → Agents &
+# launchers, saved in the database; a fresh one starts with config/agents.template.yml: plain `claude`)
 cp config/kanban.example.yml config/kanban.yml
 
 # secrets and the host user into .env (GITHUB_TOKEN: any read-only token; `gh auth token` with the GitHub CLI)
@@ -209,7 +210,7 @@ node stage) · vitest.
 
 busyyaks keeps no kanban code of its own: it vendors a pinned module sha (`vendor/agents_kanban`,
 `frontend/src/vendor/agents_kanban`, refreshed only by `scripts/vendor-kanban-engine.sh`) and supplies the host side:
-its config (`config/kanban.yml`), the launcher and the repo links. The two move together: a board change is a module
+its config (`config/kanban.yml` + the agent settings in the database), the launcher and the repo links. The two move together: a board change is a module
 PR plus a busyyaks PR that re-vendors it, merged as one change. The module has its own repo so that other projects
 can vendor it too.
 
@@ -231,7 +232,7 @@ the operator edits them in a graph editor (the board's **Workflow** button).
 Sessions are tied to cards. A session started from the launch bar is registered before tmux starts it. A **lead**
 adopts the cards that wait for the operator. A **worker** is spawned for an ownerless card in a working column. A
 **sub team** runs alongside the lead. Comments and answers are typed into the owner's tmux session; when nobody is
-listening the card says so. Caps on concurrent sessions are config (`config/kanban.yml`): by default none, except one
+listening the card says so. Caps on concurrent sessions are config (`config/kanban.yml`, and per agent type on Settings → Agents & launchers): by default none, except one
 lead per board.
 
 The full contract is [`vendor/agents_kanban/SPEC.md`](vendor/agents_kanban/SPEC.md); the HTTP API is
@@ -278,7 +279,8 @@ A deployment is configuration, never code. One place per value; an unknown or mi
 | `.env` (from [`.env.example`](.env.example)) | wiring and secrets: ports, `PROJECTS_ROOT`, the host user the containers run as (`HOST_UID`/`HOST_GID`), timezone, session secret, `MCP_TOKEN`, GitHub login and token, intervals, attachment limits. Compose uses `${VAR:?}`, so a missing value stops it. |
 | `config/busyyaks.yml` (from [`config/busyyaks.example.yml`](config/busyyaks.example.yml)) | repo roots and search depth, your remotes and author emails, the history window, `reap_protect` (sessions "Clear idle" never stops), `auth` ([Sign-in](#sign-in)), `agents` ([Agent sessions](#agent-sessions)), optional `engines:` and `daily_report` (a bad one stops the scanner and github services at boot and fails the `daily_report_config` tool). |
 | `config/engines.yml` (committed) | the coding-agent engine names a collector reports → sidebar label + behaviour family (`claude` · `hermes`); `engines:` in `config/busyyaks.yml` adds or relabels. |
-| `config/kanban.yml` (from [`config/kanban.example.yml`](config/kanban.example.yml); the file `KANBAN_CONFIG` names) | the kanban module's host settings: launchers, agent types and their prompts, concurrency caps, theme. **Edit it for your box**: the example ships one launcher, plain `claude` in Claude Code's default permission mode (a permission prompt becomes a question on the card); a shell function of your own (via `bash -ic`) and the no-prompt `bypassPermissions` mode are commented examples. A type listing several launchers names `spawn_launcher` for starts that name none (a spawned worker with no lead to follow), or such a start is refused. Its prompts name no column: agents read a card's transitions from `kanban_card`. The test suite runs on `test/fixtures/kanban.yml` and checks the example loads. |
+| `config/kanban.yml` (from [`config/kanban.example.yml`](config/kanban.example.yml); the file `KANBAN_CONFIG` names) | the kanban module's host settings: concurrency caps, theme, the handoff / approval gates, the review loop. Not the launchers and agent types: they are rows in the database, edited on **Settings → Agents & launchers** (the header's cog). |
+| Settings → Agents & launchers (`/settings`; repo default [`config/agents.template.yml`](config/agents.template.yml)) | the launchers (the commands that start an agent session: kind `claude_code` or `hermes`, command, args, via shell) and the agent types (their launchers, model per launcher, prompt, caps). Every save is a new revision (history kept). A launcher is one of the invocations on `config/busyyaks.yml` `launch.commands`, **the host allowlist** (each a whole `{kind, command, args, via_shell}`): the page offers only those, and anything else is refused when saved and again by `bin/launcher` when it starts — no dashboard user can add an argument the host did not list. The fresh database runs plain `claude` in Claude Code's default permission mode (a permission prompt becomes a question on the card). |
 
 ### Database
 
@@ -408,7 +410,8 @@ The repo is built to be worked on by agents. A prompt to start from:
 Set up busyyaks (this repo) on this machine and get its tests green.
 1. Read README.md and .env.example.
 2. cp .env.example .env, config/busyyaks.example.yml to config/busyyaks.yml and
-   config/kanban.example.yml to config/kanban.yml; fill them for this box:
+   config/kanban.example.yml to config/kanban.yml; fill them for this box (launch.commands: the invocations an agent
+   launcher may be, as in the example; the launchers themselves are set on Settings → Agents & launchers):
    PROJECTS_ROOT = <dir holding my repos>, GITHUB_LOGIN = <login>;
    keep `auth: { provider: none, allow_unauthenticated: true }` (localhost) and `agents: { collector: none }` unless I name a collector.
    Generate SESSION_SECRET, MCP_TOKEN and MCP_REPORT_TOKEN with openssl rand; HOST_UID/HOST_GID = id -u / id -g;

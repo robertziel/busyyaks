@@ -89,7 +89,7 @@ class McpTest < Minitest::Test
            "runner" => { "type" => "hermes", "command" => "hermes", "home" => "/h", "max_children" => 2 }, }
     base = { "roots" => [{ "path" => "/p", "prefix" => "" }], "search_depth" => 1, "owner_remotes" => ["example.com/x/"],
              "author_emails" => ["a@x"], "window_days" => 1, "reap_protect" => [], "auth" => { "provider" => "none" },
-             "agents" => { "collector" => "none" }, "launch" => { "trusted_paths" => [], "start_seconds" => 30 }, }
+             "agents" => { "collector" => "none" }, "launch" => LAUNCH_CLAUDE, }
     with = Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: 60, store: store,
                                    config: Busyyaks::Config.new(base.merge("daily_report" => dr)))
     out = with.send(:call_tool, "daily_report_config", {})
