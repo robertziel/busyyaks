@@ -66,6 +66,11 @@ agents:
 launch:
   trusted_paths: []
   # trusted_paths: [/projects/my-app, /projects/group/tool]
+  # seconds bin/launcher waits after starting a session for claude to come up (claude --remote-control <session>)
+  # while the launcher's command is still running — a shell function that starts a gateway or opens an ssh forward
+  # first needs longer than a plain `claude`. Integer 1..600, required. Not up by then → the session is killed and the
+  # launch refused with the pane's last lines; a command that exits into the pane's bare shell is refused at once.
+  start_seconds: 30
 # engines:       (optional) more engine names your agent_engines collector reports → {label, family}, merged
 #                 over the committed config/engines.yml (claude, claudeapi, localclaude, hermes); an entry with
 #                 a name from there relabels it. family: claude (Claude Code) · hermes. A pane whose engine is in

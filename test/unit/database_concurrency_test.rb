@@ -117,7 +117,11 @@ class DatabaseConcurrencyTest < Minitest::Test
     assert_equal positions.uniq.size, positions.size, "Store#create's count-then-insert ran one writer at a time"
   ensure
     # a failed assertion never leaves a writer waiting for the go file
-    writers&.each { |_, wait| Process.kill("KILL", wait.pid) if wait.alive? }
+    writers&.each do |_, wait|
+      Process.kill("KILL", wait.pid) if wait.alive?
+    rescue Errno::ESRCH # exited between alive? and kill: nothing to stop — never masks the test's own failure
+      nil
+    end
   end
 
   BOOT_CPU_SECONDS = 30 # each writer's boot until it says "ready", in its own CPU seconds (a boot uses a few)

@@ -86,6 +86,14 @@ TRUSTED, CREATED = begin
 rescue Busyyaks::LaunchTrust::Invalid => e
   abort "folder trust: #{e.message}"
 end
+# config/busyyaks.yml launch.start_seconds (required, LauncherRules.start_seconds!): how long a launch waits for its
+# claude to come up while the launcher's command still runs; a bad or missing value stops the start.
+START_SECONDS = begin
+  launch_cfg = YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["launch"]
+  Busyyaks::LauncherRules.start_seconds!(launch_cfg.is_a?(Hash) ? launch_cfg["start_seconds"] : nil)
+rescue Busyyaks::LauncherRules::Invalid => e
+  abort "config/busyyaks.yml: #{e.message}"
+end
 %w[AGENTS_SNAPSHOT AGENTS_READ_SOCKET].each do |k|
   abort "#{k} is in .env: the collector moved to config/busyyaks.yml agents.collector — remove it from .env" if ENV_FILE.key?(k)
 end
@@ -112,27 +120,33 @@ PANE_KEYS = %w[target cwd engine model context effort status waiting_for title s
 # (deploy/install-launcher.sh), the same as any code change.
 BOARD_CONFIG = AgentsKanban::HostConfig.load(File.join(ROOT, "config/kanban.yml")) # a broken config fails at start
 
-# The pane's process tree, read from /proc: does a `claude` in it run with --remote-control <name>?
-def remote_control_running?(pane_pid, name)
+# The pane's process tree, read from /proc: the pane's process and every descendant
+def tree(root)
   kids = Hash.new { |h, k| h[k] = [] }
   Dir.glob("/proc/[0-9]*/stat").each do |f|
     st = File.read(f) rescue next
-    pid = f[%r{/proc/(\d+)/}, 1].to_i
-    ppid = st.sub(/\A.*\) /m, "").split[1].to_i
-    kids[ppid] << pid
+    kids[st.sub(/\A.*\) /m, "").split[1].to_i] << f[%r{/proc/(\d+)/}, 1].to_i
   end
-  todo = [pane_pid]
+  out = []
+  todo = [root]
   until todo.empty?
     pid = todo.shift
-    argv = (File.read("/proc/#{pid}/cmdline") rescue "").split("\0")
-    if File.basename(argv.first.to_s) == "claude" || argv.first.to_s.end_with?("/claude") || argv.include?("claude")
-      # the LAST --remote-control is the effective one (a profile function may add an earlier one; Launch's wins)
-      i = argv.rindex("--remote-control")
-      return true if i && argv[i + 1] == name
-    end
+    out << pid
     todo.concat(kids[pid])
   end
-  false
+  out
+end
+
+# Does a `claude` in the pane's tree run with --remote-control <name>?
+def remote_control_running?(pane_pid, name)
+  tree(pane_pid).any? do |pid|
+    argv = (File.read("/proc/#{pid}/cmdline") rescue "").split("\0")
+    next false unless File.basename(argv.first.to_s) == "claude" || argv.first.to_s.end_with?("/claude") || argv.include?("claude")
+
+    # the LAST --remote-control is the effective one (a profile function may add an earlier one; Launch's wins)
+    i = argv.rindex("--remote-control")
+    i && argv[i + 1] == name
+  end
 end
 
 # Claude Code's folder-trust prompt on a fresh session. Answering it lets the repo's .claude settings / hooks /
@@ -146,8 +160,12 @@ def pane_text(name) = tmux("capture-pane", "-p", "-t", "=#{name}:").first.to_s
 
 def trust_prompt?(text) = text.include?(TRUST_YES) && text.match?(/trust this folder|Do you trust/i)
 
-# refusal: LaunchTrust.refusal, decided BEFORE the session started (a corrupt record refuses the launch, nothing runs)
-def accept_trust(name, refusal, wait: 15)
+# refusal: LaunchTrust.refusal, decided BEFORE the session started (a corrupt record refuses the launch, nothing runs).
+# clock: the launch's one start clock (start_clock): the wait for the prompt (up to `wait`) ends at once when the start
+# already failed — the command exited into a bare shell, launch.start_seconds passed, the session is gone — and
+# answers nothing (the start check that follows reads the same clock and refuses with the true elapsed time). An agent
+# that is up does NOT end it: claude runs (with its --remote-control) before it draws the trust prompt.
+def accept_trust(name, refusal, clock, wait: 15)
   return { trust: "left", trust_reason: refusal } if refusal
 
   deadline = Time.now + wait
@@ -155,6 +173,7 @@ def accept_trust(name, refusal, wait: 15)
     text = pane_text(name)
     break if trust_prompt?(text)
     return nil if text.match?(/bypass permissions on|for shortcuts|Try "/) # at its prompt already: nothing to answer
+    return nil if start_probe(name, clock, "claude --remote-control #{name}", nil).is_a?(String)
 
     sleep 1
   end
@@ -188,22 +207,58 @@ def dialog_on_screen(name)
   text.lines.map(&:rstrip).reject(&:empty?).last(3).join(" · ")[0, 300]
 end
 
-# Up to `wait` seconds for Remote Control to come up; else the pane's last lines say why (a refused start).
-def confirm_remote_control(name, wait: 12)
-  deadline = Time.now + wait
-  loop do
-    out, _e, ok = tmux("list-panes", "-t", "=#{name}", "-F", "\#{pane_pid}")
-    return { remote_control: "failed", reason: "tmux session is gone" } unless ok
+# Claude coming up after `tmux new-session`: every second, `up` (pane_pid → true) is asked of the
+# pane's process — the `bash -ic "<cmd>; exec bash"` — until it holds (→ nil), or the start failed (→ the reason, with
+# the real elapsed seconds and the pane's last lines):
+#   - the command exited: the pane's process has had NO child for BARE_CHECKS checks in a row — `<cmd>` is over and
+#     `exec bash` left a bare shell (claude refused to start, the wrapper failed): refused at once;
+#   - START_SECONDS passed while the command still runs (a wrapper still working, a claude that never took
+#     --remote-control): refused;
+#   - the tmux session is gone.
+BARE_CHECKS = 3
 
-    pane_pid = out.lines.first.to_i
-    return { remote_control: "on", remote_control_name: name } if remote_control_running?(pane_pid, name)
-    break if Time.now > deadline
+# A launch's start clock, started at `tmux new-session`: the trust wait and the start check share it, so every
+# refusal names the true elapsed seconds and launch.start_seconds bounds the whole start.
+def start_clock = { started: Time.now, bare: 0 }
+
+# One look at the pane: :up (`up`, when given, holds for the pane's process), the failure reason, or nil (wait on)
+def start_probe(name, clock, what, up)
+  elapsed = (Time.now - clock[:started]).round
+  out, _e, ok = tmux("list-panes", "-t", "=#{name}", "-F", "\#{pane_pid}")
+  return "tmux session is gone after #{elapsed}s" unless ok
+
+  pane_pid = out.lines.first.to_i
+  return :up if up&.call(pane_pid)
+
+  clock[:bare] = tree(pane_pid).size > 1 ? 0 : clock[:bare] + 1
+  return "the command exited after #{elapsed}s, no #{what}: #{pane_tail(name)}" if clock[:bare] >= BARE_CHECKS
+  if elapsed >= START_SECONDS
+    return "no #{what} after #{elapsed}s (launch.start_seconds #{START_SECONDS}): #{pane_tail(name)}"
+  end
+
+  nil
+end
+
+def await_start(name, clock, what, up)
+  loop do
+    r = start_probe(name, clock, what, up)
+    return nil if r == :up
+    return r if r
 
     sleep 1
   end
+end
+
+def pane_tail(name)
   screen, _e, _ok = tmux("capture-pane", "-p", "-t", "=#{name}:")
-  tail = screen.lines.map(&:rstrip).reject(&:empty?).last(4).join(" · ")
-  { remote_control: "failed", reason: tail.empty? ? "no claude --remote-control #{name} process after #{wait}s" : tail[0, 400] }
+  tail = screen.lines.map(&:rstrip).reject(&:empty?).last(4).join(" · ")[0, 400]
+  tail.empty? ? "the pane is empty" : tail
+end
+
+# `claude --remote-control <name>` in the pane's tree, on the launch's start clock
+def confirm_remote_control(name, clock)
+  why = await_start(name, clock, "claude --remote-control #{name}", ->(pid) { remote_control_running?(pid, name) })
+  why ? { remote_control: "failed", reason: why } : { remote_control: "on", remote_control_name: name }
 end
 
 def host_dir(container_path)
@@ -275,11 +330,26 @@ def launch(req)
   _out, err, ok = tmux("new-session", "-d", "-s", name, "-c", dir, "bash", "-ic", "#{cmd}; exec bash")
   raise "tmux failed: #{err.strip}" unless ok
 
-  trust = accept_trust(name, refusal) || {}
-  rc = confirm_remote_control(name)
-  waiting = dialog_on_screen(name)
-  rc = rc.merge(remote_control: "failed", reason: "waiting on a dialog: #{waiting}") if waiting && rc[:remote_control] == "on"
+  clock = start_clock
+  trust = accept_trust(name, refusal, clock) || {}
+  rc = confirm_remote_control(name, clock)
+  up = rc[:remote_control] == "on"
+  # a dialog on a claude that is up (its permission / question prompt): a live session — kept (below), the dialog
+  # reported to the operator as the result's verdict + reason (information only: it never decides the keep)
+  waiting = up ? dialog_on_screen(name) : nil
+  rc = rc.merge(remote_control: "failed", reason: "waiting on a dialog: #{waiting}") if waiting
   puts "#{Time.now.iso8601} launched #{name} (#{t.key}/#{req['launcher']}) in #{dir} · trust #{trust[:trust] || 'not asked'} · remote control #{rc[:remote_control]}#{rc[:reason] ? " (#{rc[:reason]})" : ''}"
+  # no `claude --remote-control <name>` came up (it refused to start, exited, the pane is a bare shell): the launch
+  # FAILED — the session is killed and refused, so the engine ends the registration and releases what it adopted
+  # (never a registered owner nobody runs). Only a running claude is kept: a pane that merely LOOKS like a dialog with
+  # no claude process is a failed start.
+  unless up
+    _o, kerr, killed = tmux("kill-session", "-t", "=#{name}")
+    gone = killed || !tmux("has-session", "-t", "=#{name}")[2]
+    error = "#{name} did not start: #{rc[:reason]}"
+    error += " — and kill-session failed (#{kerr.strip}): the tmux session #{name} is still running" unless gone
+    return { ok: false, error: error, status: 422 }
+  end
   { ok: true, session: name, type: t.key, launcher: t.launcher!(req["launcher"]), dir: dir, prompt: !prompt.nil?, **trust, **rc }
 end
 

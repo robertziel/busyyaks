@@ -7,4 +7,4 @@ window_days: 7
 reap_protect: ["svc-*"]
 auth: { provider: test/fixtures/auth_stub, allowed_emails: [owner@example.com] }
 agents: { collector: none }
-launch: { trusted_paths: [] }
+launch: { trusted_paths: [], start_seconds: 30 }
