@@ -108,10 +108,14 @@ class KanbanApiTest < Minitest::Test
                          public_repo: "https://github.com/o/r.git", public_head: "https://github.com/o/r.git")
     id = kb.create(slug: "g/r", title: "T", by: "op")
     Hanami.app["db.gateway"].connection[:cards].where(id: id).update(pr_url: "https://github.com/o/r_local/pull/5")
-    shown = api(:get, "/api/cards/#{id}")["links"].select { |l| l["kind"] == "pr" }
-                                                  .map { |l| [l["label"], l["tags"].map { |t| t["text"] }] }
-    assert_equal [["#5", %w[local checking]]], shown, "the public PR row appears only once GitHub has one"
-    assert_equal [["o/r", "head:o:pub/card-#{id}"], ["o/r_local", "pr:5"]],
+    shown = lambda do
+      api(:get, "/api/cards/#{id}")["links"].select { |l| l["kind"] == "pr" }
+                                            .map { |l| [l["label"], l["tags"].map { |t| t["text"] }] }
+    end
+    assert_equal [["#5", %w[local checking]]], shown.call, "no public PR recorded on the card: no row"
+    kb.update(id, { metadata: { "prs" => { "public" => "https://github.com/o/r/pull/7" } } }, by: "op")
+    assert_equal [["#5", %w[local checking]], ["#7", %w[public checking]]], shown.call, "metadata prs.public"
+    assert_equal [%w[o/r pr:7], ["o/r_local", "pr:5"]],
                  Hanami.app["db.gateway"].connection[:gh_pr_states].order(:repo).select_map(%i[repo ref])
   end
 

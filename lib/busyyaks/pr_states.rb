@@ -22,8 +22,31 @@ module Busyyaks
     # owner/name of a github.com remote, nil for any other host
     def slug(remote) = Github.repo_url(remote)&.delete_prefix("https://github.com/")
 
-    # The public PR's branch for a card (the name the private local-repo publish step gives it).
-    def pub_branch(card_id) = "pub/card-#{card_id}"
+    # The card's public PR: its metadata `prs.public` (git mirror-publish names the branch after the change, never the
+    # card, and has the agent record the PR it opened there). → [owner/name, number] on `repo` (the project's public
+    # repo), nil when the card records none; a value that is not a PR URL on `repo` raises Invalid with the reason.
+    # `card` is a hydrated card (metadata a Hash) or a raw `cards` row (metadata its JSON text: the engine's watch pass
+    # and waiting counts hand those to the ci: port).
+    class Invalid < StandardError; end
+
+    def public_pr(card, repo)
+      meta = card[:metadata]
+      begin
+        meta = JSON.parse(meta) if meta.is_a?(String)
+      rescue JSON::ParserError => e
+        raise Invalid, "card ##{card[:id]} metadata is not JSON: #{e.message[0, 200]}"
+      end
+      prs = meta.is_a?(Hash) ? meta["prs"] : nil
+      url = prs.is_a?(Hash) ? prs["public"] : nil
+      return nil if url.nil?
+
+      m = url.to_s.match(PR_URL)
+      unless m && m[1].casecmp?(repo) # GitHub owner/name: any case
+        raise Invalid, "card ##{card[:id]} metadata prs.public is not a PR on #{repo}: #{url.to_s[0, 200].inspect}"
+      end
+
+      [repo, m[2].to_i]
+    end
 
     # The card's work branches start with this (the card flow's `card/<id>-<slug>`).
     def card_branch_prefix(card_id) = "card/#{card_id}-"
@@ -125,7 +148,8 @@ module Busyyaks
     # the hover details (repo, role, state, when GitHub was read, why it is unknown). No enrolment → no role tag.
     # the PRs the text does not name are found by their head on GitHub — the one opened from the card's
     # branch (`card/<id>-*` in the checkout, or a branch the text names) on the work repo, and, on an enrolled project,
-    # the public PR (`pub/card-<id>` on the public repo). A row is a pull request GitHub returned, never a placeholder:
+    # the public PR (the card's metadata `prs.public`, PrStates.public_pr). A row is a pull request GitHub returned, never a
+    # placeholder:
     # none opened (or not answered yet) → no row; a failed read → a row that says so. Tags and details are the engine's
     # CardLink `tags` / `detail`.
     class Flags
@@ -203,29 +227,35 @@ module Busyyaks
       end
 
       # the PR opened from one of the card's branches on the work repo (the branch's push remote): the
-      # checkout's `card/<id>-*` branches and the branches the text names (the engine's branch links). The public
-      # branch is pushed to the public repo only (public_pr looks there), so it is not asked for here.
+      # checkout's `card/<id>-*` branches and the branches the text names (the engine's branch links). The public PR is
+      # the card's metadata prs.public (public_pr below), never derived from a branch name.
       def branch_prs(links, card, project, roles)
         repo = PrStates.slug(project[:pr_remote]) or return []
         owner = repo.split("/").first
         prefix = PrStates.card_branch_prefix(card[:id])
         own = project[:path] ? @branches.call(project).select { |b| b.start_with?(prefix) } : []
         named = links.select { |l| l[:kind] == "branch" }.map { |l| l[:label] }
-        (own + named).uniq.sort.reject { |b| b == PrStates.pub_branch(card[:id]) }
-                     .filter_map { |b| head_row(links, repo, owner, b, roles[repo]) }
+        (own + named).uniq.sort.filter_map { |b| head_row(links, repo, owner, b, roles[repo]) }
       end
 
+      # the card's public PR (metadata prs.public) on the public repo, skipped when the links already list it; none
+      # recorded → no row (not opened yet); a value that is no PR of the public repo → a row that says so.
       def public_pr(links, card, project)
         repo = PrStates.slug(project[:public_repo])
-        branch = PrStates.pub_branch(card[:id])
-        head = PrStates.slug(project[:public_head])&.split("/")&.first
-        unless repo && head # e.g. upstream mode before `gh repo fork`: no fork remote → whose head is unknown, said
+        unless repo
           why = project[:local_error] || "the public repo is not on github.com"
-          url = repo ? search_url(repo, branch) : "/projects/#{project[:slug]}"
-          return [flagged(url, branch, repo || project[:public_repo], "public", { error: why }, extra: [row("Branch", branch)])]
+          return [flagged("/projects/#{project[:slug]}", "public", project[:public_repo], "public", { error: why })]
         end
 
-        [head_row(links, repo, head, branch, "public")].compact
+        _, number = PrStates.public_pr(card, repo)
+        return [] unless number
+
+        url = "https://github.com/#{repo}/pull/#{number}"
+        return [] if links.any? { |l| l[:url] == url }
+
+        [flagged(url, "##{number}", repo, "public", @reader.lookup(repo, "pr:#{number}"))]
+      rescue PrStates::Invalid => e
+        [flagged("/projects/#{project[:slug]}", "public", repo, "public", { error: e.message })]
       end
     end
   end

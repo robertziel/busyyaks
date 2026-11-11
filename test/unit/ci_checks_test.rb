@@ -115,7 +115,8 @@ class CiChecksTest < Minitest::Test
   end
 
   # the approval gate's port. A non-final step reads the card's own PR; the final step of a enrolled
-  # project reads the public pub/card-<id> PR (head = public_head's owner); an enrolment without a public repo is said.
+  # project reads the public PR recorded on the card (metadata prs.public); none recorded, one on another repo, or an
+  # enrolment without a public repo is said.
   def test_approval_checks_read_the_step_s_pr
     @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r_local/pull/112")
     card = @kb.card(@id)
@@ -132,16 +133,22 @@ class CiChecksTest < Minitest::Test
     blocked = @port.approval_checks(card, public_step)
     assert_equal "blocked", blocked[:state]
     assert_match(/the local PR #112 is still open, not merged into the local repo/, blocked[:reason])
-    refute_includes @conn[:gh_pr_checks].select_map(%i[repo ref]), ["o/r", "head:o:pub/card-#{@id}"],
-                    "the public PR is not asked before the local PR is merged"
+    refute(@conn[:gh_pr_checks].select_map(:repo).include?("o/r"), "the public PR is not asked before the local PR is merged")
     @http.pulls = [PR.merge("number" => 5), PR.merge("state" => "closed", "merged_at" => "2026-11-09T10:00:00Z")]
     @poller.run
+    e = assert_raises(CK::Unavailable) { @port.approval_checks(card, public_step) }
+    assert_equal "card ##{@id} records no public PR (metadata prs.public, a PR on o/r)", e.message,
+                 "merged, no public PR recorded: refused, no branch name guessed"
+    @kb.update(@id, { metadata: { "prs" => { "public" => "https://github.com/o/r_local/pull/5" } } }, by: "op")
+    e = assert_raises(CK::Unavailable) { @port.approval_checks(@kb.card(@id), public_step) }
+    assert_match(/card ##{@id} metadata prs.public is not a PR on o\/r: /, e.message)
+    @kb.update(@id, { metadata: { "prs" => { "public" => "https://github.com/o/r/pull/5" } } }, by: "op")
+    card = @kb.card(@id)
     assert_equal "unpolled", @port.approval_checks(card, public_step)[:state], "merged: now the public PR is asked"
-    assert_includes @conn[:gh_pr_checks].select_map(%i[repo ref]), ["o/r", "head:o:pub/card-#{@id}"]
+    assert_includes @conn[:gh_pr_checks].select_map(%i[repo ref]), %w[o/r pr:5]
     @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now - 5) }]
     @poller.run
-    head = URI.encode_www_form_component("o:pub/card-#{@id}")
-    assert(@http.requests.any? { |u| u.end_with?("/repos/o/r/pulls?state=open&head=#{head}") })
+    assert(@http.requests.any? { |u| u.end_with?("/repos/o/r/pulls/5") })
     assert_equal({ number: 5, state: "success", finished_at: @now - 5, head: "abc" }, @port.approval_checks(card, public_step))
     assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, local_step)[:reason],
                  "the first gate needs the local PR open: merged ahead of the operator is refused"
@@ -282,7 +289,8 @@ class CiChecksTest < Minitest::Test
   end
 
   # end to end on a local (v3) board: the Store refuses the final approval (Public: Human review → Awaiting merge)
-  # while the local PR is open, then on the public PR's CI; a failed or stale read is refused as unknown, never guessed.
+  # while the local PR is open, then while the card records no public PR, then on the public PR's CI; a failed or stale
+  # read is refused as unknown, never guessed.
   def test_the_store_gates_the_public_step_on_the_local_merge_and_the_public_ci
     enrol!
     v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
@@ -303,7 +311,13 @@ class CiChecksTest < Minitest::Test
     @http.pulls = [PR.merge("number" => 5), PR.merge("state" => "closed", "merged_at" => "2026-11-09T10:00:00Z")]
     @http.statuses = [{ "state" => "pending", "updated_at" => finish_at(@now) }]
     @poller.run
+    none = "card ##{@id} records no public PR (metadata prs.public, a PR on o/r)"
+    refuse.call(/CI state of card ##{@id} is unknown — #{Regexp.escape(none)}\z/)
+    @kb.update(@id, { metadata: { "prs" => { "public" => "https://github.com/o/r/pull/5" } } }, by: "op")
     refuse.call(/its PR of card ##{@id} — CI not read yet/)
+    # review round 1: the watch pass and the waiting counts hand the port RAW rows (metadata = its JSON text)
+    _, state, = @kb.approval_prefetch_pass.find { |id, *| id == @id }
+    assert_equal "unpolled", state, "the raw row's prs.public is read, not \"records no public PR\""
     @poller.run
     refuse.call(/PR #5 of card ##{@id} — CI is still running/, drag: true)
     @http.define_singleton_method(:get) { |*| [401, {}, '{"message":"Bad credentials"}'] }

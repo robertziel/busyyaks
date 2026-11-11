@@ -199,7 +199,7 @@ module Busyyaks
     end
 
     # the repo's private local-repo guard config (`guard.*` in git config) → which repo is the local one, which the
-    # public one, and where pub/card-<id> is pushed. Not enrolled (no guard.mode) → every column nil. A guard key
+    # public one, and where the public branches are pushed. Not enrolled (no guard.mode) → every column nil. A guard key
     # naming no remote, or a remote with no URL, leaves that column nil and is said in local_error (e.g. upstream
     # mode before the fork is added) — never a guessed repo.
     LOCAL_KEYS = { local_repo: "guard.mirrorRemote", public_repo: "guard.upstreamRemote",

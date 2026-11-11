@@ -5,7 +5,7 @@
 # projects: the private-mirror enrolment the scanner reads from the repo's git config (its guard config,
 #   `guard.*`): mirror_mode (own | upstream | nil = not enrolled), mirror_repo (guard.mirrorRemote's URL), public_repo
 #   (guard.upstreamRemote's fetch URL — the public PR is opened there), public_head (guard.publicRemote's URL — the
-#   repo `pub/card-<id>` is pushed to: upstream itself in own mode, the fork in upstream mode), mirror_error (an
+#   repo the public branch is pushed to: upstream itself in own mode, the fork in upstream mode), mirror_error (an
 #   enrolment the scanner could not read: a guard remote with no URL — shown on the card, never guessed around).
 # gh_pr_states: the web (no GitHub token) writes which PRs' state it wants (repo + ref "pr:N" | "head:owner:branch");
 #   the github service answers them every GITHUB_CI_INTERVAL_SECONDS (same split as gh_pr_checks).
