@@ -160,6 +160,101 @@ agents sidebar and typing comments into sessions also need an [agent-session col
 
 Optional: the [daily report](#the-daily-report) timer, `deploy/install-daily-timer.sh`.
 
+### The `yaks` command
+
+`bin/yaks` runs the checkout it lives in, from any directory. It needs Linux and host Ruby 3.2 or newer (stdlib
+only: no gems, no `bundle install`).
+
+**Install** — one symlink from a directory on your PATH (the example uses `~/.local/bin`; any PATH directory works):
+
+```sh
+ruby -v                                    # 3.2 or newer
+mkdir -p ~/.local/bin
+ln -s "$PWD/bin/yaks" ~/.local/bin/yaks    # run from the checkout; the link must point at the real bin/yaks
+command -v yaks                            # ~/.local/bin/yaks; nothing → add ~/.local/bin to PATH in your shell profile
+yaks doctor                                # every row ok (miss = optional)
+yaks server status                         # every row ok once the stack is up
+```
+
+| | |
+|---|---|
+| update | nothing to do: the link follows the checkout, so a `git pull` / local deploy updates `yaks` too. Moved or renamed the checkout → the link breaks: `ln -sf <new checkout>/bin/yaks ~/.local/bin/yaks` |
+| uninstall | `rm ~/.local/bin/yaks` |
+| several checkouts | one link per checkout, under different names (`ln -s <checkout>/bin/yaks ~/.local/bin/yaks-test`) |
+| exit codes | 0 ok · 1 a check failed or a refusal (the reason on stderr) · 2 a usage error (usage printed) |
+| `no .env at <checkout>/.env` | the link points at a checkout that is not set up: finish the [Quickstart](#quickstart) there, or link the right checkout |
+| `Ruby X is older than 3.2` · `busyyaks runs on Linux only` | refused before anything runs |
+| `yaks panel`: `no graphical session here` | run it from a desktop session; over ssh / tmux use `yaks panel --print` |
+
+Commands:
+
+| Command | Does |
+|---|---|
+| `yaks server status` | each service running, `/up`, MCP `tools/list`, the launcher unit and its socket; exit 1 if any is down |
+| `yaks server logs [SERVICE] [-f]` | `docker compose logs` of the stack or one service |
+| `yaks panel [--print]` | opens the dashboard with `xdg-open` from a desktop session (`https://PUBLIC_HOST`, or `http://127.0.0.1:WEB_HOST_PORT`); over ssh / tmux it is refused — `--print` prints the URL |
+| `yaks env KEY...` | `export KEY='value'` lines from `.env` (as `bin/env`) |
+| `yaks doctor` | every host tool the stack needs, per feature; exit 1 if one is missing |
+
+**How it works from the terminal.** `yaks` finds its checkout from the symlink's real path, reads that checkout's
+`.env`, and runs everything there — so it works from any directory. `server status`, `server logs` and `doctor` only
+read: they run `docker compose ps` / `logs` in the checkout, ask `GET /up` on `127.0.0.1:WEB_HOST_PORT` and MCP `tools/list` on
+`MCP_HOST:MCP_HOST_PORT` (bearer `MCP_TOKEN`), `systemctl --user is-active busyyaks-launcher.service` and look for
+`LAUNCHER_RUN_DIR/launcher.sock`; they start, stop or write nothing (`logs -f` follows until Ctrl-C). `panel` starts
+`xdg-open` with the dashboard URL. A session:
+
+```console
+$ yaks help
+usage: yaks <command>
+
+  yaks server status               every service, /up, MCP tools/list, the launcher unit and its socket; exit 1 if any is down
+  yaks server logs [SERVICE] [-f]  docker compose logs of the stack (or of one service); -f follows
+  yaks panel [--print]             open the dashboard in the browser (xdg-open); --print prints its URL instead
+  yaks env KEY...                  `export KEY='value'` lines from .env, for eval (bin/env)
+  yaks doctor                      every host tool the stack needs, per feature; exit 1 if one is missing
+  yaks help                        this list
+
+$ yaks server status
+ok    web                        running
+ok    mcp                        running
+ok    scanner                    running
+ok    github                     running
+ok    notifier                   running
+ok    web /up                    HTTP 200
+ok    mcp tools/list             46 tools
+ok    busyyaks-launcher.service  active
+ok    launcher socket            /home/you/.local/state/busyyaks/run/launcher.sock
+
+$ yaks doctor
+ok    docker               /usr/bin/docker                        the stack (yaks server)
+ok    git                  /usr/bin/git                           the launcher
+ok    tmux                 /usr/bin/tmux                          the launcher
+ok    claude               /home/you/.local/bin/claude            the launcher
+ok    systemctl            /usr/bin/systemctl                     the launcher, the daily report (systemd --user)
+ok    xdg-open             /usr/bin/xdg-open                      yaks panel
+ok    docker compose       2.32.4                                 the stack (yaks server)
+ok    systemd --user       running                                the launcher, the daily report
+miss  graphical session    none (ssh / tmux): yaks panel --print  yaks panel
+ok    config/busyyaks.yml  daily_report_runners set               every service
+ok    jq                   /usr/bin/jq                            the daily report
+ok    curl                 /usr/bin/curl                          the daily report
+ok    flock                /usr/bin/flock                         the daily report
+ok    timeout              /usr/bin/timeout                       the daily report
+ok    ruby                 3.2.3 (>= 3.2)                         yaks, the launcher, bin/env
+
+$ yaks server logs scanner -f        # Ctrl-C stops following
+scanner-1  | scan ok repos=121 seconds=21.3
+
+$ yaks panel --print
+https://busyyaks.example.com
+
+$ eval "$(yaks env WEB_HOST_PORT)" && echo "$WEB_HOST_PORT"
+3000
+```
+
+`ok` = found / up · `miss` = optional and absent (only `yaks panel`'s needs; never fails doctor) · `FAIL` = missing,
+exit 1. The jq · curl · flock · timeout rows appear only when `config/busyyaks.yml` has `daily_report_runners`.
+
 ---
 
 ## What you get

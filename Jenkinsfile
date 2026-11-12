@@ -1,6 +1,7 @@
 // busyyaks CI: every pushed branch runs scripts/ci/test.sh — RuboCop + ShellCheck, the Ruby suite (the compose `test`
-// service), the SPA's tsc + ESLint + vitest, the dependency audit (bundle-audit + npm audit) and gitleaks over the full history — and reports ONE GitHub commit status, context `jenkins/ci`, whose link is this
-// build. A PR shows its head branch's status.
+// service), the SPA's tsc + ESLint + vitest, the dependency audit (bundle-audit + npm audit), gitleaks over the full
+// history and the host-side tests on the oldest host Ruby (scripts/ci/test.sh host) — and reports ONE GitHub commit
+// status, context `jenkins/ci`, whose link is this build. A PR shows its head branch's status.
 //
 // Jenkins side: a multibranch job reading this file from SCM (this repository's own branches and pull requests; a
 // fork's pull request is GitHub Actions', never here), an agent with a Docker CLI on a daemon it may start containers
@@ -69,7 +70,7 @@ pipeline {
           echo "Building ${env.GH_REPO}@${env.GIT_SHA} (${env.BRANCH_NAME}; default branch ${env.DEFAULT_BRANCH})"
           sh 'rm -rf "$WORKSPACE_TMP/ci-logs" "$WORKSPACE_TMP/badges"'
         }
-        notifyGitHub('pending', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + audit + secrets running')
+        notifyGitHub('pending', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + audit + secrets + host Ruby running')
       }
     }
 
@@ -81,6 +82,7 @@ pipeline {
         stage('Frontend')   { steps { gate('frontend') } }
         stage('Audit')      { steps { gate('audit') } }
         stage('Secrets')    { steps { gate('secrets') } }
+        stage('Host Ruby')  { steps { gate('host') } }
       }
       post { success { script { env.GATES_PASSED = 'true' } } }
     }

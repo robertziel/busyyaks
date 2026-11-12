@@ -33,6 +33,9 @@ the MCP tools may still change before 1.0.0, each change recorded here.
 
 ### Added
 
+- **`yaks`**, a command line for the checkout (`bin/yaks`, host Ruby ≥ 3.2, Linux): `server status`, `server logs`,
+  `panel`, `env`, `doctor`. A new CI stage, `scripts/ci/test.sh host`, runs the host-side programs' tests on Ruby 3.2.
+
 - **Today** page: commits, your commits, active repos and your merged pull requests per day over `window_days`, a
   53-week contribution heatmap, tracked / uncommitted / unpushed counts and the last scan. Unknown values are shown as
   `—`, never 0.
