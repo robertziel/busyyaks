@@ -20,7 +20,6 @@ class CiChecksTest < Minitest::Test
       raise "no token" unless headers["Authorization"]
       @requests << url
       body = case url
-             when %r{/pulls\?state=open&head=} then @pulls
              when %r{/pulls/(\d+)\z} then @pulls.find { |p| p["number"] == Regexp.last_match(1).to_i }
              when %r{/commits/([^/]+)/status\z} then { "statuses" => @statuses_by_sha.fetch(Regexp.last_match(1), @statuses) }
              when %r{/branches/([^/?]+)\z}
@@ -40,8 +39,8 @@ class CiChecksTest < Minitest::Test
   end
 
   class FakeLauncher
-    attr_accessor :branch, :commit
-    def git(session:, socket:) = { "ok" => true, "branch" => @branch, "last_commit_at" => @commit }
+    attr_accessor :commit
+    def git(session:, socket:) = { "ok" => true, "last_commit_at" => @commit }
     def notify(session:, socket:, text:) = (sent << [session, text]; { "ok" => true })
     def sent = (@sent ||= [])
     def sessions = [{ "name" => "shop" }]
@@ -60,7 +59,6 @@ class CiChecksTest < Minitest::Test
     @now = 1_000_000
     @http = FakeHttp.new
     @launcher = FakeLauncher.new
-    @launcher.branch = "feat/x"
     @client = client = Busyyaks::GithubNetwork::Client.new(token: "t", http: @http)
     @poller = CK::Poller.new(db: @conn, client: client, wanted_for: 600, clock: -> { @now })
     @port = CK::Port.new(db: @conn, projects: ->(s) { @conn[:projects].where(slug: s).first },
@@ -70,25 +68,58 @@ class CiChecksTest < Minitest::Test
     @id = @kb.create(slug: "o-r", title: "ship", by: "lead", column: "doing")
     @kb.update(@id, { "assignee" => "lead" }, by: "lead")
     @kb.set_owner(@id, session: "shop", by: "lead")
+    assign!("pr", "https://github.com/o/r/pull/112") # the PR its agent opened (a test without one clears it)
     @card = @kb.card(@id)
   end
 
   def finish_at(t) = Time.at(t).utc.iso8601
 
-  def test_branch_without_pr_is_nothing_and_asks_once
-    assert_equal({ number: nil, state: "unpolled", finished_at: nil }, @port.pr_checks(@card))
-    @poller.run
-    assert_nil @port.pr_checks(@card), "no open PR on the branch"
-    assert_equal 1, @conn[:gh_pr_checks].count
-    assert_includes @http.requests.first, "head=o%3Afeat%2Fx"
+  # a card's PRs are the ones assigned to it (kanban_pr_assign → metadata prs.<role>), nothing else
+  def assign!(role, url) = @kb.assign_pr(@id, url: url, role: role, by: "lead")
+
+  # no PR assigned → nothing asked: neither the owner's branch nor the pr_url is read as the card's PR
+  def test_no_assigned_pr_is_nothing_and_asks_nothing
+    @kb.update(@id, { "metadata" => nil }, by: "lead")
+    @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r/pull/112")
+    assert_nil @port.pr_checks(@kb.card(@id))
+    assert_equal 0, @conn[:gh_pr_checks].count
+    assign!("pr", "https://github.com/o/r/pull/112")
+    assert_equal({ number: nil, state: "unpolled", finished_at: nil }, @port.pr_checks(@kb.card(@id)))
+    assert_equal [%w[o/r pr:112]], @conn[:gh_pr_checks].select_map(%i[repo ref])
   end
 
-  # the branch's PR is looked up on the repo it is pushed to (pr_remote), not origin
-  def test_branch_pr_is_read_from_the_push_remote
-    @conn[:projects].where(slug: "o-r").update(pr_remote: "git@github.com:o/r_local.git")
-    @port.pr_checks(@card)
+  # a plain project's card PR is read on the repo its URL names; an assignment that is no PR URL is said
+  def test_the_assigned_pr_is_read_on_its_own_repo
+    assign!("pr", "https://github.com/o/r_local/pull/112")
+    @port.pr_checks(@kb.card(@id))
     @poller.run
-    assert_includes @http.requests.first, "/repos/o/r_local/pulls"
+    assert_includes @http.requests.first, "/repos/o/r_local/pulls/112"
+    @conn[:cards].where(id: @id).update(metadata: JSON.generate("prs" => { "pr" => "#112" }))
+    e = assert_raises(CK::Unavailable) { @port.pr_checks(@kb.card(@id)) }
+    assert_equal "card ##{@id} metadata prs.pr is not a PR on github.com: \"#112\"", e.message
+  end
+
+  # review round 1: on an enrolled project the idle watch follows the card's `local` PR (never its `pr` / `public`);
+  # an unreadable local repo is said
+  def test_the_idle_watch_follows_the_local_pr_on_an_enrolled_project
+    enrol!
+    assert_nil @port.pr_checks(@kb.card(@id)), "a `pr` PR is not an enrolled card's"
+    assign!("public", "https://github.com/o/r/pull/5")
+    assert_nil @port.pr_checks(@kb.card(@id)), "nor the public one"
+    assign!("local", "https://github.com/o/r_local/pull/112")
+    @port.pr_checks(@kb.card(@id))
+    assert_equal [%w[o/r_local pr:112]], @conn[:gh_pr_checks].select_map(%i[repo ref])
+    @conn[:projects].where(slug: "o-r").update(local_repo: nil, local_error: "no local remote")
+    e = assert_raises(CK::Unavailable) { @port.pr_checks(@kb.card(@id)) }
+    assert_equal "the local PR of card ##{@id} cannot be found: no local remote", e.message
+  end
+
+  # a ref the pollers no longer ask (the old branch lookup) is an error on its row, never a request
+  def test_a_branch_ref_is_not_polled
+    @conn[:gh_pr_checks].insert(repo: "o/r", ref: "branch:feat/x", requested_at: @now)
+    @poller.run
+    assert_match(/o\/r branch:feat\/x: not a pr:<n> \/ merge:<n> ref/, @conn[:gh_pr_checks].get(:error))
+    assert_empty @http.requests
   end
 
   def test_success_failure_and_pending
@@ -106,43 +137,41 @@ class CiChecksTest < Minitest::Test
     assert_equal "failure", @port.pr_checks(@card)[:state]
   end
 
-  def test_card_pr_url_wins_over_the_branch
-    @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r/pull/112")
-    @http.pulls = [PR]
-    @port.pr_checks(@kb.card(@id))
-    @poller.run
-    assert @http.requests.any? { |u| u.end_with?("/repos/o/r/pulls/112") }
-  end
-
-  # the approval gate's port. A non-final step reads the card's own PR; the final step of a enrolled
-  # project reads the public PR recorded on the card (metadata prs.public); none recorded, one on another repo, or an
-  # enrolment without a public repo is said.
+  # the approval gate's port. Not enrolled: every step reads the card's `pr` PR. Enrolled: a non-final step reads
+  # the `local` PR; the final step the `public` one; none assigned, one on another repo, or an enrolment without a
+  # public repo is said.
   def test_approval_checks_read_the_step_s_pr
-    @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r_local/pull/112")
-    card = @kb.card(@id)
+    card = @card
     local_step = { from: "human_check", to: "local_merged_pr", then: "deploy_check", name: "Approve", final: false }
     public_step = { from: "public_review", to: "ready", then: "merged", name: "PR approved", final: true }
     assert_equal "unpolled", @port.approval_checks(card, local_step)[:state]
     assert_equal "unpolled", @port.approval_checks(card, public_step)[:state],
                  "not enrolled: the final step reads the card's PR"
-    assert_equal [%w[o/r_local pr:112]], @conn[:gh_pr_checks].select_map(%i[repo ref])
+    assert_equal [%w[o/r pr:112]], @conn[:gh_pr_checks].select_map(%i[repo ref])
 
+    enrol!
+    e = assert_raises(CK::Unavailable) { @port.approval_checks(card, local_step) }
+    assert_equal "card ##{@id} has no local PR assigned (kanban_pr_assign role local, a PR on o/r_local)", e.message,
+                 "enrolled: the `pr` PR is not the local one"
+    assign!("local", "https://github.com/o/r_local/pull/112")
+    card = @kb.card(@id)
+    @port.approval_checks(card, local_step)
     @http.pulls = [PR]
     @poller.run
-    enrol!
     blocked = @port.approval_checks(card, public_step)
     assert_equal "blocked", blocked[:state]
     assert_match(/the local PR #112 is still open, not merged into the local repo/, blocked[:reason])
-    refute(@conn[:gh_pr_checks].select_map(:repo).include?("o/r"), "the public PR is not asked before the local PR is merged")
+    refute_includes @conn[:gh_pr_checks].select_map(%i[repo ref]), %w[o/r pr:5],
+                    "the public PR is not asked before the local PR is merged"
     @http.pulls = [PR.merge("number" => 5), PR.merge("state" => "closed", "merged_at" => "2026-11-09T10:00:00Z")]
     @poller.run
     e = assert_raises(CK::Unavailable) { @port.approval_checks(card, public_step) }
-    assert_equal "card ##{@id} records no public PR (metadata prs.public, a PR on o/r)", e.message,
-                 "merged, no public PR recorded: refused, no branch name guessed"
-    @kb.update(@id, { metadata: { "prs" => { "public" => "https://github.com/o/r_local/pull/5" } } }, by: "op")
+    assert_equal "card ##{@id} has no public PR assigned (kanban_pr_assign role public, a PR on o/r)", e.message,
+                 "merged, no public PR assigned: refused, no branch name guessed"
+    assign!("public", "https://github.com/o/r_local/pull/5")
     e = assert_raises(CK::Unavailable) { @port.approval_checks(@kb.card(@id), public_step) }
     assert_match(/card ##{@id} metadata prs.public is not a PR on o\/r: /, e.message)
-    @kb.update(@id, { metadata: { "prs" => { "public" => "https://github.com/o/r/pull/5" } } }, by: "op")
+    assign!("public", "https://github.com/o/r/pull/5")
     card = @kb.card(@id)
     assert_equal "unpolled", @port.approval_checks(card, public_step)[:state], "merged: now the public PR is asked"
     assert_includes @conn[:gh_pr_checks].select_map(%i[repo ref]), %w[o/r pr:5]
@@ -167,8 +196,8 @@ class CiChecksTest < Minitest::Test
     enrol!
     step = { from: "public_review", to: "ready", then: "merged", name: "PR approved", final: true }
     e = assert_raises(CK::Unavailable) { @port.approval_checks(@card, step) }
-    assert_match(/card ##{@id} has no local PR/, e.message)
-    @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r_local/pull/112")
+    assert_match(/card ##{@id} has no local PR assigned/, e.message)
+    assign!("local", "https://github.com/o/r_local/pull/112")
     card = @kb.card(@id)
     assert_match(/local PR #112 is not read yet/, @port.approval_checks(card, step)[:reason])
     @http.pulls = [PR.merge("state" => "closed", "merged_at" => nil)]
@@ -183,7 +212,7 @@ class CiChecksTest < Minitest::Test
     enrol!
     v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
     @kb.board_save("o-r", v3, by: "operator")
-    @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r_local/pull/112")
+    assign!("local", "https://github.com/o/r_local/pull/112")
     steps = @kb.board_of("o-r").approvals.map(&:to_h)
     assert_equal %w[local_human_review deploy_check public_human_review], steps.map { |s| s[:from] }
     [@kb.card(@id), steps[0], steps[1]]
@@ -247,7 +276,7 @@ class CiChecksTest < Minitest::Test
   end
 
   # approved, merged, deployed, then moved back into the first gate — the merged local PR is not "merged
-  # before its approval" when an approve follows the handoff that named it: the merge commit's CI answers instead
+  # before its approval" when an approve follows the newest handoff: the merge commit's CI answers instead
   def test_the_first_gate_passes_a_merged_pr_approved_after_its_handoff
     card, first, = local_steps
     @http.pulls = [MERGED]
@@ -263,7 +292,6 @@ class CiChecksTest < Minitest::Test
     assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason],
                  "an approve older than the handoff of this PR approved nothing of it"
     log.call("approve", "approved Local: Human review → Local: Merged")
-    log.call("handoff", handoff.call(99)) # a later handoff of another PR does not hide this one's approval
     2.times do # the merge commit's CI is asked, then read
       @port.approval_checks(card, first)
       @poller.run
@@ -279,28 +307,22 @@ class CiChecksTest < Minitest::Test
     assert_equal "the local PR #112 was closed without merging", @port.approval_checks(card, first)[:reason]
   end
 
-  # the public loop's handoff puts the PUBLIC PR in pr_url: the local PR is then the newest handoff naming a PR on
-  # the local repo (never the public PR read as the local one); no local PR anywhere → Unavailable, said
-  def test_the_local_pr_comes_from_the_handoffs_once_pr_url_is_the_public_pr
+  # the local PR is the assigned one — never a PR in pr_url or in a handoff's text
+  def test_the_local_pr_is_never_read_from_pr_url_or_handoffs
     enrol!
     step = { from: "public_human_review", to: "awaiting_merge", then: "done", name: "Approve", final: true }
     @conn[:card_activity].insert(card_id: @id, kind: "handoff", author: "reviewer", created_at: @now,
                                  body: "handed to Local: Human review: PR https://github.com/o/r_local/pull/112 · CI https://ci.example.com/1")
-    @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r/pull/7")
-    card = @kb.card(@id)
-    assert_match(/the local PR #112 is not read yet/, @port.approval_checks(card, step)[:reason])
-    assert_includes @conn[:gh_pr_checks].select_map(%i[repo ref]), %w[o/r_local pr:112]
-    refute_includes @conn[:gh_pr_checks].select_map(%i[repo ref]), %w[o/r pr:7]
-    @conn[:card_activity].where(card_id: @id, kind: "handoff").delete
-    e = assert_raises(CK::Unavailable) { @port.approval_checks(card, step) }
-    assert_equal "card ##{@id} has no local PR (a PR on o/r_local in its pr_url or a handoff)", e.message
+    @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r_local/pull/112")
+    e = assert_raises(CK::Unavailable) { @port.approval_checks(@kb.card(@id), step) }
+    assert_equal "card ##{@id} has no local PR assigned (kanban_pr_assign role local, a PR on o/r_local)", e.message
+    assert_equal 0, @conn[:gh_pr_checks].count
   end
 
   # a request the github service stopped polling (older than wanted_for) is asked afresh — not
   # reported as "service stopped"; inside the window an old answer still is.
   def test_a_request_outside_the_poll_window_is_asked_again
-    @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r/pull/112")
-    card = @kb.card(@id)
+    card = @card
     @http.pulls = [PR]
     @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
     @port.pr_checks(card)
@@ -320,7 +342,8 @@ class CiChecksTest < Minitest::Test
     enrol!
     v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
     @kb.board_save("o-r", v3, by: "operator")
-    @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r_local/pull/112", column: "public_human_review")
+    assign!("local", "https://github.com/o/r_local/pull/112")
+    @conn[:cards].where(id: @id).update(column: "public_human_review")
     refuse = lambda do |pattern, drag: false| # drag: the step's own transition (a plain drag is never refused)
       e = assert_raises(AgentsKanban::Invalid) do
         # the step's named transition asks CI like the button; a plain drag never does
@@ -338,13 +361,13 @@ class CiChecksTest < Minitest::Test
     @http.pulls = [PR.merge("number" => 5), PR.merge("state" => "closed", "merged_at" => "2026-11-09T10:00:00Z")]
     @http.statuses = [{ "state" => "pending", "updated_at" => finish_at(@now) }]
     @poller.run
-    none = "card ##{@id} records no public PR (metadata prs.public, a PR on o/r)"
+    none = "card ##{@id} has no public PR assigned (kanban_pr_assign role public, a PR on o/r)"
     refuse.call(/CI state of card ##{@id} is unknown — #{Regexp.escape("#{none}. #{drag_way}")}\z/)
-    @kb.update(@id, { metadata: { "prs" => { "public" => "https://github.com/o/r/pull/5" } } }, by: "op")
+    assign!("public", "https://github.com/o/r/pull/5")
     refuse.call(/its PR of card ##{@id} — CI not read yet/)
     # review round 1: the watch pass and the waiting counts hand the port RAW rows (metadata = its JSON text)
     _, state, = @kb.approval_prefetch_pass.find { |id, *| id == @id }
-    assert_equal "unpolled", state, "the raw row's prs.public is read, not \"records no public PR\""
+    assert_equal "unpolled", state, "the raw row's prs.public is read, not \"no public PR assigned\""
     @poller.run
     refuse.call(/PR #5 of card ##{@id} — CI is still running/, drag: true)
     @http.define_singleton_method(:get) { |*| [401, {}, '{"message":"Bad credentials"}'] }
@@ -488,6 +511,7 @@ class CiChecksTest < Minitest::Test
     v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
     @kb.board_save("o-r", v3, by: "operator")
     @conn[:cards].where(id: @id).update(column: "local_agent_review")
+    assign!("local", "https://github.com/o/r_local/pull/112")
     @http.pulls = [PR]
     @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
     2.times do

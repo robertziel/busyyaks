@@ -467,4 +467,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261127000000_projects_git_read.rb'),
 ('20261130000000_local_naming.rb'),
 ('20261201000000_projects_dirty_paths.rb'),
-('20261202000000_agent_settings.rb');
+('20261202000000_agent_settings.rb'),
+('20261203000000_cards_assigned_prs.rb');

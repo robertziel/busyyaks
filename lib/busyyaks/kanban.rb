@@ -159,12 +159,11 @@ module Busyyaks
                          stale_after: 3 * interval, wanted_for: CiChecks.wanted_for(interval), clock: clock)
     end
 
-    # the PR flags on a card's links — PR state the github service polled, same freshness rule as ci_port.
-    # the card's `card/<id>-*` branches are the checkout's as the scanner last read them (git_port, as CardLinks.build).
+    # the PR flags on a card's links — PR state the github service polled, same freshness rule as ci_port; the card's
+    # own PRs are the ones assigned to it (PrStates.assigned).
     def pr_flags(conn = db)
       interval = Integer(ENV.fetch("GITHUB_CI_INTERVAL_SECONDS"))
-      PrStates::Flags.new(PrStates::Reader.new(db: conn, stale_after: 3 * interval, wanted_for: PrStates.wanted_for(interval)),
-                          branches: ->(project) { git_port.branches(project) })
+      PrStates::Flags.new(PrStates::Reader.new(db: conn, stale_after: 3 * interval, wanted_for: PrStates.wanted_for(interval)))
     end
 
     # CardLinks' `git:` port (one per process: its files_at answers are kept per scan). No git in this process.

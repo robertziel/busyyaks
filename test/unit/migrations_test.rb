@@ -20,6 +20,7 @@ class MigrationsTest < Minitest::Test
   V9 = 20_261_124_000_000 # the last migration before v10 (card #248: gate head / state)
   BEFORE_LOCAL = 20_261_125_000_000 # the last migration before the local naming (card #249)
   LOCAL = 20_261_130_000_000
+  BEFORE_PRS = 20_261_202_000_000 # the last migration before the assigned PRs
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -370,5 +371,44 @@ class MigrationsTest < Minitest::Test
     e = assert_raises(Sequel::Error) { migrate(BEFORE_V3) }
     assert_match(/irreversible: workflow v3 .*Restore the pre-deploy backup/m, e.message)
     assert_includes applied, V3
+  end
+
+  # the cards in flight get the PRs the old lookup read as assignments (metadata prs.<role>), once
+  def test_assigned_prs_carry_the_cards_in_flight_over
+    migrate(BEFORE_PRS)
+    %w[m/p plain].each { |s| project(s) }
+    local_remote = "git@github.com:o/p_local.git"
+    @db[:projects].where(slug: "m/p").update(local_mode: "own", local_repo: local_remote, pr_remote: local_remote,
+                                             public_repo: "https://github.com/o/p.git")
+    lpr = "https://github.com/o/p_local/pull/5"
+    ppr = "https://github.com/o/p/pull/9"
+    local = card("m/p", "deploy_check", "local in pr_url", pr_url: lpr)
+    public = card("m/p", "public_agent_review", "public in pr_url", pr_url: ppr, metadata: JSON.generate("x" => 1))
+    @db[:card_activity].insert(card_id: public, kind: "handoff", body: "handed to Local: Deploy check: PR #{lpr}",
+                               author: "a", created_at: 50)
+    kept = card("m/p", "awaiting_merge", "already assigned", pr_url: ppr,
+                                         metadata: JSON.generate("prs" => { "public" => "https://github.com/o/p/pull/8" }))
+    plain = card("plain", "human_check", "plain", pr_url: "https://github.com/o/plain/pull/3")
+    other = card("plain", "doing", "a PR of another repo", pr_url: "https://github.com/x/y/pull/1")
+    junk = card("plain", "doing", "not a PR URL", pr_url: "https://github.com/x/y/pull/1/files")
+    none = card("m/p", "doing", "no PR")
+    @db[:gh_pr_states].insert(repo: "o/p", ref: "head:o:pub/card-1", requested_at: 1)
+    @db[:gh_pr_states].insert(repo: "o/p", ref: "pr:9", requested_at: 1)
+    @db[:gh_pr_checks].insert(repo: "o/p", ref: "branch:card/1-x", requested_at: 1)
+    out, = migrate
+    assert_includes out, "cards_assigned_prs: 4 card(s) carried over"
+    meta = ->(id) { (m = @db[:cards].where(id: id).get(:metadata)) && JSON.parse(m) }
+    assert_equal({ "prs" => { "local" => lpr } }, meta.(local))
+    assert_equal({ "x" => 1, "prs" => { "local" => lpr, "public" => ppr } }, meta.(public), "local from the handoff")
+    assert_equal({ "prs" => { "public" => "https://github.com/o/p/pull/8" } }, meta.(kept),
+                 "an assigned role is kept")
+    assert_equal({ "prs" => { "pr" => "https://github.com/o/plain/pull/3" } }, meta.(plain))
+    assert_equal({ "prs" => { "pr" => "https://github.com/x/y/pull/1" } }, meta.(other), "its URL names the repo")
+    assert_nil meta.(junk)
+    assert_nil meta.(none)
+    assert_equal ["pr:9"], @db[:gh_pr_states].select_map(:ref)
+    assert_empty @db[:gh_pr_checks].all
+    migrate(BEFORE_PRS)
+    assert_equal({ "prs" => { "local" => lpr } }, meta.(local), "down keeps the assignments")
   end
 end

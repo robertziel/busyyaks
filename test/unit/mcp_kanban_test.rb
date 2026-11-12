@@ -105,6 +105,8 @@ class McpKanbanTest < Minitest::Test
     assert_includes e, "kanban_handoff"
     hand = { id: c["id"], qa: "Open /x at 375 px and 1280 px; 4 buttons in one row", pr_url: "https://github.com/o/r/pull/7",
              ci_url: "https://ci.example.com/job/r/7/", ui_change: false, author: "tl_g_r", }
+    assert_match(/has no PR whose checks could be read/, err("kanban_handoff", **hand), "no PR assigned yet")
+    ok("kanban_pr_assign", id: c["id"], pr_url: "https://github.com/o/r/pull/7", role: "pr", author: "tl_g_r")
     assert_match(/CI not read yet .*; hand off once CI is green\z/, err("kanban_handoff", **hand)) # card #247
     now = Time.now.to_i # the github service answers the request the refusal registered: green
     Hanami.app["db.gateway"].connection[:gh_pr_checks].where(repo: "o/r", ref: "pr:7")

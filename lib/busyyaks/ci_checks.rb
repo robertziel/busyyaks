@@ -11,7 +11,7 @@ module Busyyaks
   # PR check status for the kanban idle watch (config/kanban.yml idle_watch; the engine's CiChecks port).
   #
   # The GitHub token lives only in the `github` compose service, so the work is split over the db (gh_pr_checks):
-  #   Port    (notifier)  — names the PR a card is about (its pr_url, else the open PR on the owner session's branch),
+  #   Port    (notifier)  — names the PR a card is about (the one its agents assigned to it: PrStates.assigned),
   #                         registers "I want this" (requested_at) and reads the answer. No token, no HTTP.
   #   Poller  (github)    — every GITHUB_CI_INTERVAL_SECONDS answers the recently requested rows through
   #                         GithubNetwork::Client.
@@ -20,8 +20,6 @@ module Busyyaks
   module CiChecks
     FINISHED = %w[success failure].freeze
     BAD_RUN = %w[failure timed_out cancelled action_required startup_failure stale].freeze
-    PR_URL = %r{\Ahttps://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)}
-    PR_URL_ANY = %r{https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)}
 
     Unavailable = AgentsKanban::Delivery::Unavailable
 
@@ -49,17 +47,15 @@ module Busyyaks
       end
 
       # The engine's approval gate (config/kanban.yml approval.requires_green_ci): what each approval step checks.
-      # A project that is not enrolled: the card's PR (pr_url, else the owner's branch). An enrolled one
-      # works on its LOCAL PR (#local_pr — the pr_url, or the newest handoff naming a PR on the local repo: the public
-      # loop's handoffs carry the public PR):
+      # Every PR is the one the card's agents ASSIGNED (kanban_pr_assign → metadata prs.<role>; PrStates.assigned).
+      # A project that is not enrolled: the card's `pr` PR. An enrolled one works on its `local` PR:
       #   - the board's FIRST approval step (Local: Human review) = the local PR OPEN with green checks (merged ahead
       #     of the approval → refused);
       #   - a later non-final step (Local: Deploy check → Open public PR) = the local PR MERGED and the CI of its merge
       #     commit on the working branch green (`merge:<N>` — jenkins/ci on `local`);
-      #   - the final step (the public merge) = the public PR = the card's metadata `prs.public` (a PR on the public
-      #     repo; git mirror-publish names its branch after the change, never the card), and only once the local PR is
-      #     MERGED. None recorded, or not a PR of the public repo → Unavailable with the reason.
-      # An enrolment the scanner could not read, or a card with no local PR → Unavailable with the reason.
+      #   - the final step (the public merge) = the `public` PR, and only once the local PR is MERGED.
+      # None assigned, one that is no PR of its repo, or an enrolment the scanner could not read → Unavailable with the
+      # reason.
       def approval_checks(card, step)
         project = @projects.call(card[:project_slug])
         return pr_checks(card) unless project && project[:local_mode]
@@ -70,9 +66,9 @@ module Busyyaks
           if first_step?(card, step)
             case state
             when "merged"
-              # approved once already (an approve after the handoff that named it), merged, then the card was moved
+              # approved once already (an approve after the newest handoff), merged, then the card was moved
               # back into the gate: nothing is left to approve, the merge commit's CI answers
-              return merge_ci(repo, number) if approved_after_handoff?(card, repo, number)
+              return merge_ci(repo, number) if approved_after_handoff?(card)
 
               return blocked(number, "the local PR ##{number} was merged before its approval")
             when "closed" then return blocked(number, "the local PR ##{number} was closed without merging")
@@ -97,8 +93,8 @@ module Busyyaks
                              "#{project[:local_error] || 'the public repo is not on github.com'}"
         end
 
-        _, number = PrStates.public_pr(card, repo)
-        raise Unavailable, "card ##{card[:id]} records no public PR (metadata prs.public, a PR on #{repo})" unless number
+        _, number = PrStates.assigned(card, PrStates::ROLES[:public], repo)
+        raise Unavailable, unassigned(card, PrStates::ROLES[:public], repo) unless number
 
         read(repo, "pr:#{number}")
       rescue PrStates::Invalid => e
@@ -114,8 +110,7 @@ module Busyyaks
 
       private
 
-      # → [owner/name, number] of the card's PR on the project's local repo: its pr_url, else the newest handoff that
-      # names one (a handoff's activity line carries its PR URL). None → Unavailable (nothing guessed).
+      # → [owner/name, number] of the card's `local` PR on the project's local repo. None → Unavailable.
       def local_pr(card, project)
         repo = PrStates.slug(project[:local_repo])
         unless repo
@@ -123,11 +118,12 @@ module Busyyaks
                              "#{project[:local_error] || 'the local repo is not on github.com'}"
         end
 
-        handoffs = @db[:card_activity].where(card_id: card[:id], kind: "handoff").order(Sequel.desc(:id)).select_map(:body)
-        [card[:pr_url].to_s, *handoffs].each do |text|
-          text.scan(PR_URL_ANY) { |r, n| return [r, n.to_i] if r == repo }
-        end
-        raise Unavailable, "card ##{card[:id]} has no local PR (a PR on #{repo} in its pr_url or a handoff)"
+        pr = PrStates.assigned(card, PrStates::ROLES[:local], repo)
+        pr || raise(Unavailable, unassigned(card, PrStates::ROLES[:local], repo))
+      end
+
+      def unassigned(card, role, repo)
+        "card ##{card[:id]} has no #{role} PR assigned (kanban_pr_assign role #{role}, a PR on #{repo})"
       end
 
       # The merge:<N> answer; anything but green carries what was read (the shas) as the refusal's reason.
@@ -141,14 +137,13 @@ module Busyyaks
           reason: "jenkins/ci for the local PR ##{number} merge is #{row[:state]}: #{row[:detail]}", }
       end
 
-      # Did the operator approve the card after the newest handoff naming the local PR repo#number? (card_activity: the
-      # engine's `approve` entry, logged by an approval move only.)
-      def approved_after_handoff?(card, repo, number)
+      # Did the operator approve the card after its newest handoff? (card_activity: the engine's `approve` entry, logged
+      # by an approval move only.) The handoff that took the card into the gate, not text naming a PR.
+      def approved_after_handoff?(card)
         acts = @db[:card_activity].where(card_id: card[:id], kind: %w[handoff approve]).order(Sequel.desc(:id))
-                                  .select_map(%i[kind body])
-        names = ->(body) { body.to_s.scan(PR_URL_ANY).any? { |r, n| r == repo && n.to_i == number } }
-        handed = acts.index { |kind, body| kind == "handoff" && names.call(body) }
-        !handed.nil? && acts.first(handed).any? { |kind, _| kind == "approve" }
+                                  .select_map(:kind)
+        handed = acts.index("handoff")
+        !handed.nil? && acts.first(handed).include?("approve")
       end
 
       # The board's first approval step (the engine's derivation order: board order).
@@ -209,22 +204,28 @@ module Busyyaks
         end
 
         out = { number: row[:number], state: row[:state], finished_at: row[:finished_at] }
-        out[:head] = row[:head] if row[:head] # the PR head sha (pr: / branch: / head: rows; a merge: row has none)
+        out[:head] = row[:head] if row[:head] # the PR head sha (a pr: row; a merge: row has none)
         row[:detail] ? out.merge(detail: row[:detail]) : out
       end
 
-      # → [owner/name, "pr:N" | "branch:b"] | nil (no repo on github.com, or the owner is on no branch)
+      # → [owner/name, "pr:N"] of the PR the idle watch follows | nil when none is assigned: on an enrolled project the
+      # card's `local` PR (on the local repo), on any other its `pr` PR (its URL names the repo). An assignment that is
+      # no PR of its repo, or an enrolment whose local repo cannot be read → Unavailable (the watch says why).
       def target(card)
-        m = card[:pr_url].to_s.match(PR_URL)
-        return [m[1], "pr:#{m[2]}"] if m
-
         project = @projects.call(card[:project_slug])
-        repo = project && Github.repo_url(project[:pr_remote])&.delete_prefix("https://github.com/") # push remote
-        return nil unless repo && card[:owner_session]
-
-        git = @launcher.git(session: card[:owner_session], socket: card[:owner_socket] || "default")
-        branch = git["branch"].to_s
-        branch.empty? ? nil : [repo, "branch:#{branch}"]
+        if project && project[:local_mode]
+          repo = PrStates.slug(project[:local_repo])
+          unless repo
+            raise Unavailable, "the local PR of card ##{card[:id]} cannot be found: " \
+                               "#{project[:local_error] || 'the local repo is not on github.com'}"
+          end
+          _, number = PrStates.assigned(card, PrStates::ROLES[:local], repo)
+        else
+          repo, number = PrStates.assigned(card, PrStates::ROLES[:pr], nil)
+        end
+        number ? [repo, "pr:#{number}"] : nil
+      rescue PrStates::Invalid => e
+        raise Unavailable, e.message
       end
     end
 
@@ -292,12 +293,10 @@ error: nil))
       def poll(row)
         repo = row[:repo]
         kind, name = row[:ref].split(":", 2)
-        pr = if %w[pr merge].include?(kind)
-               get("/repos/#{repo}/pulls/#{Integer(name)}", missing_ok: true)
-             else # branch:<b> on the repo's own owner; head:<owner>:<b> (a public PR from a fork)
-               head = kind == "head" ? name : "#{repo.split('/').first}:#{name}"
-               get("/repos/#{repo}/pulls?state=open&head=#{URI.encode_www_form_component(head)}").first
-             end
+        # pr:<n> = a PR assigned to a card, merge:<n> = its merge commit's CI
+        raise GithubNetwork::Error, "#{repo} #{row[:ref]}: not a pr:<n> / merge:<n> ref" unless %w[pr merge].include?(kind)
+
+        pr = get("/repos/#{repo}/pulls/#{Integer(name)}", missing_ok: true)
         return { number: nil, state: "none", finished_at: nil } unless pr
         return merge_checks(repo, pr) if kind == "merge"
         # merged (the public step needs the local PR merged) vs closed unmerged
