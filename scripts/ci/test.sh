@@ -19,8 +19,12 @@
 #                                 also covers the vendored engine under frontend/src/vendor). Any finding fails it —
 #                                 never ignored or baselined, fixed by upgrading. Needs network (advisory DBs)
 #   scripts/ci/test.sh secrets    gitleaks over the full git history; any finding fails it, never allowlisted
-#   scripts/ci/test.sh all        lint, ruby, frontend, audit and secrets at once, each into its own log, printed one after the other
-#                                 once all have finished; fails if any fails
+#   scripts/ci/test.sh host       the host-side programs' tests (bin/yaks, bin/env, the launcher's rules, the
+#                                 installers)
+#                                 on the OLDEST host Ruby they support (HOST_RUBY_IMAGE = Busyyaks::CLI::MIN_RUBY):
+#                                 a construct newer than that passes the suite's Ruby 3.4 and breaks on the host
+#   scripts/ci/test.sh all        lint, ruby, frontend, audit, secrets and host at once, each into its own log,
+#                                 printed one after the other once all have finished; fails if any fails
 #
 # Where it runs: Jenkins (the maintainer's runner, Jenkinsfile) and GitHub Actions (.github/workflows/ci.yml, every
 # pull request on the public repo, forks included) run this same script; so does any machine with Docker.
@@ -45,6 +49,10 @@ SRC=$PWD
 COMPOSE_IMAGE=docker:28.5.2-cli      # carries the compose plugin (the Jenkins controller's docker CLI has none)
 NODE_IMAGE=node:22-bookworm-slim     # the Dockerfile's frontend stage
 GITLEAKS_IMAGE=zricethezav/gitleaks:v8.30.1
+HOST_RUBY_IMAGE=ruby:3.2.3-slim      # Busyyaks::CLI::MIN_RUBY's version (test/unit/cli_test.rb asserts they agree)
+# the standalone tests of what runs on the host (none requires test_helper: no app, no gems)
+HOST_TESTS=(test/unit/cli_test.rb test/integration/yaks_test.rb test/unit/env_file_test.rb test/unit/launcher_rules_test.rb
+            test/unit/deploy_template_test.rb test/unit/install_launcher_test.rb test/unit/deploy_units_test.rb)
 
 # Bind mounts are resolved by the Docker DAEMON. Under Jenkins this script runs inside the controller's container,
 # talking to the host's daemon, so it needs the checkout's path on the HOST: the source of the container mount that
@@ -268,6 +276,13 @@ secrets_suite() {
     "$GITLEAKS_IMAGE" git --redact --verbose --no-banner --exit-code 1 --ignore-gitleaks-allow /repo
 }
 
+# The host-side programs' tests on the oldest host Ruby (read-only source; each test writes under its own tmpdir)
+host_suite() {
+  docker run --rm -v "$HOST_SRC:/src:ro" -w /src "$HOST_RUBY_IMAGE" sh -euc '
+    ruby -v
+    for f in "$@"; do echo "== $f"; ruby -Ilib -Itest "$f"; done' host "${HOST_TESTS[@]}"
+}
+
 # The given suites at once. Each one's output goes to its own log (interleaved lines would be unreadable), printed
 # whole once every suite has finished, with its exit status.
 all_suites() {
@@ -293,6 +308,7 @@ case "${1:-}" in
   frontend) frontend_suite ;;
   audit) audit_suite ;;
   secrets) secrets_suite ;;
-  all) all_suites lint ruby ruby-pg frontend audit secrets ;;
-  *) echo "usage: $0 lint|ruby|ruby-pg|frontend|audit|secrets|all" >&2; exit 2 ;;
+  host) host_suite ;;
+  all) all_suites lint ruby ruby-pg frontend audit secrets host ;;
+  *) echo "usage: $0 lint|ruby|ruby-pg|frontend|audit|secrets|host|all" >&2; exit 2 ;;
 esac

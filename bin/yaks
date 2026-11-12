@@ -1,0 +1,8 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# yaks: the busyyaks command line (cli/yaks.rb; `yaks help`). Reached through a symlink on PATH; __dir__ is
+# the REAL path of this file, so the checkout it runs is the one the symlink points into.
+require_relative "../cli/yaks"
+
+exit Busyyaks::CLI.run(ARGV, home: File.expand_path("..", __dir__), env: ENV.to_h)

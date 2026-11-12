@@ -10,6 +10,13 @@ require "yaml"
 class ComposeTest < Minitest::Test
   COMPOSE = YAML.safe_load_file(File.expand_path("../../docker-compose.yml", __dir__), aliases: true)
 
+  # `yaks` names the stack's services in one constant: exactly the compose services without a profile
+  def test_the_cli_services_are_the_profile_less_compose_services
+    require_relative "../../cli/yaks"
+    live = COMPOSE.fetch("services").reject { |_, s| s.key?("profiles") }.keys
+    assert_equal live.sort, Busyyaks::CLI::SERVICES.sort
+  end
+
   def test_the_test_service_never_tags_the_live_image
     services = COMPOSE.fetch("services")
     test = services.fetch("test")

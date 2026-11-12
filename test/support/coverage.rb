@@ -7,7 +7,7 @@ require "simplecov"
 # under the run's tmpdir; the task then merges them with `TestCoverage.collate`, prints the merged figures and fails
 # below FLOOR. Everything is written inside the run's tmpdir (the test container's tmpfs) and removed with it.
 #
-# Measured: every Ruby file under app/ config/ lib/ auth/, loaded by a test or not
+# Measured: every Ruby file under app/ config/ lib/ auth/ cli/, loaded by a test or not
 # (an unloaded file counts as 0 % of its lines;
 # SimpleCov 0.22 records no branches for a file that never loads, so its branches are not counted).
 # Left out: the tests (test/, auth/<provider>/test/) and vendor/ (the engine copy is covered in its own repo, at its
@@ -35,7 +35,7 @@ module TestCoverage
     SimpleCov.root ROOT
     SimpleCov.coverage_dir dir
     SimpleCov.enable_coverage :branch
-    SimpleCov.track_files "{app,config,lib,auth}/**/*.rb"
+    SimpleCov.track_files "{app,config,lib,auth,cli}/**/*.rb"
     SimpleCov.add_filter %r{\A/test/}
     SimpleCov.add_filter %r{\A/auth/[^/]+/test/}
     SimpleCov.add_filter %r{\A/vendor/}
