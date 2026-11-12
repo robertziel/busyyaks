@@ -154,7 +154,7 @@ module Busyyaks
     def ci_port(conn = db, clock: -> { Time.now.to_i })
       interval = Integer(ENV.fetch("GITHUB_CI_INTERVAL_SECONDS"))
       CiChecks::Port.new(db: conn, projects: ->(slug) { conn[:projects].where(slug: slug.to_s).first },
-                         approvals: ->(slug) { store(conn, clock: clock).board_of(slug).approvals.map(&:to_h) },
+                         approvals: ->(slug) { CiChecks.steps(store(conn, clock: clock).board_of(slug)) },
                          launcher: SessionGit,
                          stale_after: 3 * interval, wanted_for: CiChecks.wanted_for(interval), clock: clock)
     end
