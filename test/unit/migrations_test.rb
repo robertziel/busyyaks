@@ -411,4 +411,18 @@ class MigrationsTest < Minitest::Test
     migrate(BEFORE_PRS)
     assert_equal({ "prs" => { "local" => lpr } }, meta.(local), "down keeps the assignments")
   end
+
+  # config/db/structure.sql (the schema dump, edited by hand since the services migrate with --no-dump
+  # — a table pasted twice once went unnoticed): every table once, the same tables the migrations create, every
+  # migration listed once
+  def test_the_structure_dump_matches_the_migrations
+    sql = File.read(File.expand_path("../../config/db/structure.sql", __dir__))
+    tables = sql.scan(/^CREATE TABLE `([a-z_]+)`/).flatten
+    assert_equal tables.uniq, tables, "a table created twice"
+    files = Dir.children(DIR).grep(/\A\d+_.*\.rb\z/).sort
+    listed = sql.scan(/\('(\d+_[a-z0-9_]+\.rb)'\)/).flatten
+    assert_equal files, listed.sort, "schema_migrations rows = the migration files"
+    db = Hanami.app["db.gateway"].connection
+    assert_equal (db.tables.map(&:to_s) - ["schema_migrations"]).sort, (tables - ["schema_migrations"]).sort
+  end
 end

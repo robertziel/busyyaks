@@ -116,4 +116,15 @@ class DailyReportRunnerTest < Minitest::Test
     assert_includes gate_block, %(if [ "$force" -eq 0 ] && [[ $(date +%H:%M) < "$cutoff" ]]; then exit 0; fi)
     assert_operator gate_block.index("exit 0"), :<, gate_block.index("post ")
   end
+
+  # what the tick does is tested by running it (daily_report_tick_test.rb); here the real installer, which
+  # needs systemd: it records what it installed, after the units are in place, and passes the values after `--`
+  def test_the_timer_installer_records_what_it_installed
+    inst = File.read(File.join(ROOT, "deploy/install-daily-timer.sh"))
+    assert_includes inst, %(jq -cS '{schedule, run_timeout, command: .runner.command}' <<<"$cfg" >"$dir/data/daily-timer.json")
+    assert_operator inst.index("systemctl --user restart busyyaks-daily.timer"), :<, inst.index("daily-timer.json\"")
+    assert_includes inst, %(systemd-analyze calendar -- "$schedule")
+    assert_includes inst, %(systemd-analyze timespan -- "$run_timeout")
+    assert_match(/\bNOT CONFIGURED\b/, "Daily report 2026-01-01 NOT CONFIGURED"[Busyyaks::McpServer::NOT_A_REPORT])
+  end
 end

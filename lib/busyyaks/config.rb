@@ -3,7 +3,7 @@
 require "yaml"
 require_relative "engines"
 require_relative "agent_collector"
-require_relative "daily_report_config"
+require_relative "daily_report_settings"
 require_relative "owner_remotes"
 require_relative "launch_trust"
 require_relative "launcher_rules"
@@ -16,9 +16,9 @@ module Busyyaks
     class Invalid < StandardError; end
 
     KEYS = %w[roots search_depth owner_remotes author_emails window_days reap_protect auth agents launch].freeze
-    OPTIONAL = %w[engines daily_report].freeze
-    attr_reader :roots, :search_depth, :owner_remotes, :author_emails, :window_days, :reap_protect, :engines, :daily_report,
-                :auth, :agent_collector, :trusted_paths, :launch_commands,
+    OPTIONAL = %w[engines daily_report_runners].freeze
+    attr_reader :roots, :search_depth, :owner_remotes, :author_emails, :window_days, :reap_protect, :engines,
+                :daily_report_runners, :auth, :agent_collector, :trusted_paths, :launch_commands,
                 :launch_start_seconds
 
     # mount: where compose mounts PROJECTS_ROOT (.env PROJECTS_MOUNT, the one place it is set): every root is under it.
@@ -43,6 +43,12 @@ module Busyyaks
     def initialize(hash)
       raise Invalid, "config must be a mapping" unless hash.is_a?(Hash)
 
+      if hash.key?("daily_report")
+        raise Invalid, "daily_report moved to the database: Settings → Daily report edits it. Move it: " \
+                       "1. copy the daily_report block into a file; 2. replace it here by daily_report_runners: " \
+                       "[{type, command, home}] (its runner's); 3. `bin/daily-report-settings import < file` " \
+                       "(docs/DAILY-REPORT.md § Moving off config/busyyaks.yml)"
+      end
       unknown = hash.keys - KEYS - OPTIONAL
       missing = KEYS - hash.keys
       raise Invalid, "unknown keys: #{unknown.join(', ')}" if unknown.any?
@@ -93,8 +99,9 @@ module Busyyaks
         raise Invalid, e.message
       end
       begin
-        @daily_report = DailyReportConfig.parse(hash["daily_report"]) # nil = this deployment has no daily report
-      rescue DailyReportConfig::Invalid => e
+        # what a daily report runner may execute on this host (DailyReportSettings); absent = none
+        @daily_report_runners = DailyReportSettings.runners!(hash["daily_report_runners"])
+      rescue DailyReportSettings::Error => e
         raise Invalid, e.message
       end
     end

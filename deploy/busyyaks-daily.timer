@@ -1,4 +1,4 @@
-# systemd --user timer; installed by deploy/install-daily-timer.sh. Ticks all day (config/busyyaks.yml daily_report.schedule):
+# systemd --user timer; installed by deploy/install-daily-timer.sh. Ticks all day (Settings → Daily report schedule):
 # the first tick that finds the gateway up runs the report, later ticks exit.
 [Unit]
 Description=busyyaks daily report tick

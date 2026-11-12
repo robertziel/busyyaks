@@ -30,8 +30,9 @@ RUN mkdir /src/libgit2 && tar xzf /src/libgit2.tar.gz -C /src/libgit2 --strip-co
 # Stage 3: the app
 FROM ruby:3.4-slim
 
+# jq: test/unit/daily_report_tick_test.rb runs the host script bin/daily-report (which needs it) in a sandbox
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential libyaml-dev git sqlite3 pkg-config zlib1g-dev \
+      build-essential libyaml-dev git sqlite3 pkg-config zlib1g-dev jq \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=libgit2 /opt/libgit2 /opt/libgit2
 RUN echo /opt/libgit2/lib > /etc/ld.so.conf.d/libgit2.conf && ldconfig

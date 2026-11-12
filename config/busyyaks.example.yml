@@ -1,7 +1,7 @@
 # Copy to config/busyyaks.yml (gitignored). An unknown key is an error.
 # Required (a missing one stops boot): roots, search_depth, owner_remotes, author_emails, window_days, auth,
 #   reap_protect, agents, launch.
-# Optional: engines (absent = only config/engines.yml), daily_report (absent = no daily report).
+# Optional: engines (absent = only config/engines.yml), daily_report_runners (absent = no daily report runner allowed).
 #
 # roots:          {path, prefix}: directories INSIDE the container whose children are git repos
 #                 (compose mounts PROJECTS_ROOT read-only at /projects); prefix namespaces their slugs.
@@ -90,33 +90,11 @@ launch:
 engines:
   # a renamed Claude Code wrapper your collector reports under its own name
   claude-local: { label: Local, family: claude }
-# daily_report:  (optional; absent = no daily report) how bin/daily-report runs on this deployment.
-#                Read by the host script through the MCP tool daily_report_config; every key required.
-#   schedule:       systemd OnCalendar of the tick, local time (deploy/install-daily-timer.sh installs it); the
-#                   first tick that finds the gateway up writes the day's report, later ticks exit.
-#   cutoff:         HH:MM local: from then on, a tick that finds the gateway down posts ONE "NOT RUN" report.
-#   probe_timeout:  seconds for each gateway probe request (GET /models, a 1-token completion).
-#   run_timeout:    wall-clock limit of one run (timeout(1) duration); hitting it posts the FAILED report.
-#   gateway:        OpenAI-compatible base URL the runner talks to (ends in /v1) — its only provider, no fallback.
-#   model:          the lead model (writes the report), id exactly as GET /models lists it; "served" = the one
-#                   model the gateway serves at that tick (0 or several → the tick counts as offline).
-#   agent_model:    the child model (one child per active repo), same rules.
-#   context_length: the lead model's context window in tokens (a served max_model_len below it → offline).
-#   runner:         the agent CLI that writes the report: type = one of the runner families
-#                   (bin/daily-report-runners/<type>) + that type's keys. hermes: command (on the host PATH),
-#                   home (a dedicated HERMES_HOME; its config.yaml is generated every run), max_children
-#                   (children at once; more repos → further batches).
-daily_report:
-  schedule: "*-*-* *:00/10:00"
-  cutoff: "23:30"
-  probe_timeout: 60
-  run_timeout: 90m
-  gateway: http://127.0.0.1:8000/v1
-  model: served
-  agent_model: served
-  context_length: 131072
-  runner:
-    type: hermes
-    command: hermes
-    home: /home/you/.hermes-busyyaks
-    max_children: 16
+# daily_report_runners: (optional; absent = none) what a daily report runner may EXECUTE on this host. How the daily
+#                report runs (schedule, cutoff, timeouts, gateway, models, runner) is in the database, edited on
+#                Settings → Daily report (docs/DAILY-REPORT.md); a saved runner must equal one entry here on
+#                its type's host keys — a dashboard session picks among these, never names a program or a directory.
+#                hermes: command (on the host PATH), home (a dedicated HERMES_HOME; its config.yaml is generated every
+#                run). The old `daily_report` key is refused (import it: bin/daily-report-settings import < file).
+daily_report_runners:
+  - { type: hermes, command: hermes, home: /home/you/.hermes-busyyaks }

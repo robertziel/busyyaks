@@ -1,0 +1,37 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The daily report settings revisions from a shell, inside the web container (the DB and
+# config/busyyaks.yml daily_report_runners are there):
+#
+#   docker compose exec -T web bin/daily-report-settings show          # the current revision as YAML (none → exit 2)
+#   docker compose exec -T web bin/daily-report-settings import < f    # a new revision from YAML on stdin: the
+#                                                                      # daily_report mapping, bare or under a
+#                                                                      # `daily_report:` key (an old config/busyyaks.yml
+#                                                                      # block works as is), checked like a save on the
+#                                                                      # Settings page
+#
+# Settings → Daily report on the dashboard does the same; this is for the move off config/busyyaks.yml (docs/DEPLOY.md).
+require "bundler/setup"
+require "hanami/prepare"
+require "yaml"
+require "busyyaks/daily_report_settings_api"
+
+S = Busyyaks::DailyReportSettings
+db = Busyyaks::Kanban.db
+case ARGV
+in ["show"]
+  cur = S.current(db) or abort "bin/daily-report-settings show: no revision saved (Settings → Daily report)"
+  puts YAML.dump(cur[:doc])
+in ["import"]
+  raw = YAML.safe_load($stdin.read)
+  raw = raw["daily_report"] if raw.is_a?(Hash) && raw.key?("daily_report")
+  abort "bin/daily-report-settings import: stdin must be the daily_report YAML mapping" unless raw.is_a?(Hash)
+  status, body = Busyyaks::DailyReportSettingsAPI.save({ "base" => S.current_id(db), "doc" => raw },
+                                                       by: "bin/daily-report-settings import")
+  abort "bin/daily-report-settings import: #{status}: #{body[:error]}" unless status == 200
+  puts "revision #{body[:revision][:id]}: #{body[:doc]['schedule']} · #{body[:doc]['gateway']} · " \
+       "runner #{body[:doc]['runner']['type']}"
+else
+  abort "usage: bin/daily-report-settings show | bin/daily-report-settings import < file.yml"
+end
