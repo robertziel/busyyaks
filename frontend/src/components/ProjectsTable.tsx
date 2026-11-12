@@ -44,10 +44,22 @@ export function useTree(tree: TreeNode[] | undefined, filter: Filter = NO_FILTER
   };
 }
 
-function Num({ v, warn }: { v: number | null; warn?: boolean }) {
-  if (v == null) return <td className="n zero">—</td>;
+// label = the column's name, shown before the number on a phone (the table's header is hidden there); an unknown
+// value (null) is its own class: the phone layout hides zeros, never an unknown (shown —, never 0)
+function Num({ v, warn, label, col }: { v: number | null; warn?: boolean; label: string; col?: string }) {
+  const c = col ? ` ${col}` : "";
+  if (v == null)
+    return (
+      <td role="cell" className={`n unknown${c}`} data-label={label} title="unknown">
+        —
+      </td>
+    );
   const cls = v === 0 ? " zero" : warn ? " warn" : "";
-  return <td className={`n${cls}`}>{warn && v > 0 ? <span className="pip">{v}</span> : v}</td>;
+  return (
+    <td role="cell" className={`n${cls}${c}`} data-label={label}>
+      {warn && v > 0 ? <span className="pip">{v}</span> : v}
+    </td>
+  );
 }
 
 type Props = {
@@ -71,26 +83,44 @@ export function ProjectsTable({ rows, expanded, active, shown, onToggle, launche
   };
   return (
     <div className="scroll tree-wrap">
-      <table className="data tree">
-        <thead>
-          <tr>
-            <th className="name">repo</th>
-            <th className="kind">kind</th>
-            <th className="branch">branch</th>
-            <th className="n when">last commit</th>
-            <th className="n">commits {window}d</th>
-            <th className="n">mine</th>
-            <th className="n">dirty</th>
-            <th className="n">unpushed</th>
+      {/* explicit roles: the phone layout turns rows into flex cards, which drops the table's semantics in browsers */}
+      <table className="data tree" role="table">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th role="columnheader" className="name">
+              repo
+            </th>
+            <th role="columnheader" className="branch">
+              branch
+            </th>
+            <th role="columnheader" className="n when">
+              last commit
+            </th>
+            <th role="columnheader" className="n" title={`commits in the last ${window} days`}>
+              {window}d
+            </th>
+            <th role="columnheader" className="n mine">
+              mine
+            </th>
+            <th role="columnheader" className="n">
+              dirty
+            </th>
+            <th role="columnheader" className="n">
+              unpushed
+            </th>
             {hasLaunch && (
               <>
-                <th className="n tmux">tmux</th>
-                <th className="launch">launch</th>
+                <th role="columnheader" className="n tmux">
+                  tmux
+                </th>
+                <th role="columnheader" className="launch">
+                  launch
+                </th>
               </>
             )}
           </tr>
         </thead>
-        <tbody>
+        <tbody role="rowgroup">
           {rows.map((r) => {
             if (r.kind === "folder") {
               const n = r.node;
@@ -98,12 +128,13 @@ export function ProjectsTable({ rows, expanded, active, shown, onToggle, launche
               const isOpen = expanded.has(n.path);
               return (
                 <tr
+                  role="row"
                   key={`f:${n.path}`}
                   className="folder"
                   style={{ "--depth": r.depth } as CSSProperties}
                   onClick={folderClick(n.path)}
                 >
-                  <td className="name">
+                  <td role="cell" className="name">
                     <button
                       type="button"
                       className="twisty"
@@ -114,19 +145,20 @@ export function ProjectsTable({ rows, expanded, active, shown, onToggle, launche
                     <span className="ficon" />
                     <b>{n.name}/</b> <span className="muted">{n.repos}</span>
                   </td>
-                  <td className="kind" />
-                  <td className="branch" />
-                  <td className={`n when${lc && lc < month ? " old" : ""}`} title={at(lc)}>
+                  <td role="cell" className="branch" />
+                  <td role="cell" className={`n when${lc && lc < month ? " old" : ""}`} title={at(lc)}>
                     {ago(lc, t)}
                   </td>
-                  <Num v={n.commits_window} />
-                  <Num v={n.mine_window} />
-                  <Num v={n.dirty} warn />
-                  <Num v={n.unpushed} warn />
+                  <Num v={n.commits_window} label={`${window}d`} />
+                  <Num v={n.mine_window} label="mine" col="mine" />
+                  <Num v={n.dirty} warn label="dirty" />
+                  <Num v={n.unpushed} warn label="unpushed" />
                   {hasLaunch && (
                     <>
-                      <td className="n tmux">{n.live > 0 && <span className="badge live">{n.live}</span>}</td>
-                      <td className="launch" />
+                      <td role="cell" className="n tmux" data-label={n.live > 0 ? "tmux" : undefined}>
+                        {n.live > 0 && <span className="badge live">{n.live}</span>}
+                      </td>
+                      <td role="cell" className="launch" />
                     </>
                   )}
                 </tr>
@@ -135,32 +167,39 @@ export function ProjectsTable({ rows, expanded, active, shown, onToggle, launche
             const p = r.project;
             const lc = p.last_commit_at;
             return (
-              <tr key={p.slug} className="repo" style={{ "--depth": r.depth } as CSSProperties}>
-                <td className="name">
+              <tr role="row" key={p.slug} className="repo" style={{ "--depth": r.depth } as CSSProperties}>
+                <td role="cell" className="name">
                   {r.depth > 0 && <span className={`branchline${r.last ? " last" : ""}`} aria-hidden="true" />}
-                  <Link to={projectPath(p.slug)} className="pname">
+                  <Link to={projectPath(p.slug)} className="pname" title={p.slug}>
                     <ProjectIcon slug={p.slug} icon={p.icon} size={16} />
-                    {r.name}
+                    <span className="pname-t">{r.name}</span>
                   </Link>
+                  {!p.own && (
+                    <span className="tag up" title="upstream: a repo you do not own">
+                      upstream
+                    </span>
+                  )}
                 </td>
-                <td className="kind">
-                  <span className={`tag ${p.own ? "own" : "up"}`}>{p.own ? "own" : "upstream"}</span>
-                </td>
-                <td className="branch">
+                <td role="cell" className="branch">
                   <span className="mono" title={p.branch ?? "—"}>
                     {p.branch ?? "—"}
                   </span>
                 </td>
-                <td className={`n when${lc && lc < month ? " old" : ""}`} title={at(lc)}>
+                <td role="cell" className={`n when${lc && lc < month ? " old" : ""}`} title={at(lc)}>
                   {ago(lc, t)}
                 </td>
-                <Num v={p.commits_window} />
-                <Num v={p.mine_window} />
-                <Num v={p.dirty} warn />
-                <Num v={p.unpushed} warn />
+                <Num v={p.commits_window} label={`${window}d`} />
+                <Num v={p.mine_window} label="mine" col="mine" />
+                <Num v={p.dirty} warn label="dirty" />
+                <Num v={p.unpushed} warn label="unpushed" />
                 {hasLaunch && (
                   <>
-                    <td className="n tmux" title={p.sessions.map((s) => s.name).join(", ")}>
+                    <td
+                      role="cell"
+                      className="n tmux"
+                      data-label="tmux"
+                      title={p.sessions.map((s) => s.name).join(", ")}
+                    >
                       {p.sessions.length > 0 && (
                         <a
                           className="badge live termbadge"
@@ -173,7 +212,7 @@ export function ProjectsTable({ rows, expanded, active, shown, onToggle, launche
                         </a>
                       )}
                     </td>
-                    <td className="launch">
+                    <td role="cell" className="launch">
                       <Launch slug={p.slug} launches={launches} launcherError={launcherError} />
                     </td>
                   </>
@@ -182,8 +221,8 @@ export function ProjectsTable({ rows, expanded, active, shown, onToggle, launche
             );
           })}
           {shown === 0 && (
-            <tr className="empty">
-              <td colSpan={hasLaunch ? 10 : 8} className="muted">
+            <tr role="row" className="empty">
+              <td role="cell" colSpan={hasLaunch ? 9 : 7} className="muted">
                 0 repos match
               </td>
             </tr>

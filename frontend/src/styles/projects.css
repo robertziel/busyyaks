@@ -340,7 +340,7 @@ table.tree div.launch:focus-within .split-menu {
 }
 .search {
   position: relative;
-  flex: 0 1 260px;
+  flex: 0 1 220px;
   min-width: 180px;
   display: block;
 }
@@ -414,10 +414,48 @@ table.tree div.launch:focus-within .split-menu {
   font-size: 12.5px;
   white-space: nowrap;
 }
+.sessions-cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-dim);
+}
+.sessions-cap.warn {
+  color: var(--warn);
+}
+.sessions-cap.bad {
+  color: var(--bad);
+}
+.dot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(var(--warn-rgb), 0.14);
+}
 
 /* ── the tree table ───────────────────────────────────────────────────────────────────────────── */
 .tree-wrap {
   overflow: clip;
+  container: tree / inline-size;
+}
+/* beside the Agents sidebar the table gets ~800-1050 px: drop the columns the row can do without (mine ≈ 7d on
+   your own repos; the branch is on the repo page) before the launch pills are cut off. At ≤ 900 px the rows are cards and show them */
+@media (min-width: 901px) {
+  @container tree (max-width: 1000px) {
+    table.tree .branch {
+      display: none;
+    }
+  }
+  @container tree (max-width: 900px) {
+    table.tree .mine {
+      display: none;
+    }
+  }
+  @container tree (max-width: 860px) {
+    table.tree td.name .pname-t {
+      max-width: 110px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
 }
 table.tree {
   overflow: visible;
@@ -426,7 +464,7 @@ table.tree {
 }
 table.tree th,
 table.tree td {
-  padding: 5px 10px;
+  padding: 5px 8px;
   vertical-align: middle;
   white-space: nowrap;
   line-height: 1.35;
@@ -436,7 +474,7 @@ table.tree thead th {
   top: calc(var(--top-h) + var(--bar-h));
   z-index: 2;
   font-size: 12px;
-  padding: 7px 10px;
+  padding: 7px 8px;
   background: var(--mat-card);
   -webkit-backdrop-filter: var(--mat-blur);
   backdrop-filter: var(--mat-blur);
@@ -447,11 +485,12 @@ table.tree td.name {
   width: 100%;
   padding-left: calc(10px + var(--depth, 0) * 20px);
 }
-table.tree th.kind {
-  width: 1%;
+table.tree td.name .tag.up {
+  margin-left: 8px;
+  vertical-align: 1px;
 }
 table.tree td.branch {
-  max-width: 140px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -468,8 +507,39 @@ table.tree td.launch {
   padding-right: 12px;
 }
 table.tree td.launch {
-  padding-top: 3px;
-  padding-bottom: 3px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+/* a row's launch bar: the pills two per line (one per line stacked four rows high, 145 px a repo); the host-wide
+   "N running" is the same on every row, so the toolbar shows it once — a row keeps only its own warnings / errors */
+table.tree .ak-launchbar {
+  display: inline-grid;
+  grid-template-columns: repeat(2, max-content);
+  justify-content: end;
+  justify-items: stretch;
+  gap: 4px;
+  vertical-align: middle;
+}
+table.tree .ak-launch > .ak-launch-main {
+  flex: 1 1 auto;
+}
+/* the chosen launcher is named in the pill's tooltip and ticked in its menu; on the row only the chevron */
+table.tree .ak-launch .ak-launch-menu .sel-label {
+  display: none;
+}
+table.tree .ak-launch .ak-launch-menu {
+  padding-left: 0.45rem;
+  padding-right: 0.55rem;
+}
+/* the host-wide session count (titled; error or not) is shown once in the toolbar; a row keeps only its own caps:
+   a held type (data-held) and its last launch error (untitled) */
+table.tree .ak-launchbar > .ak-cap[title]:not([data-held]) {
+  display: none;
+}
+table.tree .ak-launchbar > .ak-cap {
+  grid-column: 1 / -1;
+  text-align: right;
+  white-space: normal;
 }
 table.tree td.tmux {
   width: 1%;
@@ -478,7 +548,8 @@ table.tree td.tmux {
 table.tree td.n {
   color: var(--ink-dim);
 }
-table.tree td.zero {
+table.tree td.zero,
+table.tree td.unknown {
   color: var(--ink-faint);
   opacity: 0.55;
 }
@@ -551,9 +622,15 @@ table.tree tr.folder td.name .muted {
   margin: 0 2px 0 -2px;
   background: none;
   cursor: pointer;
-  vertical-align: -4px;
+  vertical-align: middle;
+  display: inline-grid;
+  place-items: center;
   color: var(--ink-faint);
   border-radius: 5px;
+}
+.twisty:hover {
+  background: var(--mat-fill);
+  color: var(--ink);
 }
 .twisty::before {
   content: "";
@@ -669,18 +746,100 @@ table.jobs td.log {
   white-space: nowrap;
 }
 
-/* ── narrow: the table scrolls in its own box (header no longer sticks); controls stack ─────────── */
+/* ── narrow (≤ 900 px): the tree becomes cards; ≤ 600 px the controls stack ─────────────────────── */
 @media (max-width: 900px) {
+  /* the tree as a list of cards: name + last commit on top, the non-zero numbers labelled under it, the launch
+     pills last — no sideways scroll, nothing cut off */
   .tree-wrap {
-    overflow-x: auto;
-    overflow-y: visible;
+    overflow: visible;
   }
-  table.tree thead th {
-    position: static;
+  table.tree,
+  table.tree tbody {
+    display: block;
   }
-  table.tree th.name,
+  /* visually hidden, still read: the column headers name the cells for screen readers */
+  table.tree thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  table.tree tr.repo,
+  table.tree tr.folder {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    padding: 8px 12px 8px calc(12px + var(--depth, 0) * 14px);
+    border-bottom: 0.5px solid var(--line);
+  }
+  table.tree tr.folder {
+    background: var(--panel-2);
+  }
+  table.tree tr.repo td,
+  table.tree tr.folder td {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+  /* line 1 = the name + last commit (the name leaves room for the time only), the rest wraps under it */
+  table.tree td.name .pname {
+    max-width: 100%;
+  }
+  table.tree td.name .pname-t {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  table.tree tr.repo td.name,
+  table.tree tr.folder td.name {
+    flex: 1 0 calc(100% - 70px);
+    min-width: 0;
+    padding: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  table.tree td.when {
+    order: -1;
+    flex: 0 0 60px;
+    min-width: 0;
+    text-align: right;
+  }
   table.tree td.name {
-    width: auto;
+    order: -2;
+  }
+  table.tree tr.folder td.branch,
+  table.tree tr.folder td.launch,
+  table.tree tr td.zero,
+  table.tree tr td.tmux:empty {
+    display: none;
+  }
+  table.tree td.branch {
+    max-width: 50%;
+  }
+  table.tree td[data-label]::before {
+    content: attr(data-label) " ";
+    color: var(--ink-faint);
+    font-size: 11.5px;
+  }
+  table.tree tr.repo td.launch {
+    flex: 1 1 100%;
+    text-align: left;
+    padding: 4px 0 0;
+  }
+  table.tree .ak-launchbar {
+    justify-content: start;
+  }
+  table.tree tr.empty {
+    display: block;
+  }
+  table.tree tr.empty td {
+    display: block;
+  }
+  .branchline {
+    display: none;
   }
 }
 @media (max-width: 600px) {
