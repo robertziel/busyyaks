@@ -27,10 +27,14 @@ module Busyyaks
     # than this is no longer polled, so the Port asks it afresh instead of reading its old answer as stale.
     def self.wanted_for(interval) = 10 * interval
 
+    # A board's approval steps as the Port reads them: the engine's step hashes, in order, each with the label of the
+    # gate it leaves (`from_label`) — the label the engine writes into the handoff and approve entries of that gate.
+    def self.steps(board) = board.approvals.map { |s| s.to_h.merge(from_label: board.label(s.from)) }
+
     # The notifier's side. launcher (SessionGit): answers git(session:, socket:) →
     # {"ok"=>true, "branch"=>…, "last_commit_at"=>…}.
     class Port
-      # approvals: ->(slug) { the board's approval steps as hashes, in order } (Store#board_of(slug).approvals)
+      # approvals: ->(slug) { the board's approval steps, in order } (CiChecks.steps(Store#board_of(slug)))
       def initialize(db:, projects:, approvals:, launcher:, stale_after:, wanted_for:, clock: -> { Time.now.to_i })
         @db = db
         @approvals = approvals
@@ -137,13 +141,19 @@ module Busyyaks
           reason: "jenkins/ci for the local PR ##{number} merge is #{row[:state]}: #{row[:detail]}", }
       end
 
-      # Did the operator approve the card after its newest handoff? (card_activity: the engine's `approve` entry, logged
-      # by an approval move only.) The handoff that took the card into the gate, not text naming a PR.
+      # Did the operator approve the first step after the card's newest handoff INTO that step's gate? Read off the
+      # entries the engine writes itself (never an agent's text, never a PR named in it): a `handoff` entry
+      # "handed to <gate>: …" and an `approve` entry "approved <gate> → …", logged by an approval move only. A later
+      # handoff into another gate (e.g. the deploy check after the merge) hides no approval of the first step; a new
+      # handoff into the first gate asks for a new one.
       def approved_after_handoff?(card)
+        gate = @approvals.call(card[:project_slug]).first&.fetch(:from_label)
+        return false unless gate
+
         acts = @db[:card_activity].where(card_id: card[:id], kind: %w[handoff approve]).order(Sequel.desc(:id))
-                                  .select_map(:kind)
-        handed = acts.index("handoff")
-        !handed.nil? && acts.first(handed).include?("approve")
+                                  .select_map(%i[kind body])
+        handed = acts.index { |kind, body| kind == "handoff" && body.start_with?("handed to #{gate}:") }
+        !handed.nil? && acts.first(handed).any? { |kind, body| kind == "approve" && body.start_with?("approved #{gate} →") }
       end
 
       # The board's first approval step (the engine's derivation order: board order).

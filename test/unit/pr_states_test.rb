@@ -212,8 +212,8 @@ class PrStatesTest < Minitest::Test
     assert_equal [%w[o/widgets pr:12]], @db[:gh_pr_states].select_map(%i[repo ref]), "the pasted PR is not read"
   end
 
-  # on a live board, "engine PR #63" and "public PR #13" in comments became #63 / #13 [local] rows on the
-  # card's own repo. A PR number in the text and the handoff pr_url are never rows: the rows are the assigned PRs
+  # a PR number in the text names no repo (it was resolved against the card's own repo, so a PR of another repo showed
+  # as an unrelated [local] row); neither it nor the handoff pr_url is ever a row: the rows are the assigned PRs
   def test_text_pr_refs_and_the_handoff_pr_are_never_rows
     meta = { "prs" => { "local" => "https://github.com/o/widgets_local/pull/139" } }
     text = [{ kind: "pr", label: "#139", url: "https://github.com/o/widgets_local/pull/139" }, # the handoff pr_url

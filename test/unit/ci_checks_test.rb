@@ -62,7 +62,7 @@ class CiChecksTest < Minitest::Test
     @client = client = Busyyaks::GithubNetwork::Client.new(token: "t", http: @http)
     @poller = CK::Poller.new(db: @conn, client: client, wanted_for: 600, clock: -> { @now })
     @port = CK::Port.new(db: @conn, projects: ->(s) { @conn[:projects].where(slug: s).first },
-                         approvals: ->(s) { @kb.board_of(s).approvals.map(&:to_h) }, launcher: @launcher,
+                         approvals: ->(s) { CK.steps(@kb.board_of(s)) }, launcher: @launcher,
                          stale_after: 180, wanted_for: 600, clock: -> { @now })
     @kb = Busyyaks::Kanban.store(@conn, clock: -> { @now })
     @id = @kb.create(slug: "o-r", title: "ship", by: "lead", column: "doing")
@@ -213,7 +213,7 @@ class CiChecksTest < Minitest::Test
     v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
     @kb.board_save("o-r", v3, by: "operator")
     assign!("local", "https://github.com/o/r_local/pull/112")
-    steps = @kb.board_of("o-r").approvals.map(&:to_h)
+    steps = CK.steps(@kb.board_of("o-r"))
     assert_equal %w[local_human_review deploy_check public_human_review], steps.map { |s| s[:from] }
     [@kb.card(@id), steps[0], steps[1]]
   end
@@ -276,7 +276,8 @@ class CiChecksTest < Minitest::Test
   end
 
   # approved, merged, deployed, then moved back into the first gate — the merged local PR is not "merged
-  # before its approval" when an approve follows the newest handoff: the merge commit's CI answers instead
+  # before its approval" when an approve of the first step follows the newest handoff into it: the merge commit's CI
+  # answers instead
   def test_the_first_gate_passes_a_merged_pr_approved_after_its_handoff
     card, first, = local_steps
     @http.pulls = [MERGED]
@@ -292,11 +293,20 @@ class CiChecksTest < Minitest::Test
     assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason],
                  "an approve older than the handoff of this PR approved nothing of it"
     log.call("approve", "approved Local: Human review → Local: Merged")
+    log.call("handoff", "handed to Local: Deploy check: PR https://github.com/o/r_local/pull/112") # the deploy receipt
+    log.call("approve", "approved Local: Deploy check → Public: Create PR") # another gate's approval approves nothing here
     2.times do # the merge commit's CI is asked, then read
       @port.approval_checks(card, first)
       @poller.run
     end
-    assert_equal [112, "success"], @port.approval_checks(card, first).values_at(:number, :state)
+    assert_equal [112, "success"], @port.approval_checks(card, first).values_at(:number, :state),
+                 "a later handoff into another gate does not hide the first step's approval"
+    log.call("handoff", handoff.call(112))
+    assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason],
+                 "a new handoff into the first gate asks for a new approval"
+    log.call("approve", "approved Local: Deploy check → Public: Create PR")
+    assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason],
+                 "only an approve of the first step counts"
   end
 
   def test_the_first_gate_says_closed_without_merging
