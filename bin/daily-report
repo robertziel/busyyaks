@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 # Daily report on an OpenAI-compatible gateway, written by the configured RUNNER (an agent CLI): how it
-# runs is config/busyyaks.yml `daily_report` (schedule, cutoff, timeouts, gateway, models, runner), read here through
-# the busyyaks MCP tool daily_report_config (the one validating loader) — no daily_report key → exit 2.
+# runs is the current revision of Settings → Daily report (the database: schedule, cutoff, timeouts, gateway,
+# models, runner — the runner's host keys on config/busyyaks.yml daily_report_runners), read here through the busyyaks
+# MCP tool daily_report_config (the one validating loader). Not configured (no revision, or one that does not run) →
+# ONE "Daily report <day> NOT CONFIGURED" report saying why, exit 2 (never a journal-only exit); a revision saved later
+# that day runs at the next tick. The schedule / run_timeout / runner.command the systemd units were installed with
+# (data/daily-timer.json, written by deploy/install-daily-timer.sh) differ from the revision's → the tick re-runs the
+# installer first, so a page edit applies without a shell; the installer refusing → NOT CONFIGURED, saying why.
 # The runner is bin/daily-report-runners/<runner.type> (hermes: the lead reads the repos through the busyyaks MCP,
 # delegates one child per active repo — facts over MCP only, no terminal, no git on the host — and posts the report
 # via post_report). The report itself is
 # stored in the busyyaks database (post_report → reports).
 # Runs on the HOST by design (it drives the host's agent CLI), ticked by a systemd user timer
-# (deploy/install-daily-timer.sh, at daily_report.schedule). Each tick:
-#   1. today's "Daily report <day>…" exists (list_reports)   → exit 0, silent
+# (deploy/install-daily-timer.sh, at the settings' schedule). Each tick:
+#   1. today's "Daily report <day>…" exists (list_reports; a NOT CONFIGURED one does not count) → exit 0, silent
 #   2. another tick holds the lock                            → exit 0, silent
 #   3. gateway probe fails (models list lacks the models, or a 1-token completion fails)
-#      daily_report.model / agent_model = "served": use the model the
+#      model / agent_model = "served": use the model the
 #      gateway serves at this tick; 0 or several served → offline (never a guess). The report names the model used.
-#        → one "vLLM offline" log line, exit 0; after daily_report.cutoff → post ONE "NOT RUN" report instead
+#        → one "vLLM offline" log line, exit 0; after the cutoff → post ONE "NOT RUN" report instead
 #   4. the last scan (daily_facts last_scan): missing, failed or stale — older than 3 × SCAN_INTERVAL_SECONDS +
 #      min(its duration, one interval), more than 60 s in the future, or a row with no start / a negative duration →
 #      before the cutoff a log line, exit 0, the next
@@ -57,11 +62,50 @@ post() { # title body
   mcp_call post_report "$(jq -cn --arg t "$1" --arg b "$2" '{title:$t,author:"bin/daily-report",body_markdown:$b}')" >/dev/null
 }
 
-# --- 0. how this deployment runs it (config/busyyaks.yml daily_report, validated by the MCP server)
+todays_reports() { # titles of today's reports, one per line
+  local rows
+  rows=$(mcp_call list_reports "$(jq -cn --arg d "$day" '{date:$d,limit:50}')") || { say "busyyaks MCP unreachable ($mcp)"; echo "busyyaks MCP unreachable ($mcp)" >&2; exit 1; }
+  jq -r --arg p "Daily report $day" '.[].title | select(startswith($p))' <<<"$rows"
+}
+
+# --- 0. how this deployment runs it (Settings → Daily report, validated by the MCP server)
 config_error() { say "config: $*"; echo "$*" >&2; exit 2; }
-cfg=$(mcp_call daily_report_config '{}' 2>&1) \
-  || config_error "daily_report_config failed (no daily_report in config/busyyaks.yml, or MCP down at $mcp): ${cfg:0:200}"
+# Not configured: ONE visible report a day saying why ($1) and what to do ($2) (--force: say it, post nothing), exit 2.
+not_configured() {
+  say "not configured: $1"
+  echo "daily report not configured: $1" >&2
+  # under the run lock (another tick posting at the same moment waits for nothing: it exits), and only on a day with
+  # no report yet — a real one (or FAILED / NOT RUN) already says what happened today
+  exec 9>data/daily-report.lock
+  flock -n 9 || exit 2
+  local titles
+  titles=$(todays_reports) || exit 1
+  if [ "$force" -eq 0 ] && [ -z "$titles" ]; then
+    post "Daily report $day NOT CONFIGURED" "\`bad:not configured\` $1
+
+$2" \
+      || { say "could not post the NOT CONFIGURED report"; exit 1; }
+    say "posted NOT CONFIGURED report"
+  fi
+  exit 2
+}
+out=$(mcp_call daily_report_config '{}' 2>&1) \
+  || config_error "daily_report_config failed (MCP down at $mcp?): ${out:0:200}"
+[ "$(jq -r .configured <<<"$out")" = true ] || not_configured "$(jq -r '.reason // "daily_report_config gave no reason"' <<<"$out")" \
+  "Settings → Daily report (the cog menu) saves the settings; the next tick runs the report."
+cfg=$(jq -c .config <<<"$out")
 c() { jq -er "$1" <<<"$cfg" || config_error "daily_report_config: no ${1#.}"; }
+
+# --- 0b. the systemd units follow the revision: reinstalled when what they were installed with differs
+stamp=data/daily-timer.json
+want=$(jq -cS '{schedule, run_timeout, command: .runner.command}' <<<"$cfg")
+have=$(jq -cS . "$stamp" 2>/dev/null || true)
+if [ "$want" != "$have" ]; then
+  say "timer: installed ${have:-(no $stamp)} ≠ settings $want: reinstalling"
+  deploy/install-daily-timer.sh >>"$log" 2>&1 || not_configured "deploy/install-daily-timer.sh refused the settings $want (log data/daily-report-$day.log)" \
+    "Fix the setting it names on Settings → Daily report (the cog menu); the next tick retries."
+  say "timer: reinstalled"
+fi
 cutoff=$(c .cutoff)
 probe_timeout=$(c .probe_timeout)
 run_timeout=$(c .run_timeout)
@@ -72,16 +116,17 @@ context_length=$(c .context_length)
 runner_type=$(c .runner.type)
 # checked HERE, on the host that runs it — not only by the MCP container that answered: a name, never a path
 [[ "$runner_type" =~ ^[a-z][a-z0-9_-]*$ ]] \
-  || config_error "daily_report.runner.type $(jq -cn --arg t "$runner_type" '$t') is not a runner name (^[a-z][a-z0-9_-]*$)"
+  || config_error "runner.type $(jq -cn --arg t "$runner_type" '$t') is not a runner name (^[a-z][a-z0-9_-]*$)"
 runner="$PWD/bin/daily-report-runners/$runner_type"
-{ [ -f "$runner" ] && [ -x "$runner" ]; } || config_error "daily_report.runner.type $runner_type: no executable $runner"
+{ [ -f "$runner" ] && [ -x "$runner" ]; } || config_error "runner.type $runner_type: no executable $runner"
 # runner.<key> → RUNNER_<KEY> in the runner's environment (hermes: RUNNER_COMMAND, RUNNER_HOME, RUNNER_MAX_CHILDREN)
 mapfile -t runner_env < <(jq -r '.runner | del(.type) | to_entries[] | "RUNNER_\(.key | ascii_upcase)=\(.value)"' <<<"$cfg")
 
-report_exists() { # any report titled "Daily report <day>…" (a real one, FAILED or NOT RUN)
-  local rows
-  rows=$(mcp_call list_reports "$(jq -cn --arg d "$day" '{date:$d,limit:50}')") || { say "busyyaks MCP unreachable ($mcp)"; echo "busyyaks MCP unreachable ($mcp)" >&2; exit 1; }
-  jq -e --arg p "Daily report $day" 'any(.[]; .title | startswith($p))' <<<"$rows" >/dev/null
+report_exists() { # any report titled "Daily report <day>…" (a real one, FAILED or NOT RUN) — NOT CONFIGURED is not one:
+  # settings saved later that day run at the next tick
+  local titles
+  titles=$(todays_reports) || exit 1
+  [ -n "$(grep -v -xF "Daily report $day NOT CONFIGURED" <<<"$titles" || true)" ]
 }
 
 # Gateway up = both models listed AND a real 1-token completion on the lead model answers.
@@ -103,7 +148,7 @@ probe() {
     grep -qxF -- "$m" <<<"$served" || { why="model $m not served (served: $(paste -sd, <<<"$served"))"; return 1; }
     len=$(jq -r --arg m "$m" '.data[] | select(.id == $m) | .max_model_len // empty' <<<"$models")
     [ -z "$len" ] || [ "$len" -ge "$context_length" ] \
-      || { why="model $m max_model_len $len < daily_report.context_length $context_length"; return 1; }
+      || { why="model $m max_model_len $len < context_length $context_length"; return 1; }
   done
   local body out
   body=$(jq -cn --arg m "$lead_model" '{model:$m,max_tokens:1,messages:[{role:"user",content:"ping"}]}')

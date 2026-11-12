@@ -266,7 +266,7 @@ The full contract is [`vendor/agents_kanban/SPEC.md`](vendor/agents_kanban/SPEC.
 | `github_network(hours)` | stars, follows and the feed in a window, plus a ready-made report block |
 | `report_components()` · `check_report(body)` · `post_report(...)` | the report block library; a dry-run check of a draft; publish |
 | `list_reports` · `get_report` · `add_note` · `list_notes` · `scan_now` | reports, notes, an immediate rescan |
-| `daily_report_config()` | how the daily report runs here (`config/busyyaks.yml` `daily_report`, validated) |
+| `daily_report_config()` | how the daily report runs here (Settings → Daily report's current revision, validated; `configured: false` + why when none runs) |
 | `kanban_*` (29 tools) | the board: `kanban_board`, `kanban_card`, `kanban_create`, `kanban_claim`, `kanban_comment`, `kanban_ask`, `kanban_handoff`, `kanban_move`, labels, checklists, due dates, attachments, `kanban_workflow` |
 
 The server's `instructions` tell an agent how to use the board: claim before working, ask on the card instead of in
@@ -276,7 +276,7 @@ chat, hand off with `kanban_handoff`, and never poll.
 
 ## The daily report
 
-Optional, configured by `daily_report` in `config/busyyaks.yml`. `bin/daily-report` runs on the host from a systemd
+Optional, configured on **Settings → Daily report** (stored in the database; the runners it may pick are `config/busyyaks.yml` `daily_report_runners`). Not configured → one visible `NOT CONFIGURED` report a day. `bin/daily-report` runs on the host from a systemd
 user timer (`deploy/install-daily-timer.sh`): it probes your OpenAI-compatible gateway and starts a runner (today:
 [Hermes](https://github.com/NousResearch/hermes-agent)) whose only tools are the busyyaks MCP server and read-only
 `git log` / `git status`. The model writes the prose; every figure comes from `daily_facts`, and `check_report`
@@ -293,7 +293,7 @@ A deployment is configuration, never code. One place per value; an unknown or mi
 | File | Holds |
 |---|---|
 | `.env` (from [`.env.example`](.env.example)) | wiring and secrets: ports, `PROJECTS_ROOT`, the host user the containers run as (`HOST_UID`/`HOST_GID`), timezone, session secret, `MCP_TOKEN`, GitHub login and token, intervals, attachment limits. Compose uses `${VAR:?}`, so a missing value stops it. |
-| `config/busyyaks.yml` (from [`config/busyyaks.example.yml`](config/busyyaks.example.yml)) | repo roots and search depth, your remotes and author emails, the history window, `reap_protect` (sessions "Clear idle" never stops), `auth` ([Sign-in](#sign-in)), `agents` ([Agent sessions](#agent-sessions)), optional `engines:` and `daily_report` (a bad one stops the scanner and github services at boot and fails the `daily_report_config` tool). |
+| `config/busyyaks.yml` (from [`config/busyyaks.example.yml`](config/busyyaks.example.yml)) | repo roots and search depth, your remotes and author emails, the history window, `reap_protect` (sessions "Clear idle" never stops), `auth` ([Sign-in](#sign-in)), `agents` ([Agent sessions](#agent-sessions)), optional `engines:` and `daily_report_runners` (the runners Settings → Daily report may pick; a bad one stops the scanner and github services at boot and fails the `daily_report_config` tool). |
 | `config/engines.yml` (committed) | the coding-agent engine names a collector reports → sidebar label + behaviour family (`claude` · `hermes`); `engines:` in `config/busyyaks.yml` adds or relabels. |
 | `config/kanban.yml` (from [`config/kanban.example.yml`](config/kanban.example.yml); the file `KANBAN_CONFIG` names) | the kanban module's host settings: concurrency caps, theme, the handoff / approval gates, the review loop. Not the launchers and agent types: they are rows in the database, edited on **Settings → Agents & launchers** (the header's cog). |
 | Settings → Agents & launchers (`/settings`; repo default [`config/agents.template.yml`](config/agents.template.yml)) | the launchers (the commands that start an agent session: kind `claude_code` or `hermes`, command, args, via shell) and the agent types (their launchers, model per launcher, prompt, caps). Every save is a new revision (history kept). A launcher is one of the invocations on `config/busyyaks.yml` `launch.commands`, **the host allowlist** (each a whole `{kind, command, args, via_shell}`): the page offers only those, and anything else is refused when saved and again by `bin/launcher` when it starts — no dashboard user can add an argument the host did not list. The fresh database runs plain `claude` in Claude Code's default permission mode (a permission prompt becomes a question on the card). |

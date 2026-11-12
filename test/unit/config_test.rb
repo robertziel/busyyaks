@@ -139,40 +139,35 @@ class ConfigTest < Minitest::Test
     assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.load("/nope.yml") }
   end
 
-  # how the daily report runs is config — optional, every key inside required, runner type known
-  DR = { "schedule" => "*-*-* *:00/10:00", "cutoff" => "23:30", "probe_timeout" => 60, "run_timeout" => "90m",
-         "gateway" => "http://127.0.0.1:8000/v1/", "model" => "served", "agent_model" => "org/child",
-         "context_length" => 131_072,
-         "runner" => { "type" => "hermes", "command" => "hermes", "home" => "/h/.hermes-busyyaks",
-                       "max_children" => 16, }, }.freeze
-
-  def dr(**over) = Busyyaks::Config.new(OK.merge("daily_report" => DR.merge(over.transform_keys(&:to_s)))).daily_report
-
-  def test_daily_report_is_optional_and_parsed
-    assert_nil Busyyaks::Config.new(OK).daily_report
-    h = dr.to_h
-    assert_equal "http://127.0.0.1:8000/v1", h[:gateway], "trailing slash dropped"
-    assert_equal({ type: "hermes", command: "hermes", home: "/h/.hermes-busyyaks", max_children: 16 }, h[:runner])
-    assert_equal %w[23:30 90m served org/child], h.values_at(:cutoff, :run_timeout, :model, :agent_model)
+  # how the daily report runs is a database revision (DailyReportSettings); the file keeps only the runners a
+  # revision may pick (daily_report_runners) and refuses the old block
+  def test_the_old_daily_report_key_is_refused
+    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.merge("daily_report" => {})) }
+    assert_match(/daily_report moved to the database: Settings → Daily report/, e.message)
+    # the order that can run: the import reads daily_report_runners from this file, which does not load
+    # while the old key is in it — so the key goes first, then the import
+    steps = ["1. copy the daily_report block into a file;", "2. replace it here by daily_report_runners:",
+             "3. `bin/daily-report-settings import < file`",]
+    assert_operator steps.map { e.message.index(_1) }, :==, steps.map { e.message.index(_1) }.compact.sort
   end
 
-  def test_daily_report_refuses_bad_values
+  def test_daily_report_runners_are_optional_and_checked
+    assert_equal [], Busyyaks::Config.new(OK).daily_report_runners
+    ok = [{ "type" => "hermes", "command" => "hermes", "home" => "/h/.hermes-busyyaks" }]
+    assert_equal ok, Busyyaks::Config.new(OK.merge("daily_report_runners" => ok)).daily_report_runners
     bad = {
-      "missing keys: cutoff" => -> { Busyyaks::Config.new(OK.merge("daily_report" => DR.except("cutoff"))) },
-      "unknown keys: extra" => -> { dr(extra: 1) },
-      "cutoff must be HH:MM" => -> { dr(cutoff: "25:00") },
-      "run_timeout must be" => -> { dr(run_timeout: "1.5 hours") },
-      "run_timeout must be a timeout(1)" => -> { dr(run_timeout: 90) },
-      "runner.home must not contain control characters" => -> { dr(runner: DR["runner"].merge("home" => "/h\nX=1")) },
-      "probe_timeout must be a positive integer" => -> { dr(probe_timeout: 0) },
-      "gateway must be an http" => -> { dr(gateway: "127.0.0.1:8000") },
-      "model must be a non-empty string" => -> { dr(model: "") },
-      "not a runner (known: hermes)" => -> { dr(runner: { "type" => "codex" }) },
-      "runner: missing keys: home" => -> { dr(runner: DR["runner"].except("home")) },
-      "runner: unknown keys: model" => -> { dr(runner: DR["runner"].merge("model" => "x")) },
-      "runner.max_children must be a positive integer" => -> { dr(runner: DR["runner"].merge("max_children" => "16")) },
+      "must be a list" => { "type" => "hermes" },
+      "is not a runner (known: hermes)" => [{ "type" => "codex" }],
+      "must have exactly type, command, home" => [{ "type" => "hermes", "command" => "hermes" }],
+      "[0] must have exactly" => [ok.first.merge("max_children" => 2)],
+      "home must not contain control characters" => [ok.first.merge("home" => "/h\nX=1")],
+      "command must be a non-empty string" => [ok.first.merge("command" => " ")],
+      "duplicate entry" => ok + ok,
     }
-    bad.each { |msg, f| assert_includes assert_raises(Busyyaks::Config::Invalid, msg, &f).message, msg }
+    bad.each do |msg, v|
+      e = assert_raises(Busyyaks::Config::Invalid, msg) { Busyyaks::Config.new(OK.merge("daily_report_runners" => v)) }
+      assert_includes e.message, msg
+    end
   end
 
   def test_every_runner_type_has_its_script
@@ -181,9 +176,9 @@ class ConfigTest < Minitest::Test
     end
   end
 
-  def test_the_example_config_loads_with_a_daily_report
+  def test_the_example_config_loads_with_a_daily_report_runner
     c = Busyyaks::Config.load(File.expand_path("../../config/busyyaks.example.yml", __dir__))
-    assert_equal "hermes", c.daily_report.to_h.dig(:runner, :type)
+    assert_equal ["hermes"], c.daily_report_runners.map { _1["type"] }
   end
 
   # one owner_remotes rule for Config and the scanner (OwnerRemotes)

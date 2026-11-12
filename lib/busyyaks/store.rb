@@ -5,6 +5,8 @@ module Busyyaks
   class Store
     def self.default = new(Hanami.app["db.gateway"].connection)
 
+    attr_reader :db
+
     def initialize(db, clock: -> { Time.now.to_i })
       @db = db
       @clock = clock

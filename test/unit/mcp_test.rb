@@ -82,6 +82,7 @@ class McpTest < Minitest::Test
     assert_includes names, "post_report"
   end
 
+  # the tool answers the current Settings → Daily report revision, checked against the host's runners
   def test_daily_report_config_tool
     assert_includes rpc("tools/list").dig("result", "tools").map { |t| t["name"] }, "daily_report_config"
     dr = { "schedule" => "daily", "cutoff" => "23:30", "probe_timeout" => 5, "run_timeout" => "90m", "gateway" => "http://g/v1",
@@ -90,14 +91,23 @@ class McpTest < Minitest::Test
     base = { "roots" => [{ "path" => "/p", "prefix" => "" }], "search_depth" => 1, "owner_remotes" => ["example.com/x/"],
              "author_emails" => ["a@x"], "window_days" => 1, "reap_protect" => [], "auth" => { "provider" => "none" },
              "agents" => { "collector" => "none" }, "launch" => LAUNCH_CLAUDE, }
-    with = Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: 60, store: store,
-                                   config: Busyyaks::Config.new(base.merge("daily_report" => dr)))
-    out = with.send(:call_tool, "daily_report_config", {})
-    assert_equal({ "type" => "hermes", "command" => "hermes", "home" => "/h", "max_children" => 2 }, JSON.parse(out)["runner"])
-    without = Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: 60, store: store,
-                                      config: Busyyaks::Config.new(base))
-    e = assert_raises(Busyyaks::McpServer::ToolError) { without.send(:call_tool, "daily_report_config", {}) }
-    assert_match(/no daily_report key/, e.message)
+    runners = [{ "type" => "hermes", "command" => "hermes", "home" => "/h" }]
+    server = ->(cfg) { Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: 60, store: store, config: cfg) }
+    with = server.(Busyyaks::Config.new(base.merge("daily_report_runners" => runners)))
+    call = ->(s) { JSON.parse(s.send(:call_tool, "daily_report_config", {})) }
+
+    assert_equal({ "configured" => false, "reason" => "no daily report settings saved: Settings → Daily report" }, call.(with))
+    Busyyaks::DailyReportSettings.save!(store.db, doc: dr, base: nil, author: "op", runners: runners)
+    out = call.(with)
+    assert out["configured"]
+    assert_equal({ "type" => "hermes", "command" => "hermes", "home" => "/h", "max_children" => 2 },
+out.dig("config", "runner"))
+    # the host dropped that runner: the saved revision does not run — said, never an older one or a guess
+    out = call.(server.(Busyyaks::Config.new(base)))
+    refute out["configured"]
+    assert_match(/does not run: runner .* is not on this host's allowlist .* has no daily_report_runners/, out["reason"])
+  ensure
+    store.db[:daily_report_settings].delete
   end
 
   def test_notification_is_202

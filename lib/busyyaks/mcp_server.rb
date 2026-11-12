@@ -12,6 +12,7 @@ require_relative "store"
 require_relative "report_blocks"
 require_relative "markdown"
 require_relative "kanban"
+require_relative "daily_report_settings"
 require_relative "github_network"
 require_relative "scan_freshness"
 
@@ -109,9 +110,10 @@ module Busyyaks
         description: "Rescan every repo now (git log/status/upstream); returns repo count and duration.",
         inputSchema: { type: "object", properties: {} }, },
       { name: "daily_report_config",
-        description: "How the daily report runs on this deployment (config/busyyaks.yml daily_report, validated): schedule, " \
-                     "cutoff, timeouts, gateway, models, runner (type + its keys). bin/daily-report and the timer installer " \
-                     "read it here. Error when the deployment has no daily_report.",
+        description: "How the daily report runs on this deployment (the current revision of Settings → Daily report, " \
+                     "validated against config/busyyaks.yml daily_report_runners): {configured: true, config: {schedule, " \
+                     "cutoff, timeouts, gateway, models, runner (type + its keys)}}, or {configured: false, reason} when " \
+                     "none is saved or the current one does not run. bin/daily-report and the timer installer read it here.",
         inputSchema: { type: "object", properties: {} }, },
     ].freeze
 
@@ -124,7 +126,7 @@ module Busyyaks
                       kanban_board kanban_card kanban_workflow].freeze
 
     # bin/daily-report's placeholders ("<series> FAILED", "<series> NOT RUN — …"): never a previous report.
-    NOT_A_REPORT = /\b(FAILED|NOT RUN)\b/
+    NOT_A_REPORT = /\b(FAILED|NOT RUN|NOT CONFIGURED)\b/
     CHURN_PATHS_MAX = 15
 
     # sessions: -> live tmux session names for kanban_claim (nil = the host launcher's `sessions` op).
@@ -245,10 +247,9 @@ module Busyyaks
         n = Scanner.new(config, store).run
         dump(repos: n, seconds: (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t).round(1))
       when "daily_report_config"
-        # read fresh on every call (unless injected): an edit to daily_report applies at the next tick, no restart
-        dr = (@config || Config.load).daily_report or
-          raise ToolError, "no daily report on this deployment: config/busyyaks.yml has no daily_report key"
-        dump(dr.to_h)
+        # read fresh on every call (unless injected): a saved revision or an allowlist edit applies at the next tick
+        state, out = DailyReportSettings.resolve(store.db, (@config || Config.load).daily_report_runners)
+        dump(state == :ok ? { configured: true, config: out.to_h } : { configured: false, reason: out })
       else
         raise ToolError, "unknown tool: #{name}" unless kanban_tools.handles?(name)
 
