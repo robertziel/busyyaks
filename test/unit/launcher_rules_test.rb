@@ -24,6 +24,19 @@ class LauncherRulesTest < Minitest::Test
 
   def host_dir(path) = R.host_dir(path, container_root: "/projects", projects_root: @root)
 
+  # the start check's clock: a start 3.6 s in with start_seconds 4 was refused when the elapsed seconds were rounded up
+  def test_a_start_is_not_overdue_before_start_seconds_passed
+    refute R.start_overdue?(100.0, 103.6, 4)
+    refute R.start_overdue?(100.0, 103.999, 4)
+    assert_equal 3, R.start_elapsed(100.0, 103.6)
+  end
+
+  def test_a_start_is_overdue_once_start_seconds_passed
+    assert R.start_overdue?(100.0, 104.0, 4)
+    assert R.start_overdue?(100.0, 104.4, 4)
+    assert_equal 4, R.start_elapsed(100.0, 104.4)
+  end
+
   def test_host_dir_maps_a_repo_under_the_root
     assert_equal File.realpath(File.join(@root, "g/repo")), host_dir("/projects/g/repo")
   end

@@ -36,9 +36,8 @@ pipeline {
     buildDiscarder(logRotator(numToKeepStr: '30'))
   }
 
-  triggers {
-    githubPush()
-  }
+  // No `triggers { githubPush() }`: the multibranch job's branch source already builds on the repo webhook's push
+  // event, and a githubPush() trigger on the branch job built the same push a second time.
 
   environment {
     BADGE_GIST_ID = 'f4d62c00382e99d2952e6185510eeb75'

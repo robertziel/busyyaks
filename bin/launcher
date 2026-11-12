@@ -219,12 +219,14 @@ end
 BARE_CHECKS = 3
 
 # A launch's start clock, started at `tmux new-session`: the trust wait and the start check share it, so every
-# refusal names the true elapsed seconds and launch.start_seconds bounds the whole start.
-def start_clock = { started: Time.now, bare: 0 }
+# refusal names the true elapsed seconds and launch.start_seconds bounds the whole start. Monotonic; the elapsed seconds
+# and the refusal are LauncherRules.start_elapsed / start_overdue? (a start is refused only once start_seconds passed).
+def start_clock = { started: Process.clock_gettime(Process::CLOCK_MONOTONIC), bare: 0 }
 
 # One look at the pane: :up (`up`, when given, holds for the pane's process), the failure reason, or nil (wait on)
 def start_probe(name, clock, what, up)
-  elapsed = (Time.now - clock[:started]).round
+  now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  elapsed = Busyyaks::LauncherRules.start_elapsed(clock[:started], now)
   out, _e, ok = tmux("list-panes", "-t", "=#{name}", "-F", "\#{pane_pid}")
   return "tmux session is gone after #{elapsed}s" unless ok
 
@@ -233,7 +235,7 @@ def start_probe(name, clock, what, up)
 
   clock[:bare] = tree(pane_pid).size > 1 ? 0 : clock[:bare] + 1
   return "the command exited after #{elapsed}s, no #{what}: #{pane_tail(name)}" if clock[:bare] >= BARE_CHECKS
-  if elapsed >= START_SECONDS
+  if Busyyaks::LauncherRules.start_overdue?(clock[:started], now, START_SECONDS)
     return "no #{what} after #{elapsed}s (launch.start_seconds #{START_SECONDS}): #{pane_tail(name)}"
   end
 

@@ -27,6 +27,13 @@ module Busyyaks
                      "(seconds bin/launcher waits for a started agent to come up; got #{value.inspect})"
     end
 
+    # A launch's start clock (bin/launcher's start check): the WHOLE seconds passed since `started` (monotonic seconds,
+    # floored — never rounded: 3.6 s is 3), and whether launch.start_seconds really passed. Overdue compares
+    # the unfloored seconds, so a refusal never comes before start_seconds; the floored ones are only for the message.
+    def start_elapsed(started, now) = (now - started).floor
+
+    def start_overdue?(started, now, start_seconds) = now - started >= start_seconds
+
     # A container path under container_root → the repo dir's REAL path under projects_root (what tmux and the trust
     # check then use: a symlink swapped after this check is never followed). Refused: a path outside the root, an
     # empty / . / .. segment, a dir that is no git repo, and a symlink that leads out of projects_root.
