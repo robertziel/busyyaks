@@ -37,7 +37,9 @@ Types (the fixed set): `parked queued working review gate done cancelled` (engin
 a question for the operator is the card's `needs_operator` flag (`kanban_ask`; `asked*`, `question*` on the card JSON) and
 an external blocker its `blocked_external` flag (`kanban_block`; `blocked: {reason, url, by, at}`) — the card keeps its
 column, shows a badge and refuses agent moves; a needs_operator card counts as waiting for you, a blocked_external one
-waits for the world and is listed as `external` ("N blocked externally"), never as waiting. The private local-repo boards run the engine's
+waits for the world and is listed as `external` ("N blocked externally"), never as waiting. Card JSON `waiting` = the card waits for you NOW by the counts' own
+rule (a question open, or in a gate approvable now and not only blocked_external): the board highlights it (red frame +
+tint, a "needs you" badge), so the cards "N waiting for you" counts stand out on the board itself. The private local-repo boards run the engine's
 `local_v4` board (15 states: Backlog · To do · In progress · Local: Agent review · Local: Author response · Local:
 Human review · Local: Merged · Local: Deploy check · Public: Create PR · Public: Agent review · Public: Author response ·
 Public: Human review · Awaiting merge · Done · Cancelled — the operator's "Open public PR" sends a card into Public:
