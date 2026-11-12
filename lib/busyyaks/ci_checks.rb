@@ -69,7 +69,12 @@ module Busyyaks
           state = answer(repo, "pr:#{number}")[:state]
           if first_step?(card, step)
             case state
-            when "merged" then return blocked(number, "the local PR ##{number} was merged before its approval")
+            when "merged"
+              # approved once already (an approve after the handoff that named it), merged, then the card was moved
+              # back into the gate: nothing is left to approve, the merge commit's CI answers
+              return merge_ci(repo, number) if approved_after_handoff?(card, repo, number)
+
+              return blocked(number, "the local PR ##{number} was merged before its approval")
             when "closed" then return blocked(number, "the local PR ##{number} was closed without merging")
             when "none" then return blocked(number, "the local PR ##{number} was not found on #{repo}")
             end
@@ -134,6 +139,16 @@ module Busyyaks
         # name what was read
         { number: number, state: row[:state], finished_at: row[:finished_at],
           reason: "jenkins/ci for the local PR ##{number} merge is #{row[:state]}: #{row[:detail]}", }
+      end
+
+      # Did the operator approve the card after the newest handoff naming the local PR repo#number? (card_activity: the
+      # engine's `approve` entry, logged by an approval move only.)
+      def approved_after_handoff?(card, repo, number)
+        acts = @db[:card_activity].where(card_id: card[:id], kind: %w[handoff approve]).order(Sequel.desc(:id))
+                                  .select_map(%i[kind body])
+        names = ->(body) { body.to_s.scan(PR_URL_ANY).any? { |r, n| r == repo && n.to_i == number } }
+        handed = acts.index { |kind, body| kind == "handoff" && names.call(body) }
+        !handed.nil? && acts.first(handed).any? { |kind, _| kind == "approve" }
       end
 
       # The board's first approval step (the engine's derivation order: board order).

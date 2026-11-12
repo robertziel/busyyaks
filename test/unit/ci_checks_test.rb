@@ -246,6 +246,31 @@ class CiChecksTest < Minitest::Test
                  @port.approval_checks(card, deploy)[:reason])
   end
 
+  # approved, merged, deployed, then moved back into the first gate — the merged local PR is not "merged
+  # before its approval" when an approve follows the handoff that named it: the merge commit's CI answers instead
+  def test_the_first_gate_passes_a_merged_pr_approved_after_its_handoff
+    card, first, = local_steps
+    @http.pulls = [MERGED]
+    @http.statuses_by_sha["m1" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @port.approval_checks(card, first)
+    @poller.run
+    assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason],
+                 "no handoff, no approval: refused"
+    handoff = ->(n) { "handed to Local: Human review: PR https://github.com/o/r_local/pull/#{n} · CI https://ci.example.com/1" }
+    log = ->(kind, body) { @conn[:card_activity].insert(card_id: @id, kind: kind, author: "x", created_at: @now, body: body) }
+    log.call("approve", "approved Local: Human review → Local: Merged")
+    log.call("handoff", handoff.call(112))
+    assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason],
+                 "an approve older than the handoff of this PR approved nothing of it"
+    log.call("approve", "approved Local: Human review → Local: Merged")
+    log.call("handoff", handoff.call(99)) # a later handoff of another PR does not hide this one's approval
+    2.times do # the merge commit's CI is asked, then read
+      @port.approval_checks(card, first)
+      @poller.run
+    end
+    assert_equal [112, "success"], @port.approval_checks(card, first).values_at(:number, :state)
+  end
+
   def test_the_first_gate_says_closed_without_merging
     card, first, = local_steps
     @http.pulls = [PR.merge("state" => "closed", "merged_at" => nil)]
@@ -296,15 +321,17 @@ class CiChecksTest < Minitest::Test
     v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
     @kb.board_save("o-r", v3, by: "operator")
     @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r_local/pull/112", column: "public_human_review")
-    refuse = lambda do |pattern, drag: false|
+    refuse = lambda do |pattern, drag: false| # drag: the step's own transition (a plain drag is never refused)
       e = assert_raises(AgentsKanban::Invalid) do
-        drag ? @kb.move(@id, column: "awaiting_merge", by: "operator") : @kb.approve(@id, by: "operator")
+        # the step's named transition asks CI like the button; a plain drag never does
+        drag ? @kb.move(@id, transition: "Approve", by: "operator") : @kb.approve(@id, by: "operator")
       end
       assert_match(pattern, e.message)
       assert_equal ["public_human_review", nil], @kb.card(@id).values_at(:column, :approved_at)
     end
     unread = "the local PR #112 is not read yet (asked now — try again in a minute)" # an approval or a handoff
-    refuse.call(/Public: Human review → Awaiting merge\): card ##{@id} — #{Regexp.escape(unread)}\z/)
+    drag_way = "A drag into Awaiting merge approves without asking CI"
+    refuse.call(/Public: Human review → Awaiting merge\): card ##{@id} — #{Regexp.escape("#{unread}. #{drag_way}")}\z/)
     @http.pulls = [PR]
     @poller.run
     refuse.call(/the local PR #112 is still open/, drag: true)
@@ -312,7 +339,7 @@ class CiChecksTest < Minitest::Test
     @http.statuses = [{ "state" => "pending", "updated_at" => finish_at(@now) }]
     @poller.run
     none = "card ##{@id} records no public PR (metadata prs.public, a PR on o/r)"
-    refuse.call(/CI state of card ##{@id} is unknown — #{Regexp.escape(none)}\z/)
+    refuse.call(/CI state of card ##{@id} is unknown — #{Regexp.escape("#{none}. #{drag_way}")}\z/)
     @kb.update(@id, { metadata: { "prs" => { "public" => "https://github.com/o/r/pull/5" } } }, by: "op")
     refuse.call(/its PR of card ##{@id} — CI not read yet/)
     # review round 1: the watch pass and the waiting counts hand the port RAW rows (metadata = its JSON text)
@@ -513,8 +540,8 @@ class CiChecksTest < Minitest::Test
     moved = "new commits since the handoff (abc → def): the reviewer has not seen them"
     assert_equal [moved], held_now
     e = assert_raises(AgentsKanban::Invalid) { @kb.approve(@id, by: "operator") }
-    assert_equal "not approved (Local: Human review → Local: Merged): card ##{@id} — #{moved}; hand it back for review",
-                 e.message
+    assert_equal "not approved (Local: Human review → Local: Merged): card ##{@id} — #{moved}; hand it back for review. " \
+                 "A drag into Local: Merged approves without asking CI", e.message
     assert_equal "local_human_review", @kb.card(@id)[:column]
   end
 
