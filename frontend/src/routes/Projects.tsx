@@ -11,6 +11,7 @@ import { now, projectPath } from "../lib/format";
 import { CHIPS, chipCounts, repos, type ChipKey, type Filter } from "../lib/tree";
 import { useTitle } from "../lib/title";
 import type { BoardsData, CreateResult, ProjectsData } from "../types";
+import { capLine } from "../vendor/agents_kanban";
 
 export function Projects() {
   useTitle("projects");
@@ -53,6 +54,10 @@ export function Projects() {
   if (error && !data) return <ErrorState error={error} what="projects" retry={reload} />;
   if (!data) return null;
   const counts = chipCounts(repos(data.tree), now() - 7 * 86400);
+  // the host-wide session count, once here instead of on every row's launch bar (the rows hide it)
+  const cap = data.launches.types.length
+    ? capLine(data.launches.concurrency, data.launches.sessions_error ?? data.launcher_error)
+    : null;
   const toggleChip = (k: ChipKey) =>
     setChips((prev) => {
       const n = new Set(prev);
@@ -99,8 +104,17 @@ export function Projects() {
           ))}
         </div>
         <span className="spacer" />
+        {cap && (
+          <span
+            className={`count sessions-cap ${cap.tone}`}
+            title="registered agent sessions running on the host / the cap (concurrency.max_sessions)"
+          >
+            <i className={`dot ${cap.tone}`} /> {cap.text}
+          </span>
+        )}
+        {/* the match count only while a filter is on: unfiltered it repeats the heading's total */}
         <span className="muted count" aria-live="polite">
-          {tree.shown} / {tree.total}
+          {tree.active ? `${tree.shown} / ${tree.total}` : ""}
         </span>
         {tree.hasFolders && (
           <button type="button" className="btn small" onClick={() => tree.setAll(tree.anyClosed)}>
