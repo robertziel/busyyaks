@@ -1,0 +1,331 @@
+/* /hello — the first-run hello screen: a full-page boot (the trotting yak, Ubuntu-style progress dots, the
+   checks ticking in), then the steps beside the "ask your agent" note. Glass tokens only (public/static/app.css). */
+.hello {
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 20px 16px 40px;
+  background: radial-gradient(1200px 600px at 50% -10%, rgba(var(--accent-rgb), 0.12), transparent 60%), var(--bg);
+  color: var(--ink);
+}
+.hello-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: 1040px;
+  margin: 0 auto 28px;
+}
+.hello-top .btn {
+  white-space: nowrap;
+}
+.hello-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+.hello-steps li span {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  font-size: 11px;
+  margin-right: 4px;
+}
+.hello-steps li.now {
+  color: var(--ink);
+  font-weight: 600;
+}
+.hello-steps li.now span {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.hello-steps li.past span {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+
+/* boot */
+.hello-boot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  max-width: 560px;
+  margin: 6vh auto 0;
+  text-align: center;
+}
+.hello-yak .yak-loader svg {
+  height: 120px;
+}
+.hello-brand {
+  margin: 0;
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.hello-brand span {
+  color: var(--accent);
+}
+.hello-dots {
+  display: flex;
+  gap: 10px;
+}
+.hello-dots i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--line-strong);
+  animation: hello-dot 1.1s ease-in-out infinite;
+}
+.hello-dots i.on {
+  background: var(--accent);
+}
+.hello-dots.still i {
+  animation: none;
+}
+@keyframes hello-dot {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+.hello-checks {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+  font-family: var(--mono);
+}
+.hello-checks li {
+  display: grid;
+  grid-template-columns: 20px 150px 1fr;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--row-rule);
+  animation: hello-in 0.3s ease-out;
+}
+.hello-checks li .muted {
+  overflow-wrap: anywhere;
+}
+.hello-checks li.ok .hello-mark {
+  color: var(--ok);
+}
+.hello-checks li.bad .hello-mark,
+.hello-bad {
+  color: var(--bad);
+}
+.hello-checks li.pending {
+  color: var(--ink-faint);
+}
+@keyframes hello-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hello-dots i,
+  .hello-checks li {
+    animation: none;
+  }
+}
+
+/* steps */
+.hello-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 20px;
+  max-width: 1040px;
+  margin: 0 auto;
+  align-items: start;
+}
+.hello-step {
+  background: var(--mat-card);
+  backdrop-filter: var(--mat-blur);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 18px 20px;
+}
+.hello-step h2 {
+  margin: 0 0 12px;
+}
+.hello-facts {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+}
+.hello-facts dt {
+  color: var(--ink-faint);
+}
+.hello-facts dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+.hello-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.hello-host {
+  margin: 14px 0 0;
+  font-size: 13px;
+}
+.hello-agents {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.hello-agents th {
+  text-align: left;
+  color: var(--ink-faint);
+  font-weight: 500;
+  padding: 4px 6px;
+}
+.hello-agents td {
+  padding: 6px;
+  border-top: 1px solid var(--row-rule);
+  vertical-align: middle;
+}
+.hello-agents tr.off td {
+  color: var(--ink-faint);
+}
+.hello-agents input:not([type]) {
+  font: inherit;
+  width: 100%;
+  min-width: 80px;
+  box-sizing: border-box;
+  padding: 0.3rem 0.5rem;
+  border: 0.5px solid var(--line-strong);
+  border-radius: var(--radius-ctl-sm);
+  background: var(--panel);
+  color: var(--ink);
+}
+.hello-agents input:disabled {
+  background: var(--panel-2);
+  color: var(--ink-faint);
+}
+.hello-agents input[type="checkbox"],
+.hello-agents input[type="radio"] {
+  accent-color: var(--accent);
+}
+.hello-changes {
+  width: 100%;
+  margin-top: 12px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.hello-changes th {
+  text-align: left;
+  color: var(--ink-faint);
+  font-weight: 500;
+  padding: 3px 6px;
+}
+.hello-changes td {
+  padding: 4px 6px;
+  border-top: 1px solid var(--row-rule);
+  overflow-wrap: anywhere;
+}
+.hello-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  width: 100%;
+}
+.hello-nav {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+.hello-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--panel-2);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-card);
+  padding: 14px 16px;
+  font-size: 13px;
+}
+.hello-ask pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.hello-ask .copychip {
+  align-self: flex-start;
+}
+
+@media (max-width: 760px) {
+  .hello-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hello-checks li {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+  .hello-checks li .muted {
+    grid-column: 2;
+  }
+  .hello-facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .hello-facts dd {
+    margin-bottom: 8px;
+  }
+  .hello-agents thead {
+    display: none;
+  }
+  .hello-agents tr {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr) minmax(0, 1fr) 24px;
+    grid-template-areas: "use cmd cmd cmd" ". key label def";
+    gap: 6px 8px;
+    padding: 8px 0;
+    border-top: 1px solid var(--row-rule);
+  }
+  .hello-agents td {
+    border: 0;
+    padding: 0;
+  }
+  .hello-agents td:nth-child(1) {
+    grid-area: use;
+  }
+  .hello-agents td:nth-child(2) {
+    grid-area: cmd;
+    overflow-wrap: anywhere;
+  }
+  .hello-agents td:nth-child(3) {
+    grid-area: key;
+  }
+  .hello-agents td:nth-child(4) {
+    grid-area: label;
+  }
+  .hello-agents td:nth-child(5) {
+    grid-area: def;
+  }
+}

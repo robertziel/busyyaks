@@ -54,7 +54,7 @@ class WebTest < Minitest::Test
       assert_equal 302, last_response.status, path
       assert_equal "/login", URI(last_response.location).path
     end
-    %w[/api/today /api/today/rev /api/projects /api/reports /api/agents].each do |path|
+    %w[/api/today /api/today/rev /api/projects /api/reports /api/agents /api/setup].each do |path|
       j = api(:get, path)
       assert_equal 401, last_response.status, path
       assert_equal "not signed in", j["error"]
@@ -322,6 +322,27 @@ class WebTest < Minitest::Test
       get "/auth/sign-in"
       assert_equal 404, last_response.status
     end
+  end
+
+  # the shell says setup pending until someone finishes the hello screen; the API answers the checks and
+  # the completion needs CSRF like every mutation
+  def test_the_hello_screen_setup_flag_and_api
+    sign_in
+    get "/"
+    assert_includes last_response.body, '<meta name="setup" content="pending">'
+    j = api(:get, "/api/setup")
+    assert_equal 200, last_response.status
+    assert_nil j["completed"]
+    assert_equal %w[database scanner launcher agents github], j["checks"].map { |c| c["key"] }
+    assert_equal ENV.fetch("PROJECTS_ROOT"), j["projects"]["host_root"]
+    api(:post, "/api/setup/complete", {})
+    assert_equal 403, last_response.status, "no CSRF token"
+    refute Busyyaks::SetupAPI.completed?(Hanami.app["db.gateway"].connection), "refused: nothing written"
+    sign_in # a refused CSRF token ends the session
+    j = api(:post, "/api/setup/complete", {}, csrf: shell_csrf)
+    assert_equal [200, "owner@example.com"], [last_response.status, j["completed"]["author"]]
+    get "/"
+    assert_includes last_response.body, '<meta name="setup" content="done">'
   end
 
   def test_built_assets_are_immutable_and_static_is_public

@@ -441,6 +441,11 @@ CREATE TABLE `daily_report_settings`(
   `author` varchar(255) NOT NULL,
   `created_at` integer NOT NULL
 );
+CREATE TABLE `setup_completions`(
+  `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+  `author` varchar(255) NOT NULL,
+  `created_at` integer NOT NULL
+);
 INSERT INTO schema_migrations (filename) VALUES
 ('20261101000000_create_core.rb'),
 ('20261101230000_create_daily.rb'),
@@ -475,4 +480,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261201000000_projects_dirty_paths.rb'),
 ('20261202000000_agent_settings.rb'),
 ('20261203000000_cards_assigned_prs.rb'),
-('20261204000000_daily_report_settings.rb');
+('20261204000000_daily_report_settings.rb'),
+('20261205000000_setup_completions.rb');

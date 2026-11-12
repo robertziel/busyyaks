@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "busyyaks/setup_api"
+
 module Busyyaks
   module Actions
     module Spa
@@ -13,6 +15,7 @@ module Busyyaks
         MANIFEST = "public/app/.vite/manifest.json"
         ENTRY = "src/main.tsx"
 
+        # setup = "pending" until someone finished the hello screen (SetupAPI): the client then opens /hello
         def handle(_req, res)
           root = Hanami.app.root
           path = root.join(MANIFEST)
@@ -29,6 +32,7 @@ module Busyyaks
           res.body = ERB.new(File.read(root.join("app/templates/app.html.erb")), trim_mode: "-").result_with_hash(
             h: Helpers, csrf: res.session[:_csrf_token].to_s, email: res.session[:email], scripts: Auth.provider.scripts(:app),
             sign_out: Auth.provider.sign_out? ? "/logout" : "", theme_css: theme_css,
+            setup: SetupAPI.completed?(Kanban.db) ? "done" : "pending",
             js: "/app/#{entry.fetch('file')}", css: Array(entry["css"]).map { |f| "/app/#{f}" }
           )
         end

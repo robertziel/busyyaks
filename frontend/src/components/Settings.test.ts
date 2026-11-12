@@ -43,6 +43,7 @@ describe("SettingsView", () => {
     expect(html).toContain('<div class="settings-who">op@example.test</div>');
     expect(html).toMatch(/<a class="settings-link" href="\/settings"[^>]*>Agents &amp; launchers<\/a>/);
     expect(html).toMatch(/<a class="settings-link" href="\/settings\/daily-report"[^>]*>Daily report<\/a>/);
+    expect(html).toMatch(/<a class="settings-link" href="\/hello"[^>]*>Setup \(hello screen\)<\/a>/);
     expect(html.match(/role="radio"/g)).toHaveLength(3);
     expect(html).toMatch(/aria-checked="true" class="on">Dark</);
     expect(html).toMatch(/aria-checked="false">Light</);

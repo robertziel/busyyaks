@@ -77,6 +77,8 @@ module Busyyaks
     post "/api/settings/agents", to: "api.agent_settings.save"
     get "/api/settings/daily-report", to: "api.daily_report_settings.show"   # Settings → Daily report
     post "/api/settings/daily-report", to: "api.daily_report_settings.save"
+    get "/api/setup", to: "api.setup.show"                      # the first-run hello screen (/hello)
+    post "/api/setup/complete", to: "api.setup.complete"
     post "/api/markdown", to: "api.markdown.preview"           # editor Preview: the server's render, never a JS markdown lib
 
     # the SPA shell: every other signed-in GET (the client router owns the path)
