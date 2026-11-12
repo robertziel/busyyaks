@@ -12,6 +12,7 @@ import "./styles/spa.css";
 import "./styles/search.css";
 import "./styles/github.css";
 import "./styles/waiting.css";
+import "./styles/hello.css";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root missing from the shell (app/templates/app.html.erb)");

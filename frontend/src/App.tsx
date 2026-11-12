@@ -1,9 +1,11 @@
-import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { FlashProvider } from "./components/Flash";
 import { Layout } from "./components/Layout";
 import { useTitle } from "./lib/title";
+import { needsSetup } from "./lib/setupGate";
 import { Commit } from "./routes/Commit";
 import { GitHub } from "./routes/GitHub";
+import { Hello } from "./routes/Hello";
 import { Components } from "./routes/Components";
 import { Project } from "./routes/Project";
 import { Projects } from "./routes/Projects";
@@ -27,11 +29,18 @@ function NotFound() {
   );
 }
 
+// a fresh install (nobody finished the hello screen yet): every page opens /hello first
+function SetupGate() {
+  const { pathname } = useLocation();
+  return needsSetup() && pathname !== "/hello" ? <Navigate to="/hello" replace /> : <Layout />;
+}
+
 export function App() {
   return (
     <FlashProvider>
       <Routes>
-        <Route element={<Layout />}>
+        <Route path="hello" element={<Hello />} />
+        <Route element={<SetupGate />}>
           <Route index element={<Today />} />
           <Route path="projects" element={<Projects />} />
           <Route path="projects/*" element={<Project />} />
