@@ -10,6 +10,7 @@ import { Projects } from "./routes/Projects";
 import { Report } from "./routes/Report";
 import { Reports } from "./routes/Reports";
 import { Settings } from "./routes/Settings";
+import { DailyReportSettings } from "./routes/DailyReportSettings";
 import { Today } from "./routes/Today";
 
 function NotFound() {
@@ -40,6 +41,7 @@ export function App() {
           <Route path="commit/:sha" element={<Commit />} />
           <Route path="github" element={<GitHub />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="settings/daily-report" element={<DailyReportSettings />} />
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>

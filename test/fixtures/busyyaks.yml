@@ -13,3 +13,5 @@ launch:
   commands: # the invocations of test/fixtures/agents.yml's launchers
     - { kind: claude_code, command: claude, args: ["--permission-mode", "bypassPermissions"], via_shell: false }
     - { kind: claude_code, command: localclaude, args: [], via_shell: true }
+daily_report_runners: # what test/unit/daily_report_settings_test.rb's revisions may pick
+  - { type: hermes, command: hermes, home: /h/.hermes-busyyaks }

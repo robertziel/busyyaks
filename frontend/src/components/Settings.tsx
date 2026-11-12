@@ -1,4 +1,5 @@
 // The settings cog at the right end of the header: a menu with the signed-in account, Agents & launchers (/settings),
+// Daily report (/settings/daily-report),
 // the skin and Sign out.
 // Closes on Escape (focus back on the cog), an outside pointer, focus moving out of it (Tab) or a route change.
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
@@ -85,6 +86,9 @@ export function SettingsView({ open, onToggle, email, signOut, csrf, wrap, btn }
         {email && <div className="settings-who">{email}</div>}
         <Link className="settings-link" to="/settings">
           Agents &amp; launchers
+        </Link>
+        <Link className="settings-link" to="/settings/daily-report">
+          Daily report
         </Link>
         <div className="settings-row">
           <span className="settings-label">Skin</span>

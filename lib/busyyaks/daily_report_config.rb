@@ -1,11 +1,10 @@
 # frozen_string_literal: true
 
 module Busyyaks
-  # `daily_report:` in config/busyyaks.yml: how the daily report runs on this deployment — when it ticks,
-  # which OpenAI-compatible gateway and models it uses, and the RUNNER (the agent CLI that writes it). Absent key =
-  # this deployment has no daily report (bin/daily-report and deploy/install-daily-timer.sh refuse, naming the key).
-  # Every key inside is required, unknown keys refused, no defaults. The host script reads the validated values
-  # through the MCP tool `daily_report_config` — this class is the only parser.
+  # A daily report settings revision (DailyReportSettings, Settings → Daily report): how the daily report
+  # runs on this deployment — when it ticks, which OpenAI-compatible gateway and models it uses, and the RUNNER (the
+  # agent CLI that writes it). Every key required, unknown keys refused, no defaults. The host script reads the
+  # validated values through the MCP tool `daily_report_config` — this class is the only parser.
   #
   # A runner type is a family of behaviour: its keys are checked here, its script is bin/daily-report-runners/<type>
   # (the prompt, the CLI's own config, how it is invoked). A new runner = a new entry in RUNNERS + a new script.
@@ -19,24 +18,27 @@ module Busyyaks
       "hermes" => %w[command home max_children],
     }.freeze
     CUTOFF = /\A([01]\d|2[0-3]):[0-5]\d\z/
-    DURATION = /\A\d+[smhd]?\z/ # timeout(1)
+    DURATION = /\A0*[1-9]\d*[smhd]?\z/ # timeout(1), never 0 (= no limit inside the tick, while systemd still kills it)
+    # an OnCalendar expression: never an option (a leading "-" would reach systemd-analyze as one)
+    SCHEDULE = %r{\A[0-9A-Za-z*][0-9A-Za-z*:/.,~ +-]*\z}
+    # values written into the runner's generated YAML inside double quotes: no " or \ (they would end or escape the quote)
+    YAML_SAFE = /\A[^"\\]*\z/
 
     attr_reader :values
-
-    def self.parse(value) = value.nil? ? nil : new(value)
 
     def initialize(h)
       raise Invalid, "daily_report must be a mapping" unless h.is_a?(Hash)
 
       check_keys("daily_report", h, KEYS)
       @values = {
-        schedule: str(h, "schedule"),
+        schedule: match(h, "schedule", SCHEDULE, "a systemd OnCalendar expression (letters, digits, * : / . , ~ + - space; " \
+                                                 "not starting with -)"),
         cutoff: match(h, "cutoff", CUTOFF, "HH:MM"),
         probe_timeout: pos_int(h, "probe_timeout"),
-        run_timeout: match(h, "run_timeout", DURATION, "a timeout(1) duration like 90m"),
-        gateway: url(h, "gateway"),
-        model: str(h, "model"),
-        agent_model: str(h, "agent_model"),
+        run_timeout: match(h, "run_timeout", DURATION, "a non-zero timeout(1) duration like 90m"),
+        gateway: yaml_safe(h, "gateway", url(h, "gateway")),
+        model: yaml_safe(h, "model", str(h, "model")),
+        agent_model: yaml_safe(h, "agent_model", str(h, "agent_model")),
         context_length: pos_int(h, "context_length"),
         runner: runner(h["runner"]),
       }
@@ -57,6 +59,12 @@ module Busyyaks
         out[k.to_sym] = k == "max_children" ? pos_int(r, k, "daily_report.runner") : str(r, k, "daily_report.runner")
       end
       out
+    end
+
+    def yaml_safe(_h, k, v)
+      raise Invalid, "daily_report.#{k} must not contain \" or \\" unless v.match?(YAML_SAFE)
+
+      v
     end
 
     def check_keys(where, h, keys)
