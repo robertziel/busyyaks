@@ -101,7 +101,7 @@ class KanbanApiTest < Minitest::Test
   end
 
   # the "waiting for you" widget's two routes — the list and the rev it polls
-  # the card's Links flag its PRs — local / public from the enrolment, state from gh_pr_states
+  # the card's Links list its assigned PRs — local / public from the enrolment, state from gh_pr_states
   def test_card_links_flag_the_local_and_public_pr
     store.upsert_project(slug: "g/r", remote: "https://github.com/o/r_local.git", pr_remote: "https://github.com/o/r_local.git",
                          local_mode: "own", local_repo: "https://github.com/o/r_local.git",
@@ -112,9 +112,11 @@ class KanbanApiTest < Minitest::Test
       api(:get, "/api/cards/#{id}")["links"].select { |l| l["kind"] == "pr" }
                                             .map { |l| [l["label"], l["tags"].map { |t| t["text"] }] }
     end
-    assert_equal [["#5", %w[local checking]]], shown.call, "no public PR recorded on the card: no row"
-    kb.update(id, { metadata: { "prs" => { "public" => "https://github.com/o/r/pull/7" } } }, by: "op")
-    assert_equal [["#5", %w[local checking]], ["#7", %w[public checking]]], shown.call, "metadata prs.public"
+    assert_equal [], shown.call, "the handoff pr_url is not a row: nothing assigned, no PR row"
+    kb.assign_pr(id, url: "https://github.com/o/r_local/pull/5", role: "local", by: "agent")
+    assert_equal [["#5", %w[local checking]]], shown.call, "no public PR assigned to the card: no row"
+    kb.assign_pr(id, url: "https://github.com/o/r/pull/7", role: "public", by: "agent")
+    assert_equal [["#5", %w[local checking]], ["#7", %w[public checking]]], shown.call, "the assigned public PR"
     assert_equal [%w[o/r pr:7], ["o/r_local", "pr:5"]],
                  Hanami.app["db.gateway"].connection[:gh_pr_states].order(:repo).select_map(%i[repo ref])
   end
@@ -171,9 +173,9 @@ class KanbanApiTest < Minitest::Test
  c.values_at("id", "gate_hold") },],
                  "card #248: a gate card that cannot be approved now waits for CI, not for you"
     t = Time.now.to_i # its PR, read green by the github service
-    Hanami.app["db.gateway"].connection[:cards].where(id: id).update(pr_url: "https://github.com/o/r/pull/3")
     Hanami.app["db.gateway"].connection[:gh_pr_checks].insert(repo: "o/r", ref: "pr:3", requested_at: t, checked_at: t,
                                                              number: 3, state: "success", finished_at: t)
+    kb.assign_pr(id, url: "https://github.com/o/r/pull/3", role: "pr", by: "agent")
     w = api(:get, "/api/waiting")
     assert_equal [1, "g/r", 1], [w["total"], w["projects"][0]["slug"], w["projects"][0]["count"]]
     assert_equal [id, "check me", "human_check", "Human Check", nil],
@@ -387,10 +389,10 @@ ans.values_at("body", "author")
   # the github service's answer for a card's PR: checks green, read just now (the approval gate reads it)
   def green_pr!(id)
     db = Hanami.app["db.gateway"].connection
-    db[:cards].where(id: id).update(pr_url: "https://github.com/o/r/pull/9")
     now = Time.now.to_i
     db[:gh_pr_checks].insert(repo: "o/r", ref: "pr:9", requested_at: now, checked_at: now, number: 9, state: "success",
                              finished_at: now)
+    kb.assign_pr(id, url: "https://github.com/o/r/pull/9", role: "pr", by: "agent")
   end
 
   # the local board (local_v4) asks the operator three times — the approve endpoint works at every step, withdraw too

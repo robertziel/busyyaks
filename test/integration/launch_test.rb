@@ -217,6 +217,7 @@ class LaunchTest < Minitest::Test
     now = Time.now.to_i # the github service read the PR's checks green: a gate is handed off on green CI only
     Hanami.app["db.gateway"].connection[:gh_pr_checks].insert(repo: "o/r", ref: "pr:5", requested_at: now, checked_at: now,
                                                              number: 5, state: "success", finished_at: now)
+    kb.assign_pr(id, url: "https://github.com/o/r/pull/5", role: "pr", by: "elsewhere") # the PR its agent opened
     kb.handoff(id, qa: "Open the board, check the card ships what it says, then the PR diff and its CI build.",
                    pr_url: "https://github.com/o/r/pull/5", ci_url: "https://ci/1", ui_change: false, by: "elsewhere")
     j = api(:get, "/api/agents")

@@ -153,9 +153,9 @@ class McpTest < Minitest::Test
     k.move(held, column: "human_check", by: "op")
     db = Hanami.app["db.gateway"].connection
     { id => [7, "success"], held => [8, "pending"] }.each do |card, (n, state)| # the github service's answers
-      db[:cards].where(id: card).update(pr_url: "https://github.com/o/a/pull/#{n}")
       db[:gh_pr_checks].insert(repo: "o/a", ref: "pr:#{n}", requested_at: t, checked_at: t, number: n, state: state,
                                finished_at: state == "success" ? t : nil)
+      k.assign_pr(card, url: "https://github.com/o/a/pull/#{n}", role: "pr", by: "agent")
     end
     store.add_report(date: "2026-11-01", title: "Daily report 2026-11-01", author: "x",
                      body_md: "```tl:stats\n- { label: Uncommitted, value: 9 }\n```\n")

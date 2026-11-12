@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "uri"
 require_relative "github_network"
 require_relative "github"
 
@@ -22,14 +21,19 @@ module Busyyaks
     # owner/name of a github.com remote, nil for any other host
     def slug(remote) = Github.repo_url(remote)&.delete_prefix("https://github.com/")
 
-    # The card's public PR: its metadata `prs.public` (git mirror-publish names the branch after the change, never the
-    # card, and has the agent record the PR it opened there). → [owner/name, number] on `repo` (the project's public
-    # repo), nil when the card records none; a value that is not a PR URL on `repo` raises Invalid with the reason.
-    # `card` is a hydrated card (metadata a Hash) or a raw `cards` row (metadata its JSON text: the engine's watch pass
-    # and waiting counts hand those to the ci: port).
+    # A card's PRs are the ones its agents ASSIGNED to it (the engine's kanban_pr_assign → metadata `prs.<role>` = the PR
+    # URL) — never derived from branch names or PR numbers in text. Roles: on an enrolled project `local` (the
+    # PR on the private local repo) and `public` (the PR on the public repo); on any other project `pr` (the card's PR
+    # on its work repo).
+    ROLES = { local: "local", public: "public", pr: "pr" }.freeze
+
     class Invalid < StandardError; end
 
-    def public_pr(card, repo)
+    # The PR the card's agents assigned under `role` → [owner/name, number] on `repo` (nil = on any repo: a plain
+    # project's `pr`, whose URL names its repo), nil when none is assigned; a value that is not a PR URL (on `repo`)
+    # raises Invalid with the reason. `card` is a hydrated card (metadata a Hash) or a
+    # raw `cards` row (metadata its JSON text: the engine's watch pass and waiting counts hand those to the ci: port).
+    def assigned(card, role, repo)
       meta = card[:metadata]
       begin
         meta = JSON.parse(meta) if meta.is_a?(String)
@@ -37,19 +41,17 @@ module Busyyaks
         raise Invalid, "card ##{card[:id]} metadata is not JSON: #{e.message[0, 200]}"
       end
       prs = meta.is_a?(Hash) ? meta["prs"] : nil
-      url = prs.is_a?(Hash) ? prs["public"] : nil
+      url = prs.is_a?(Hash) ? prs[role] : nil
       return nil if url.nil?
 
       m = url.to_s.match(PR_URL)
-      unless m && m[1].casecmp?(repo) # GitHub owner/name: any case
-        raise Invalid, "card ##{card[:id]} metadata prs.public is not a PR on #{repo}: #{url.to_s[0, 200].inspect}"
+      unless m && (repo.nil? || m[1].casecmp?(repo)) # GitHub owner/name: any case
+        raise Invalid, "card ##{card[:id]} metadata prs.#{role} is not a PR on #{repo || 'github.com'}: " \
+                       "#{url.to_s[0, 200].inspect}"
       end
 
-      [repo, m[2].to_i]
+      [repo || m[1], m[2].to_i]
     end
-
-    # The card's work branches start with this (the card flow's `card/<id>-<slug>`).
-    def card_branch_prefix(card_id) = "card/#{card_id}-"
 
     # Seconds a row stays polled after the web last asked for it (Poller and Reader share it).
     def wanted_for(interval) = 10 * interval
@@ -120,18 +122,15 @@ module Busyyaks
 
       def poll(row)
         kind, name = row[:ref].split(":", 2)
-        if kind == "pr" # a PR the card names: a 404 is "not visible to the token / no such PR", never a state
-          page = @client.get("/repos/#{row[:repo]}/pulls/#{Integer(name)}", missing_ok: true)
-          if page.status == 404
-            raise GithubNetwork::Error, "#{row[:repo]}##{name}: 404 — no such PR, or the token cannot see the repo"
-          end
+        # a PR assigned to a card: a 404 is "not visible to the token / no such PR", never a state
+        raise GithubNetwork::Error, "#{row[:repo]} #{row[:ref]}: not a pr:<n> ref" unless kind == "pr"
 
-          pr = page.body
-        else # head:owner:branch — the newest PR from that head, any state; none = not opened yet
-          pr = @client.get("/repos/#{row[:repo]}/pulls?state=all&head=#{URI.encode_www_form_component(name)}").body.first
-          return { number: nil, url: nil, state: "none" } unless pr
+        page = @client.get("/repos/#{row[:repo]}/pulls/#{Integer(name)}", missing_ok: true)
+        if page.status == 404
+          raise GithubNetwork::Error, "#{row[:repo]}##{name}: 404 — no such PR, or the token cannot see the repo"
         end
 
+        pr = page.body
         { number: pr["number"], url: pr["html_url"], state: state(pr) }
       end
 
@@ -143,52 +142,39 @@ module Busyyaks
       end
     end
 
-    # The card dialog's links with every PR (a `pr` link, or a `url` one that is a github.com PR) flagged: a short label
-    # ("#5") + small tags (repo role: local · public; state: open · draft · merged · closed · checking · unknown) +
-    # the hover details (repo, role, state, when GitHub was read, why it is unknown). No enrolment → no role tag.
-    # the PRs the text does not name are found by their head on GitHub — the one opened from the card's
-    # branch (`card/<id>-*` in the checkout, or a branch the text names) on the work repo, and, on an enrolled project,
-    # the public PR (the card's metadata `prs.public`, PrStates.public_pr). A row is a pull request GitHub returned, never a
-    # placeholder:
-    # none opened (or not answered yet) → no row; a failed read → a row that says so. Tags and details are the engine's
-    # CardLink `tags` / `detail`.
+    # The card dialog's links, whose PR rows are the PRs assigned to the card (PrStates.assigned) and nothing else:
+    # `local` + `public` on an enrolled project, `pr` on any other. The engine's `pr` links — a `PR #N` in
+    # the text, resolved against the card's own repo, and the handoff `pr_url` — are dropped: a number in prose names
+    # no repo, so it is never a row (it stays an inline link in the text); a pasted PR URL stays a plain `url` link.
+    # Each row: a short label ("#5") + small tags (repo role: local · public; state: open · draft · merged · closed ·
+    # checking · unknown) + the hover details (repo, role, state, when GitHub was read, why it is unknown). No enrolment
+    # → no role tag. None assigned → no row; an assignment that is no PR of its repo → a row that says so. Tags and
+    # details are the engine's CardLink `tags` / `detail`.
     class Flags
       TONE = { "open" => "ok", "draft" => "muted", "merged" => "done", "closed" => "bad", "checking" => "muted" }.freeze
 
-      # branches: ->(project row) { Set of the repo's branch names } — Kanban.git_port (the scanner's last read) in
-      # production; raises GitPort::Unavailable for a repo it has not read (the card shows why).
-      def initialize(reader, branches:)
+      def initialize(reader)
         @reader = reader
-        @branches = branches
       end
 
       def apply(links, card, project)
         enrolled = project && project[:local_mode] ? project : nil
-        roles = if enrolled
-                  { PrStates.slug(enrolled[:local_repo]) => "local", PrStates.slug(enrolled[:public_repo]) => "public" }
-                else
-                  {}
-                end
-        out = links.map do |l|
-          next l unless %w[pr url].include?(l[:kind])
-
-          m = l[:url].match(PR_URL) # a PR pasted as a bare URL is a PR too
-          next l unless m
-
-          flagged(l[:url], "##{m[2]}", m[1], roles[m[1]], @reader.lookup(m[1], "pr:#{m[2]}"))
-        end
+        out = links.reject { |l| l[:kind] == "pr" }
         return out unless project
 
-        out += branch_prs(out, card, project, roles)
-        # an enrolment that names no local mode at all: said, linked to the project
-        if !enrolled && project[:local_error]
+        # not enrolled: the card's assigned `pr` PR; an enrolment that names no local mode at all is said too, linked
+        # to the project
+        unless enrolled
+          out += plain_row(card, project)
+          return out unless project[:local_error]
+
           return out + [{ kind: "pr", label: "config", url: "/projects/#{project[:slug]}",
                           tags: [tag("local", "info"), tag("unknown", "warn")],
                           detail: [row("Why", project[:local_error])], }]
         end
-        return out unless enrolled
 
-        out + public_pr(out, card, enrolled)
+        out += assigned_row(card, enrolled, ROLES[:local], enrolled[:local_repo])
+        out + assigned_row(card, enrolled, ROLES[:public], enrolled[:public_repo])
       end
 
       private
@@ -196,10 +182,10 @@ module Busyyaks
       def tag(text, tone) = { text: text, tone: tone }
       def row(label, value) = { label: label, value: value.to_s }
 
-      def flagged(url, label, repo, role, st, extra: [])
+      def flagged(url, label, repo, role, st)
         state = st[:error] ? "unknown" : st[:state]
         tags = [role && tag(role, "info"), tag(state, TONE.fetch(state, "warn"))].compact
-        detail = [row("Repo", repo), role && row("Role", role == "local" ? "private local repo" : "public repo"), *extra,
+        detail = [row("Repo", repo), role && row("Role", role == "local" ? "private local repo" : "public repo"),
                   row("State", state),]
         detail << row("Why", st[:error]) if st[:error]
         # an absolute time: a relative "Ns ago" changed the card JSON on every request, so the card dialog's rev poll
@@ -209,53 +195,33 @@ module Busyyaks
         { kind: "pr", label: label, url: url, tags: tags, detail: detail.compact }
       end
 
-      def search_url(repo, branch)
-        "https://github.com/#{repo}/pulls?q=#{URI.encode_www_form_component("is:pr head:#{branch}")}"
-      end
-
-      # GitHub's answer for one head as a row: the PR it returned (skipped when the links already list it), a failed
-      # read said on the search for that head, nothing while there is no PR (none opened, or not answered yet).
-      def head_row(links, repo, owner, branch, role)
-        st = @reader.lookup(repo, "head:#{owner}:#{branch}")
-        return nil unless st[:url] || st[:error]
-        return nil if st[:url] && links.any? { |l| l[:url] == st[:url] }
-
-        extra = [row("Branch", "#{owner}:#{branch}")]
-        return flagged(st[:url], "##{st[:number]}", repo, role, st, extra: extra) if st[:url]
-
-        flagged(search_url(repo, branch), branch, repo, role, st, extra: extra)
-      end
-
-      # the PR opened from one of the card's branches on the work repo (the branch's push remote): the
-      # checkout's `card/<id>-*` branches and the branches the text names (the engine's branch links). The public PR is
-      # the card's metadata prs.public (public_pr below), never derived from a branch name.
-      def branch_prs(links, card, project, roles)
-        repo = PrStates.slug(project[:pr_remote]) or return []
-        owner = repo.split("/").first
-        prefix = PrStates.card_branch_prefix(card[:id])
-        own = project[:path] ? @branches.call(project).select { |b| b.start_with?(prefix) } : []
-        named = links.select { |l| l[:kind] == "branch" }.map { |l| l[:label] }
-        (own + named).uniq.sort.filter_map { |b| head_row(links, repo, owner, b, roles[repo]) }
-      end
-
-      # the card's public PR (metadata prs.public) on the public repo, skipped when the links already list it; none
-      # recorded → no row (not opened yet); a value that is no PR of the public repo → a row that says so.
-      def public_pr(links, card, project)
-        repo = PrStates.slug(project[:public_repo])
-        unless repo
-          why = project[:local_error] || "the public repo is not on github.com"
-          return [flagged("/projects/#{project[:slug]}", "public", project[:public_repo], "public", { error: why })]
-        end
-
-        _, number = PrStates.public_pr(card, repo)
+      # a plain project's `pr` PR (on whichever repo its URL names), no role tag
+      def plain_row(card, project)
+        repo, number = PrStates.assigned(card, ROLES[:pr], nil)
         return [] unless number
 
         url = "https://github.com/#{repo}/pull/#{number}"
-        return [] if links.any? { |l| l[:url] == url }
-
-        [flagged(url, "##{number}", repo, "public", @reader.lookup(repo, "pr:#{number}"))]
+        [flagged(url, "##{number}", repo, nil, @reader.lookup(repo, "pr:#{number}"))]
       rescue PrStates::Invalid => e
-        [flagged("/projects/#{project[:slug]}", "public", repo, "public", { error: e.message })]
+        [flagged("/projects/#{project[:slug]}", ROLES[:pr], nil, nil, { error: e.message })]
+      end
+
+      # an enrolled side's PR assigned to the card under `role` on `remote`'s repo; none assigned → no row; an assignment
+      # that is no PR of that repo, or a repo not on github.com → a row that says why.
+      def assigned_row(card, project, role, remote)
+        repo = PrStates.slug(remote)
+        unless repo
+          why = project[:local_error] || "the #{role} repo is not on github.com"
+          return [flagged("/projects/#{project[:slug]}", role, remote, role, { error: why })]
+        end
+
+        _, number = PrStates.assigned(card, role, repo)
+        return [] unless number
+
+        url = "https://github.com/#{repo}/pull/#{number}"
+        [flagged(url, "##{number}", repo, role, @reader.lookup(repo, "pr:#{number}"))]
+      rescue PrStates::Invalid => e
+        [flagged("/projects/#{project[:slug]}", role, repo, role, { error: e.message })]
       end
     end
   end
