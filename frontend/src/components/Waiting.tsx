@@ -224,7 +224,7 @@ export function WaitingView({
                     const a = agentLine(c.owner_session, agents);
                     return (
                       <li key={c.id} className={`ww-row ww-k-${c.kind}`}>
-                        <Link to={cardHref(p.slug, c.id)}>
+                        <Link to={cardHref(p.slug, c.id)} data-card-id={c.id}>
                           <span className="ww-id">#{c.id}</span>
                           <span className="ww-title">{c.title}</span>
                           <span className="ww-age">{age(c.since, at)}</span>

@@ -426,7 +426,8 @@ module Busyyaks
         title = e(req(n, "title"))
         card = n["card"].nil? ? nil : int!(n["card"], "card")
         head = if card && ctx[:slugs].include?(slug)
-                 %(<a class="tl-need-title" href="#{project_href(slug)}?tab=board&amp;card=#{card}">#{title}</a>)
+                 %(<a class="tl-need-title" href="#{project_href(slug)}?tab=board&amp;card=#{card}" ) +
+                   %(data-card-id="#{card}">#{title}</a>)
                else
                  %(<span class="tl-need-title">#{title}</span>)
                end

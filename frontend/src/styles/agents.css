@@ -753,3 +753,8 @@
 .ag-group h5 .ag-gl {
   font-weight: 600;
 }
+/* a card named in a rail line: hover shows its details (CardPeek) */
+.ag-mention {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}

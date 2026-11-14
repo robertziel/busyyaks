@@ -56,11 +56,20 @@ module Busyyaks
                                                card_path: ->(slug, id) { Busyyaks::API.card_path(slug, id) })
       linkify = ->(html) { AgentsKanban::CardLinks.linkify(html, links, refs: refs) }
       out = { links: Kanban.pr_flags.apply(links, card, row) } # local · public, open · merged …
-      if body[:card][:description_html]
-        out[:card] = body[:card].merge(description_html: linkify.(body[:card][:description_html]))
-      end
+      out[:card] = body[:card].merge(card_chips(body[:card], linkify, refs))
       out[:activity] = body[:activity].map { |a| a[:body_html] ? a.merge(body_html: linkify.(a[:body_html])) : a }
       out.merge(owner_sessions(project))
+    end
+
+    # The card's rendered markdown (description, the handoff QA, the open question) with its #N chips — card chips carry
+    # data-card-id for the CardPeek — and each question option split at the cards it names (question_option_parts).
+    def card_chips(card, linkify, refs)
+      out = %i[description_html qa_html question_html].each_with_object({}) do |k, h|
+        h[k] = linkify.(card[k]) if card[k]
+      end
+      opts = card[:question_options]
+      out[:question_option_parts] = opts.map { |o| AgentsKanban::CardLinks.card_mention_parts(o, refs) } if opts
+      out
     end
 
     def board_extras(project, email) = assignee_suggestions(project, email).merge(owner_sessions(project))

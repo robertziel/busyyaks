@@ -217,6 +217,24 @@ class KanbanApiTest < Minitest::Test
     assert_nil api(:post, "/api/cards/#{id}/move", column: "qa", position: 0)["delivered"], "a reorder in place moves nothing"
   end
 
+  # card mentions carry their id for the hover preview — chips in the question and comments, and each option
+  # split at the cards it names (a bare #N only when it is a card of this board)
+  def test_card_mentions_carry_their_id_in_the_question_its_options_and_comments
+    other = kb.create(slug: "g/r", title: "public first", by: "op", column: "todo")
+    id = kb.create(slug: "g/r", title: "hold", by: "op", column: "doing")
+    kb.update(id, { "assignee" => "lead" }, by: "lead")
+    kb.set_owner(id, session: "lead_1", by: "lead")
+    kb.comment(id, body: "blocked on card ##{other}", author: "lead")
+    kb.ask(id, question: "Hold until ##{other} is public?", options: ["Hold until ##{other} lands", "Publish #99999 now"],
+                by: "lead")
+    j = api(:get, "/api/cards/#{id}")
+    assert_includes j["card"]["question_html"], %(data-card-id="#{other}")
+    assert_equal [[{ "text" => "Hold until " }, { "text" => "##{other}", "card" => other }, { "text" => " lands" }],
+                  [{ "text" => "Publish #99999 now" }],], j["card"]["question_option_parts"]
+    comment = j["activity"].find { |a| a["kind"] == "comment" && a["body"].start_with?("blocked") }
+    assert_includes comment["body_html"], %(data-card-id="#{other}")
+  end
+
   def test_operator_answer_clears_the_flag_in_place_and_pings_once
     id = kb.create(slug: "g/r", title: "triage", by: "op", column: "qa")
     kb.update(id, { "assignee" => "lead" }, by: "lead")

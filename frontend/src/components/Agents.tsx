@@ -219,8 +219,16 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
                           <span className="ag-title">
                             {s.title ?? (s.cwd ? s.cwd.split("/").slice(-2).join("/") : "—")}
                           </span>
-                          {(s.state === "blocked" || s.state === "review") && <span className="ag-why">{why(s)}</span>}
-                          {cardLine(s) && <span className="ag-cards">{cardLine(s)}</span>}
+                          {(s.state === "blocked" || s.state === "review") && (
+                            <span className="ag-why">
+                              <CardText text={why(s)} ids={ownIds(s)} />
+                            </span>
+                          )}
+                          {cardLine(s) && (
+                            <span className="ag-cards">
+                              <CardText text={cardLine(s)} ids={ownIds(s)} />
+                            </span>
+                          )}
                         </span>
                         <span className="ag-meta">
                           {BADGE.has(s.state) && <span className={`ag-badge st-${s.state}`}>{LABEL[s.state]}</span>}
@@ -238,14 +246,14 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
                           <DialogBox key={d.hash} s={s} d={d} />
                         ))}
                         {s.asks.map((a) => (
-                          <Link key={a.id} className="ag-ask" to={a.path}>
+                          <Link key={a.id} className="ag-ask" to={a.path} data-card-id={a.id}>
                             <b>card #{a.id}</b> {a.title}
                             {a.question && <span>{a.question}</span>}
                           </Link>
                         ))}
                         {s.reviews.map((r) => (
                           <span key={r.id} className="ag-rev">
-                            <Link to={r.path}>
+                            <Link to={r.path} data-card-id={r.id}>
                               <b>card #{r.id}</b> {r.title}
                             </Link>
                             {r.pr_url && (
@@ -290,6 +298,40 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
         })}
       </div>
       <p className="ag-foot muted">agent_engines · snapshot {Math.round(data.age_s)}s</p>
+    </>
+  );
+}
+
+// the session's own cards (its open cards, its questions, its reviews): the only #N its lines name as cards
+const ownIds = (s: AgentSession) => new Set([...s.cards, ...s.asks, ...s.reviews].map((c) => c.id));
+
+// a line split at the #N that are those cards — each one a mention the hover preview (CardPeek) opens
+export function mentionParts(text: string, ids: ReadonlySet<number>): { text: string; card?: number }[] {
+  const out: { text: string; card?: number }[] = [];
+  let at = 0;
+  for (const m of text.matchAll(/(?<![\w&])#(\d{1,9})(?!\d)/g)) {
+    const n = Number(m[1]);
+    if (!ids.has(n)) continue;
+    if (m.index > at) out.push({ text: text.slice(at, m.index) });
+    out.push({ text: m[0], card: n });
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) out.push({ text: text.slice(at) });
+  return out;
+}
+
+function CardText({ text, ids }: { text: string; ids: ReadonlySet<number> }) {
+  return (
+    <>
+      {mentionParts(text, ids).map((p, i) =>
+        p.card ? (
+          <span key={i} className="ag-mention" data-card-id={p.card}>
+            {p.text}
+          </span>
+        ) : (
+          <span key={i}>{p.text}</span>
+        ),
+      )}
     </>
   );
 }

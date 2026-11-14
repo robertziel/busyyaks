@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSession } from "../types";
-import { cardLine } from "./Agents";
+import { cardLine, mentionParts } from "./Agents";
 
 const s = (extra: Partial<AgentSession>) =>
   ({ cards_known: true, cards: [], cards_finished: 0, asks: [], reviews: [], ...extra }) as AgentSession;
@@ -42,5 +42,21 @@ describe("cardLine", () => {
     expect(cardLine(s({ cards_known: false }))).toBe("not registered: cards unknown");
     const r = { id: 9, slug: "p", title: "t", pr_url: null, path: "/" };
     expect(cardLine(s({ cards: [c(9, "Human Check")], reviews: [r] }))).toBe("");
+  });
+});
+
+describe("mentionParts", () => {
+  it("marks only the session's own cards; everything else stays text", () => {
+    expect(mentionParts("#3 In progress · #5 Merged · +2 done", new Set([3]))).toEqual([
+      { text: "#3", card: 3 },
+      { text: " In progress · #5 Merged · +2 done" },
+    ]);
+    expect(mentionParts("card #12: which first? (see #120, &#12;)", new Set([12]))).toEqual([
+      { text: "card " },
+      { text: "#12", card: 12 },
+      { text: ": which first? (see #120, &#12;)" },
+    ]);
+    expect(mentionParts("no cards", new Set([1]))).toEqual([{ text: "no cards" }]);
+    expect(mentionParts("", new Set([1]))).toEqual([]);
   });
 });
