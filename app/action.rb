@@ -17,6 +17,7 @@ require "busyyaks/heatmap"
 require "busyyaks/report_blocks"
 require "busyyaks/agents"
 require "busyyaks/api"
+require "busyyaks/skins"
 
 module Busyyaks
   class Action < Hanami::Action
@@ -67,7 +68,7 @@ module Busyyaks
     def render(res, name, status: 200, **locals)
       root = Hanami.app.root
       locals = { email: res.session[:email], title: "busyyaks" }.merge(locals)
-                 .merge(csrf: res.session[:_csrf_token].to_s, scripts: Auth.provider.scripts(:login))
+                 .merge(csrf: res.session[:_csrf_token].to_s, scripts: Auth.provider.scripts(:login), **Helpers.skins_head)
       inner = erb(root.join("app/templates/#{name}.html.erb"), locals)
       res.format = :html
       res.status = status
@@ -83,6 +84,13 @@ module Busyyaks
       module_function
 
       def e(s) = ERB::Util.h(s.to_s)
+
+      # every page's custom skins (card #361, Busyyaks::Skins: the skins/<key>.yml files): skins_meta for
+      # <meta name="skins"> (skin.js reads it before first paint), skins_css for the <style> after app.css
+      def skins_head
+        skins = Skins.all
+        { skins_meta: Skins.meta(skins), skins_css: Skins.css(skins) }
+      end
 
       # A /static URL with its content's digest: "/static/app.css" → "/static/app.css?v=<12 hex>". The
       # shell and the server pages name every /static file this way, so a browser never pairs new HTML with a stale

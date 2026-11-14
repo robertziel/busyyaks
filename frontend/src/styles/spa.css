@@ -325,6 +325,7 @@ a.termbadge:hover {
 }
 .settings-row {
   display: flex;
+  flex-wrap: wrap; /* custom skins (card #361): the switch drops under its label when it does not fit */
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -339,6 +340,8 @@ a.termbadge:hover {
 /* the skin choice inside it: a segmented control like the nav */
 .seg.skin-switch {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 2px;
   padding: 2px;
   border-radius: var(--radius-ctl);

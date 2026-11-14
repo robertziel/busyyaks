@@ -1,0 +1,35 @@
+# the Matrix skin: near-black ground, phosphor-green ink and accents; base dark (every token not set here is dark's)
+# contrast on --bg (#030a05): --ink 17.2:1 · --ink-dim 11.3:1 · --ink-faint 9.1:1 (all ≥ 4.5:1)
+label: Matrix
+base: dark
+tokens:
+  "--bg": "#030a05"
+  "--panel": "#07140b"
+  "--panel-2": "#0b1d10"
+  "--surface-3": "#12291a"
+  "--line": "#14321f"
+  "--line-strong": "#1f5230"
+  "--ink": "#b6ffc4"
+  "--ink-dim": "#6fd883"
+  "--ink-faint": "#55c46d"
+  "--track": "#14321f"
+  "--row-rule": "#0b1d10"
+  "--row-hover": "#0a2011"
+  "--mat-bar": "rgba(3, 10, 5, 0.78)"
+  "--mat-card": "rgba(7, 20, 11, 0.9)"
+  "--mat-fill": "rgba(120, 255, 140, 0.12)"
+  "--mat-fill-2": "rgba(120, 255, 140, 0.07)"
+  "--mat-thumb": "#1f5230"
+  "--vivid-blue": "#3ddcff"
+  "--vivid-green": "#39ff6a"
+  "--vivid-orange": "#ffb000"
+  "--vivid-red": "#ff5f5f"
+  "--vivid-yellow": "#e6ff57"
+  "--vivid-purple": "#c77dff"
+  "--vivid-teal": "#2ee6c5"
+  "--vivid-pink": "#ff5fb0"
+  "--button-fill": "#137a32" # white label 5.4:1
+  "--ok": "#39ff6a"
+  "--warn": "#ffb000"
+  "--bad": "#ff5f5f"
+  "--accent": "#39ff6a"

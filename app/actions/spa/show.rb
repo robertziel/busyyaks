@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "busyyaks/setup_api"
+require "busyyaks/skins"
 
 module Busyyaks
   module Actions
@@ -31,7 +32,7 @@ module Busyyaks
           res.headers["Cache-Control"] = "no-store"
           res.body = ERB.new(File.read(root.join("app/templates/app.html.erb")), trim_mode: "-").result_with_hash(
             h: Helpers, csrf: res.session[:_csrf_token].to_s, email: res.session[:email], scripts: Auth.provider.scripts(:app),
-            sign_out: Auth.provider.sign_out? ? "/logout" : "", theme_css: theme_css,
+            sign_out: Auth.provider.sign_out? ? "/logout" : "", theme_css: theme_css, **Helpers.skins_head,
             setup: SetupAPI.completed?(Kanban.db) ? "done" : "pending",
             js: "/app/#{entry.fetch('file')}", css: Array(entry["css"]).map { |f| "/app/#{f}" }
           )

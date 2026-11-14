@@ -18,6 +18,10 @@ All notable changes to busyyaks are recorded here. The format follows
 
 ### Changed
 
+- **Skins are files**: every skin is `skins/<key>.yml` — `light.yml` (the default) and `dark.yml` hold all the
+  colour tokens (moved out of `public/static/app.css`), and any other file adds a skin over one of them (shipped:
+  `matrix.yml`). The settings menu's Skin switch lists Light · Dark · Auto · the others. A new skin is a new file and a
+  restart; a bad file stops the boot and names it. Format: `skins/README.md`.
 - **Public: Create PR** on the private local-repo boards (the engine's `local_v4` board): the operator's "Open public
   PR" moves a card from Local: Deploy check into this new column, where the agent opens the public PR, then "Public PR
   opened" moves it to Public: Agent review — no review of a PR that does not exist yet. A board is data: an existing

@@ -2,6 +2,7 @@
 
 require "test_helper"
 require "rack/test"
+require "minitest/mock"
 
 # Auth, allowlist, CSRF, the SPA shell and the read API (rack-test, JSON).
 class WebTest < Minitest::Test
@@ -372,6 +373,26 @@ class WebTest < Minitest::Test
     get "/static/app.css?v=#{digest.('app.css')}"
     assert_equal 200, last_response.status
     assert_equal "no-cache", last_response.headers["cache-control"]
+  end
+
+  # card #361: the login page and the shell both carry the skins — the <meta> skin.js reads before first paint
+  # (escaped into the attribute) and their <style> after app.css
+  def test_pages_carry_the_skins_in_their_head
+    dusk = { "key" => "dusk", "label" => "Dusk <&>", "base" => "dark", "tokens" => { "--bg" => "#101820" } }
+    Busyyaks::Skins.stub(:all, Busyyaks::Skins.all + [dusk]) do
+      get "/login"
+      login = last_response.body
+      sign_in
+      get "/"
+      [login, last_response.body].each do |html|
+        assert_includes html, ',{&quot;key&quot;:&quot;dusk&quot;,&quot;label&quot;:&quot;Dusk &lt;&amp;&gt;&quot;,' \
+                              '&quot;base&quot;:&quot;dark&quot;}]">'
+        assert_includes html, %(:root[data-skin-key="dusk"] { --bg: #101820; }</style>)
+        assert_includes html, ':root[data-skin="light"] { --bg: #f4f3ee;'
+        assert_operator html.index('name="skins"'), :<, html.index("/static/skin.js")
+        assert_operator html.index("/static/app.css"), :<, html.index('id="skins-css"')
+      end
+    end
   end
 
   def test_asset_refuses_a_missing_file

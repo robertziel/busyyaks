@@ -8,10 +8,22 @@ import { describe, expect, it } from "vitest";
 const SOURCE = readFileSync(new URL("../../../public/static/skin.js", import.meta.url), "utf8");
 const KEY = "busyyaks.skin";
 
-type Skin = { choices: string[]; get(): string; set(c: string): void };
+type Skin = { choices: string[]; label(c: string): string; get(): string; set(c: string): void };
+// the page's <meta name="skins"> as the server writes it (Busyyaks::Skins.meta): the two base skin files first
+const BASES = [
+  { key: "light", label: "Light", base: "light" },
+  { key: "dark", label: "Dark", base: "dark" },
+];
+const META = JSON.stringify(BASES);
 
 // `throws`: the localStorage calls that throw (a browser that keeps nothing: private mode, storage blocked)
-function boot(stored: string | null, systemDark: boolean, throws: ("get" | "set" | "remove")[] = []) {
+// `skins`: the page's <meta name="skins"> content (null = no such meta)
+function boot(
+  stored: string | null,
+  systemDark: boolean,
+  throws: ("get" | "set" | "remove")[] = [],
+  skins: string | null = META,
+) {
   const store = new Map<string, string>(stored == null ? [] : [[KEY, stored]]);
   const attrs = new Map<string, string>();
   const errors: string[] = [];
@@ -38,7 +50,13 @@ function boot(stored: string | null, systemDark: boolean, throws: ("get" | "set"
       },
     },
     document: {
-      documentElement: { setAttribute: (k: string, v: string) => attrs.set(k, v), style: {} },
+      documentElement: {
+        setAttribute: (k: string, v: string) => attrs.set(k, v),
+        removeAttribute: (k: string) => attrs.delete(k),
+        style: {},
+      },
+      querySelector: (q: string) =>
+        q === 'meta[name="skins"]' && skins !== null ? { getAttribute: () => skins } : null,
       dispatchEvent: () => true,
     },
     CustomEvent: class {
@@ -62,6 +80,7 @@ function boot(stored: string | null, systemDark: boolean, throws: ("get" | "set"
     system,
     shown: () => attrs.get("data-skin"),
     choice: () => attrs.get("data-skin-choice"),
+    key: () => attrs.get("data-skin-key"),
   };
 }
 
@@ -150,5 +169,63 @@ describe("skin.js", () => {
 
   it("refuses an unknown choice", () => {
     expect(() => boot(null, false).skin.set("sepia")).toThrow(/unknown skin "sepia"/);
+  });
+
+  it("marks the shown skin's key beside its base: auto shows the system's", () => {
+    const b = boot("auto", true);
+    expect(b.key()).toBe("dark");
+    b.system(false);
+    expect(b.key()).toBe("light");
+  });
+
+  describe("skin files (card #361)", () => {
+    const DUSK = JSON.stringify([...BASES, { key: "dusk", label: "Dusk", base: "dark" }]);
+
+    it("lists an added skin after light, dark, auto, with the labels from the files", () => {
+      const b = boot(null, false, [], DUSK);
+      expect(b.skin.choices).toEqual(["light", "dark", "auto", "dusk"]);
+      expect(b.skin.label("dusk")).toBe("Dusk");
+      expect(b.skin.label("light")).toBe("Light");
+      expect(b.skin.label("auto")).toBe("Auto");
+    });
+
+    it("shows a stored added skin as its base plus its key", () => {
+      const b = boot("dusk", false, [], DUSK);
+      expect(b.shown()).toBe("dark");
+      expect(b.key()).toBe("dusk");
+      expect(b.choice()).toBe("dusk");
+    });
+
+    it("stores a chosen added skin; light clears the key", () => {
+      const b = boot(null, false, [], DUSK);
+      b.skin.set("dusk");
+      expect(b.store.get(KEY)).toBe("dusk");
+      expect(b.key()).toBe("dusk");
+      b.skin.set("light");
+      expect(b.key()).toBe("light");
+      expect(b.store.has(KEY)).toBe(false);
+    });
+
+    it("removes a stored skin whose file is gone, says so, and shows light", () => {
+      const b = boot("dusk", true);
+      expect(b.shown()).toBe("light");
+      expect(b.store.has(KEY)).toBe(false);
+      expect(b.errors.join()).toMatch(/"dusk" is not one of light, dark, auto —/);
+    });
+
+    it("throws on a malformed list or one without a base skin, never reads it as none", () => {
+      expect(() => boot(null, false, [], JSON.stringify([...BASES, { key: "x", label: "X", base: "sepia" }]))).toThrow(
+        /bad skin/,
+      );
+      expect(() =>
+        boot(null, false, [], JSON.stringify([...BASES, { key: "auto", label: "A", base: "dark" }])),
+      ).toThrow(/called auto/);
+      expect(() => boot(null, false, [], JSON.stringify([BASES[0]]))).toThrow(/lists no dark skin/);
+      expect(() => boot(null, false, [], "{}")).toThrow(/must be a list/);
+    });
+
+    it("throws on a page without the skins meta", () => {
+      expect(() => boot(null, false, [], null)).toThrow(/no <meta name="skins">/);
+    });
   });
 });

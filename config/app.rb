@@ -7,6 +7,7 @@ require_relative "../lib/busyyaks/auth"
 require_relative "../lib/busyyaks/session_cookie"
 require_relative "../lib/busyyaks/git_read"
 require_relative "../lib/busyyaks/host_guard"
+require_relative "../lib/busyyaks/skins"
 
 module Busyyaks
   class App < Hanami::App
@@ -27,6 +28,8 @@ module Busyyaks
     # use and on save: AgentSettings) and the attachments' env (ATTACHMENTS_DIR, the size cap, the type
     # allowlist) are read at boot: a missing key, an unknown column or type fails the boot, never a default.
     Busyyaks::Kanban.check_file!
+    # the custom skins (skins/<key>.yml, card #361): every file read and checked here — a bad one stops the boot
+    Busyyaks::Skins.all
     ENV.fetch("ATTACHMENTS_DIR")
     Busyyaks::Kanban.policy
     # the limits of every read of a scanned repo (GIT_READ_*): checked here, so a service never starts without them
