@@ -20,6 +20,9 @@ module Busyyaks
     # The stack's long-running services: every compose service without a `profiles:` key (test/unit/compose_test.rb).
     SERVICES = %w[web mcp scanner github notifier].freeze
 
+    # the commands that run the stack (Host.stack!: Linux only); desktop and help run on any Unix with a desktop
+    STACK_COMMANDS = %w[server panel env doctor].freeze
+
     class Refused < StandardError; end
     class Usage < StandardError; end
 
@@ -52,6 +55,8 @@ module Busyyaks
       ["server status", "every service, /up, MCP tools/list, the launcher unit and its socket; exit 1 if any is down"],
       ["server logs [SERVICE] [-f]", "docker compose logs of the stack (or of one service); -f follows"],
       ["panel [--print]", "open the dashboard in the browser (xdg-open); --print prints its URL instead"],
+      ["desktop install --browser NAME", "busyyaks in the app menu: the dashboard in its own window (Linux, BSD, macOS)"],
+      ["desktop uninstall", "remove that entry"],
       ["env KEY...", "`export KEY='value'` lines from .env, for eval (bin/env)"],
       ["doctor", "every host tool the stack needs, per feature; exit 1 if one is missing"],
       ["help", "this list"],
@@ -73,9 +78,13 @@ module Busyyaks
     end
 
     def dispatch(ctx, args)
-      case (cmd = args.shift)
+      cmd = args.shift
+      # the stack's commands need Linux; an unknown name falls through to the usage error first
+      Host.stack!(ctx) if STACK_COMMANDS.include?(cmd)
+      case cmd
       when "server" then Server.run(ctx, args)
       when "panel" then Panel.run(ctx, args)
+      when "desktop" then Desktop.run(ctx, args)
       when "env" then env(ctx, args)
       when "doctor" then Doctor.run(ctx, args)
       when "help", "-h", "--help" then ctx.out.puts(usage) || 0
@@ -130,4 +139,5 @@ require_relative "yaks/host"
 require_relative "yaks/http"
 require_relative "yaks/server"
 require_relative "yaks/panel"
+require_relative "yaks/desktop"
 require_relative "yaks/doctor"

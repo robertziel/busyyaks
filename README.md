@@ -162,8 +162,9 @@ Optional: the [daily report](#the-daily-report) timer, `deploy/install-daily-tim
 
 ### The `yaks` command
 
-`bin/yaks` runs the checkout it lives in, from any directory. It needs Linux and host Ruby 3.2 or newer (stdlib
-only: no gems, no `bundle install`).
+`bin/yaks` runs the checkout it lives in, from any directory. It needs host Ruby 3.2 or newer (stdlib only: no
+gems, no `bundle install`). The stack's commands (`server`, `panel`, `env`, `doctor`) need Linux; `yaks desktop`
+also runs on the BSDs and macOS ([Desktop app](#desktop-app)).
 
 **Install** — one symlink from a directory on your PATH (the example uses `~/.local/bin`; any PATH directory works):
 
@@ -183,7 +184,7 @@ yaks server status                         # every row ok once the stack is up
 | several checkouts | one link per checkout, under different names (`ln -s <checkout>/bin/yaks ~/.local/bin/yaks-test`) |
 | exit codes | 0 ok · 1 a check failed or a refusal (the reason on stderr) · 2 a usage error (usage printed) |
 | `no .env at <checkout>/.env` | the link points at a checkout that is not set up: finish the [Quickstart](#quickstart) there, or link the right checkout |
-| `Ruby X is older than 3.2` · `busyyaks runs on Linux only` | refused before anything runs |
+| `Ruby X is older than 3.2` · `busyyaks runs on Linux only` | refused before anything runs (the stack's commands; `yaks desktop` and `help` run on Linux, the BSDs and macOS) |
 | `yaks panel`: `no graphical session here` | run it from a desktop session; over ssh / tmux use `yaks panel --print` |
 
 Commands:
@@ -193,6 +194,7 @@ Commands:
 | `yaks server status` | each service running, `/up`, MCP `tools/list`, the launcher unit and its socket; exit 1 if any is down |
 | `yaks server logs [SERVICE] [-f]` | `docker compose logs` of the stack or one service |
 | `yaks panel [--print]` | opens the dashboard with `xdg-open` from a desktop session (`https://PUBLIC_HOST`, or `http://127.0.0.1:WEB_HOST_PORT`); over ssh / tmux it is refused — `--print` prints the URL |
+| `yaks desktop install --browser NAME` · `yaks desktop uninstall` | the [desktop app](#desktop-app) (Linux, the BSDs: a `.desktop` entry; macOS: `~/Applications/busyyaks.app`): the dashboard in its own window, `NAME --app=<URL>`; uninstall removes only this checkout's entry |
 | `yaks env KEY...` | `export KEY='value'` lines from `.env` (as `bin/env`) |
 | `yaks doctor` | every host tool the stack needs, per feature; exit 1 if one is missing |
 
@@ -207,12 +209,14 @@ read: they run `docker compose ps` / `logs` in the checkout, ask `GET /up` on `1
 $ yaks help
 usage: yaks <command>
 
-  yaks server status               every service, /up, MCP tools/list, the launcher unit and its socket; exit 1 if any is down
-  yaks server logs [SERVICE] [-f]  docker compose logs of the stack (or of one service); -f follows
-  yaks panel [--print]             open the dashboard in the browser (xdg-open); --print prints its URL instead
-  yaks env KEY...                  `export KEY='value'` lines from .env, for eval (bin/env)
-  yaks doctor                      every host tool the stack needs, per feature; exit 1 if one is missing
-  yaks help                        this list
+  yaks server status                   every service, /up, MCP tools/list, the launcher unit and its socket; exit 1 if any is down
+  yaks server logs [SERVICE] [-f]      docker compose logs of the stack (or of one service); -f follows
+  yaks panel [--print]                 open the dashboard in the browser (xdg-open); --print prints its URL instead
+  yaks desktop install --browser NAME  busyyaks in the app menu: the dashboard in its own window (Linux, BSD, macOS)
+  yaks desktop uninstall               remove that entry
+  yaks env KEY...                      `export KEY='value'` lines from .env, for eval (bin/env)
+  yaks doctor                          every host tool the stack needs, per feature; exit 1 if one is missing
+  yaks help                            this list
 
 $ yaks server status
 ok    web                        running
@@ -271,6 +275,8 @@ exit 1. The jq · curl · flock · timeout rows appear only when `config/busyyak
 Two skins (light by default, dark, or follow the system), Trello-style keyboard shortcuts on the board (`?`), and a search
 over projects, cards, commits and reports (`⌘K`).
 
+**Desktop app**: the dashboard runs as an app in a window of its own — see [Desktop app](#desktop-app).
+
 <p align="center">
   <img src="docs/images/board.webp" width="960" alt="A project's board: the launch bar with Launch, Worker, Sub team and Plain buttons and the running tmux sessions above the columns Backlog, To do, In progress, QA and Human Check; a card in progress carries a question with three choices, and each card shows the session that owns it">
 </p>
@@ -288,6 +294,42 @@ tmux; each card shows the session that owns it and whether anyone is listening.<
     <td align="center"><sub><b>Phone</b>.</sub></td>
   </tr>
 </table>
+
+---
+
+## Desktop app
+
+The dashboard is the same web app in a window of its own: no tabs, no address bar, an entry in the applications menu.
+Two ways, both on the machine you work at:
+
+| | How | Gives |
+|---|---|---|
+| **`yaks`** (Linux · FreeBSD · OpenBSD · NetBSD · DragonFly · macOS) | `yaks desktop install --browser google-chrome` | an app **busyyaks** that opens the dashboard with the browser's `--app=<URL>`. Linux and the BSDs: a menu entry `~/.local/share/applications/busyyaks.desktop` (the browser found on `PATH`). macOS: `~/Applications/busyyaks.app` (Launchpad, Spotlight), starting the browser app from `/Applications` or `~/Applications`. The window belongs to the browser, so the Dock / taskbar shows it under the browser's icon. Remove it with `yaks desktop uninstall` |
+| **From the browser** (Linux · macOS · Windows) | open the dashboard in Chrome or Edge → the install icon at the right of the address bar (or ⋮ menu → *Cast, save, and share* → *Install busyyaks…*) | the installed app: its own window and its own Dock / taskbar icon, with a badge counting the cards waiting for you (a dot when the count could not be read) |
+
+`--browser` is required, a Chromium-family browser (only those open a window of its own): `google-chrome`,
+`chromium`, `microsoft-edge`, `brave-browser`, `vivaldi`; on Linux / BSD also their package names
+`google-chrome-stable`, `chromium-browser`, `microsoft-edge-stable`. Install and uninstall touch only the entry this
+checkout wrote.
+
+The URL is the dashboard's, from the checkout's `.env`: `https://PUBLIC_HOST`, or `http://127.0.0.1:WEB_HOST_PORT`
+while `PUBLIC_HOST` is empty (`yaks panel --print` prints it). An installed app needs a secure origin, which both are.
+
+**On a machine that only opens the dashboard** (e.g. a Mac reaching the server over `PUBLIC_HOST`) — no stack, no
+Docker, only a clone and Ruby 3.2 or newer (macOS ships an older one: `brew install ruby`, then put Homebrew's ruby
+first on PATH):
+
+```sh
+git clone https://github.com/robertziel/busyyaks && cd busyyaks
+ruby -v                                              # 3.2 or newer
+echo 'PUBLIC_HOST=busyyaks.example.com' > .env       # the server's PUBLIC_HOST: the only key it reads
+ruby bin/yaks desktop install --browser google-chrome
+open ~/Applications/busyyaks.app                     # macOS; Linux / BSD: the applications menu, busyyaks
+```
+
+The rest of `yaks` (the stack's commands) runs on Linux only. A new app can take a moment to show in Launchpad or
+Spotlight; `open ~/Applications/busyyaks.app` starts it at once. Firefox on the desktop does not install web apps.
+Changed `public/static/icon.svg`? Re-render the app icons with `scripts/icons/render-png` (Docker).
 
 ---
 

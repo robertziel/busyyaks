@@ -10,6 +10,7 @@ import { Link } from "react-router-dom";
 import { apiGet, useResource } from "../api";
 import { now, projectPath } from "../lib/format";
 import { useLiveRev } from "../lib/live";
+import { readWaiting } from "../lib/appBadge";
 import {
   age,
   bubbles,
@@ -273,12 +274,15 @@ export function WaitingWidget() {
   const openers = useRef(new Map<string, HTMLButtonElement>());
 
   const load = useCallback(() => {
-    apiGet<Waiting>("/api/waiting")
-      .then((w) => {
+    // the installed app's dock badge follows each read: the total, or unknown on a failure
+    void readWaiting(
+      () => apiGet<Waiting>("/api/waiting"),
+      (w) => {
         setData(w);
         setFetchErr(null);
-      })
-      .catch((e: unknown) => setFetchErr(e instanceof Error ? e.message : String(e)));
+      },
+      setFetchErr,
+    );
   }, []);
   useEffect(load, [load]);
   const live = useLiveRev("/api/waiting/rev", load, { every: 4000 });

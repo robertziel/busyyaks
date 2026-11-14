@@ -6,6 +6,13 @@ All notable changes to busyyaks are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Desktop app**: busyyaks is an installable web app (a manifest, 192/512 px icons). `yaks desktop install --browser
+  NAME` adds it to the app menu (Linux and the BSDs: a desktop entry; macOS: `~/Applications/busyyaks.app`) and
+  `yaks desktop uninstall` removes it; or install it from Chrome or Edge. It opens in its own window, and the app
+  icon's badge counts the cards waiting for you. README § Desktop app.
+
 ### Changed (breaking for hosts)
 
 - **Agent settings in the database**: the launchers and agent types left `config/kanban.yml` (a file that still has
