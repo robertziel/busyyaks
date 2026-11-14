@@ -92,7 +92,7 @@ module Busyyaks
     end
 
     # The SPA URL that opens a card on its project's board (the engine's "card #N" chips, search hits, reports).
-    def card_path(slug, id) = DashboardUrl.card_path(slug, id)
+    def card_path(slug, id) = Kanban.card_path(slug, id)
 
     def agents(snap, groups, icons = {})
       sessions = groups.flat_map { |g| g[2] }

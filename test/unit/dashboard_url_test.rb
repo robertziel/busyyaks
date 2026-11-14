@@ -18,6 +18,10 @@ class DashboardUrlTest < Minitest::Test
                  U.card("r", 3, { "PUBLIC_HOST" => "", "WEB_HOST_PORT" => "8080" })
   end
 
+  def test_a_session_board_card_opens_the_session_boards_page
+    assert_equal "/session-boards?session=s%201&card=4", U.session_card_path("s 1", 4)
+  end
+
   def test_a_missing_or_malformed_value_raises
     assert_match(/PUBLIC_HOST missing/, assert_raises(U::Invalid) { U.origin({}) }.message)
     assert_match(/WEB_HOST_PORT missing/, assert_raises(U::Invalid) { U.origin({ "PUBLIC_HOST" => "" }) }.message)
