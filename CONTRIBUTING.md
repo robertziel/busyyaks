@@ -55,8 +55,8 @@ A pull request is reviewed once `scripts/ci/test.sh all` is green. Stages, paral
   in the `*.example.yml` files), one place per value.
 - **Tests with the change.** A fix comes with the test that fails without it; a feature with tests for what it does
   and what it refuses.
-- **Docs with the change.** Update the README, `docs/` and the example config in the same pull request, and add a line
-  under `Unreleased` in [CHANGELOG.md](CHANGELOG.md) for anything a user would notice.
+- **Docs with the change.** Update the README, `docs/` and the example config in the same pull request, and add one line
+  under `Unreleased` in [CHANGELOG.md](CHANGELOG.md) — one line per change, no paragraphs.
 
 ## Commits and pull requests
 
