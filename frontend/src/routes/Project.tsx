@@ -48,9 +48,10 @@ export function Project() {
           <span>Launcher down: {data.launcher_error}</span>
         </div>
       )}
-      <h1>
+      <h1 className="proj-title">
         <ProjectIcon slug={p.slug} icon={p.icon} size={30} />
-        {p.slug} <span className={`tag ${p.own ? "own" : "up"}`}>{p.own ? "own" : "upstream"}</span>
+        <span className="proj-name">{p.slug}</span>{" "}
+        <span className={`tag ${p.own ? "own" : "up"}`}>{p.own ? "own" : "upstream"}</span>
         {!p.present && <span className="tag bad">not present</span>}
       </h1>
       <div className="tabs" role="tablist" aria-label="Project views">
