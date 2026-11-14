@@ -1,18 +1,17 @@
-// The skin choice in the settings menu (Settings.tsx): Light (the default) · Dark · Auto (follow the system) over
-// public/static/skin.js, which owns the choice (this browser's localStorage) and puts the skin on <html data-skin>
-// before first paint. This only drives it.
+// The skin choice in the settings menu (Settings.tsx): Light (the default) · Dark · Auto (follow the system) · any
+// other skin file of the repo (skins/<key>.yml, card #361) over public/static/skin.js, which owns the choice (this
+// browser's localStorage) and puts the skin on <html data-skin> before first paint. This only drives it.
 import { useEffect, useState } from "react";
 
-export type SkinChoice = "auto" | "light" | "dark";
-type SkinApi = { choices: SkinChoice[]; get(): SkinChoice; set(c: SkinChoice): void };
+// "light" | "dark" | "auto" | another skin file's key
+export type SkinChoice = string;
+type SkinApi = { choices: SkinChoice[]; label(c: SkinChoice): string; get(): SkinChoice; set(c: SkinChoice): void };
 
 declare global {
   interface Window {
     busyyaksSkin?: SkinApi;
   }
 }
-
-const LABELS: Record<SkinChoice, string> = { auto: "Auto", light: "Light", dark: "Dark" };
 
 function api(): SkinApi {
   const a = window.busyyaksSkin;
@@ -39,7 +38,7 @@ export function SkinSwitch() {
           className={choice === c ? "on" : undefined}
           onClick={() => skin.set(c)}
         >
-          {LABELS[c]}
+          {skin.label(c)}
         </button>
       ))}
     </div>

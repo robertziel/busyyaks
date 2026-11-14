@@ -1,4 +1,4 @@
-// The header's settings cog: closed = only the cog; open = account, the Agents & launchers link, the skin choice
+// The header's settings cog: closed = only the cog; open = account, the settings links, the skin choice (every skin file)
 // (current one checked), Sign out.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -25,7 +25,12 @@ const render = (p: Partial<Parameters<typeof SettingsView>[0]> = {}) =>
 describe("SettingsView", () => {
   beforeEach(() => {
     vi.stubGlobal("window", {
-      busyyaksSkin: { choices: ["light", "dark", "auto"], get: () => "dark", set: () => {} },
+      busyyaksSkin: {
+        choices: ["light", "dark", "auto", "dusk"],
+        label: (c: string) => (c === "dusk" ? "Dusk <1>" : c.charAt(0).toUpperCase() + c.slice(1)),
+        get: () => "dark",
+        set: () => {},
+      },
     });
   });
   afterEach(() => vi.unstubAllGlobals());
@@ -36,7 +41,7 @@ describe("SettingsView", () => {
     expect(html).toMatch(/class="settings-menu"[^>]*hidden=""/);
   });
 
-  it("open: account, the three skins with the current one checked, Sign out posting the CSRF token", () => {
+  it("open: account, the skins, an added one's label escaped, with the current one checked, Sign out posting the CSRF token", () => {
     const html = render({ open: true });
     expect(html).toMatch(/aria-expanded="true"/);
     expect(html).not.toMatch(/hidden=""/);
@@ -44,7 +49,8 @@ describe("SettingsView", () => {
     expect(html).toMatch(/<a class="settings-link" href="\/settings"[^>]*>Agents &amp; launchers<\/a>/);
     expect(html).toMatch(/<a class="settings-link" href="\/settings\/daily-report"[^>]*>Daily report<\/a>/);
     expect(html).toMatch(/<a class="settings-link" href="\/hello"[^>]*>Setup \(hello screen\)<\/a>/);
-    expect(html.match(/role="radio"/g)).toHaveLength(3);
+    expect(html.match(/role="radio"/g)).toHaveLength(4);
+    expect(html).toMatch(/aria-checked="false">Dusk &lt;1&gt;</);
     expect(html).toMatch(/aria-checked="true" class="on">Dark</);
     expect(html).toMatch(/aria-checked="false">Light</);
     expect(html).toContain('<form method="post" action="/logout">');

@@ -10,8 +10,10 @@
 <meta name="color-scheme" content="light dark">
 <title>busyyaks</title>
 <link rel="icon" href="<%= h.asset("/static/icon.svg") %>">
+<meta name="skins" content="<%= h.e(skins_meta) %>">
 <script src="<%= h.asset("/static/skin.js") %>"></script>
 <link rel="stylesheet" href="<%= h.asset("/static/app.css") %>">
+<style id="skins-css"><%= skins_css %></style>
 <style><%= theme_css %></style>
 <%- css.each do |f| -%>
 <link rel="stylesheet" href="<%= h.e(f) %>">

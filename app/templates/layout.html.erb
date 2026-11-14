@@ -6,8 +6,10 @@
 <meta name="csrf-token" content="<%= csrf %>">
 <title><%= h.e(title) %> · busyyaks</title>
 <link rel="icon" href="<%= h.asset("/static/icon.svg") %>">
+<meta name="skins" content="<%= h.e(skins_meta) %>">
 <script src="<%= h.asset("/static/skin.js") %>"></script>
 <link rel="stylesheet" href="<%= h.asset("/static/app.css") %>">
+<style id="skins-css"><%= skins_css %></style>
 <%- scripts.each do |s| -%>
 <script src="<%= h.e(s) %>" defer></script>
 <%- end -%>
