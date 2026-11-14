@@ -23,6 +23,10 @@
 #                                 installers)
 #                                 on the OLDEST host Ruby they support (HOST_RUBY_IMAGE = Busyyaks::CLI::MIN_RUBY):
 #                                 a construct newer than that passes the suite's Ruby 3.4 and breaks on the host
+#   scripts/ci/test.sh changelog  a pull request only: CHANGELOG_BASE (required: the ref it merges into, e.g.
+#                                 origin/main) → scripts/ci/changelog — the PR adds a line under Unreleased and every
+#                                 Unreleased entry is one line. Plain git on the checkout, no container; not in `all`
+#                                 (a branch build has no base)
 #   scripts/ci/test.sh all        lint, ruby, frontend, audit, secrets and host at once, each into its own log,
 #                                 printed one after the other once all have finished; fails if any fails
 #
@@ -309,6 +313,7 @@ case "${1:-}" in
   audit) audit_suite ;;
   secrets) secrets_suite ;;
   host) host_suite ;;
+  changelog) scripts/ci/changelog "${CHANGELOG_BASE:?CHANGELOG_BASE is not set — the ref the pull request merges into, e.g. origin/main}" ;;
   all) all_suites lint ruby ruby-pg frontend audit secrets host ;;
-  *) echo "usage: $0 lint|ruby|ruby-pg|frontend|audit|secrets|host|all" >&2; exit 2 ;;
+  *) echo "usage: $0 lint|ruby|ruby-pg|frontend|audit|secrets|host|changelog|all" >&2; exit 2 ;;
 esac

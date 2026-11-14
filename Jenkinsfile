@@ -6,8 +6,9 @@
 // Jenkins side: a multibranch job reading this file from SCM (this repository's own branches and pull requests; a
 // fork's pull request is GitHub Actions', never here), an agent with a Docker CLI on a daemon it may start containers
 // on — chosen by the controller's global env BUSYYAKS_CI_AGENT_LABEL (unset → the build fails: an agent, never the
-// controller, runs the builds) — and the Secret Text credential `github-pat` (a token allowed to post statuses on this
-// repo).
+// controller, runs the builds) — the Secret Text credential `github-pat` (a token allowed to post statuses on this
+// repo) and the username/password credential `github-https` (the branch source's: the Changelog stage fetches a pull
+// request's target branch with it).
 // The repo the status goes to is read from the checkout's origin remote — nothing about the deployment is written here.
 //
 // README badges (coverage · branches · tests): after the gates pass on the repository's DEFAULT branch (asked from
@@ -70,7 +71,7 @@ pipeline {
           echo "Building ${env.GH_REPO}@${env.GIT_SHA} (${env.BRANCH_NAME}; default branch ${env.DEFAULT_BRANCH})"
           sh 'rm -rf "$WORKSPACE_TMP/ci-logs" "$WORKSPACE_TMP/badges"'
         }
-        notifyGitHub('pending', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + audit + secrets + host Ruby running')
+        notifyGitHub('pending', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + audit + secrets + host Ruby (+ changelog on a PR) running')
       }
     }
 
@@ -83,6 +84,11 @@ pipeline {
         stage('Audit')      { steps { gate('audit') } }
         stage('Secrets')    { steps { gate('secrets') } }
         stage('Host Ruby')  { steps { gate('host') } }
+        // a pull request adds a line under Unreleased in CHANGELOG.md (scripts/ci/changelog); a branch build has no base
+        stage('Changelog') {
+          when { expression { env.CHANGE_ID } }
+          steps { changelogGate() }
+        }
       }
       post { success { script { env.GATES_PASSED = 'true' } } }
     }
@@ -102,8 +108,8 @@ pipeline {
   }
 
   post {
-    success  { notifyGitHub('success', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + audit + secrets passed') }
-    failure  { notifyGitHub('failure', env.GATES_PASSED ? 'Gates passed; README badge update failed — see the build log' : 'CI failed — see the build log') }
+    success  { notifyGitHub('success', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + audit + secrets' + (env.CHANGE_ID ? ' + changelog' : '') + ' passed') }
+    failure  { notifyGitHub('failure', env.GATES_PASSED ? 'Gates passed; README badge update failed — see the build log' : (env.CHANGELOG_FAILED ? 'Changelog: add one line under Unreleased in CHANGELOG.md — see the build log' : 'CI failed — see the build log')) }
     unstable { notifyGitHub('failure', 'CI unstable') }
     aborted  { notifyGitHub('error', 'Build aborted') }
     cleanup  { cleanWs() }
@@ -127,6 +133,34 @@ void gate(String suite) {
     mkdir -p "\$WORKSPACE_TMP/ci-logs"
     scripts/ci/test.sh ${suite} 2>&1 | tee "\$WORKSPACE_TMP/ci-logs/${suite}.log"
   """
+}
+
+// The changelog gate against the PR's target branch. A HEAD-strategy PR checkout holds only the PR's own ref, so the
+// target is fetched first, with the branch source's own credential (gitUsernamePassword: git reads it through
+// GIT_ASKPASS, never on a command line). The branch name reaches the shell as an env value only, never spliced into the
+// script text (withEnv builds the env entry in Groovy; the shell reads "$CHANGE_TARGET").
+void changelogGate() {
+  withCredentials([gitUsernamePassword(credentialsId: 'github-https', gitToolName: 'Default')]) {
+    sh '''#!/usr/bin/env bash
+      set -euo pipefail
+      git fetch --no-tags origin "+refs/heads/$CHANGE_TARGET:refs/remotes/origin/$CHANGE_TARGET"
+    '''
+  }
+  // exit 1 = the PR's changelog is refused (the status says which line to add); anything else (2: no base in the
+  // checkout, a crash) = CI's own fault, reported as a plain failure
+  int code
+  withEnv(["CHANGELOG_BASE=origin/${env.CHANGE_TARGET}"]) {
+    code = sh(returnStatus: true, script: '''#!/usr/bin/env bash
+      set -euo pipefail
+      mkdir -p "$WORKSPACE_TMP/ci-logs"
+      scripts/ci/changelog "$CHANGELOG_BASE" 2>&1 | tee "$WORKSPACE_TMP/ci-logs/changelog.log"
+    ''')
+  }
+  if (code == 1) {
+    env.CHANGELOG_FAILED = 'true'
+    error('changelog: this pull request adds no one-line entry under Unreleased in CHANGELOG.md')
+  }
+  if (code != 0) { error("changelog gate could not run (exit ${code}) — see the log above") }
 }
 
 // GitHub's default branch for this repo (scripts/ci/github default-branch). Unreadable fails the build.

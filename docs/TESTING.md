@@ -16,6 +16,7 @@ docker compose run --rm --build test; s=$?; docker compose --profile test rm -sf
 | `frontend` | `tsc`, ESLint, Prettier and vitest in `frontend/` |
 | `audit` | `bundle-audit check --update` + `npm audit --audit-level=low`; any advisory fails, fixed by upgrading |
 | `secrets` | gitleaks over the history |
+| `changelog` | pull requests only, `CHANGELOG_BASE=<target ref>`: the PR adds a `- ` line under `## [Unreleased]` in CHANGELOG.md and every Unreleased entry is one line (`scripts/ci/changelog`; Jenkins fetches the target first, GitHub Actions runs it on `pull_request`) |
 
 - The `test` service builds its own image (`busyyaks:test`), never the live `busyyaks:local`, so running the tests
   never restarts or migrates a running deployment.

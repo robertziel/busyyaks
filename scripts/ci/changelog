@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# The changelog gate: a pull request adds at least one line under `## [Unreleased]` in CHANGELOG.md, and every entry
+# there is ONE line (a `- ` bullet that never wraps onto an indented line).
+#
+#   scripts/ci/changelog <base>    <base> = the ref the PR merges into (Jenkins: origin/$CHANGE_TARGET,
+#                                  GitHub Actions: origin/$GITHUB_BASE_REF); the PR's changes = <base>...HEAD
+#
+# Refusals exit 1 with the reason; a base that is not in the checkout exits 2 (never guessed, never skipped).
+set -euo pipefail
+
+FILE=CHANGELOG.md
+die() { echo "changelog: $*" >&2; exit "${2:-1}"; }
+
+base=${1:-}
+[ -n "$base" ] || die "usage: scripts/ci/changelog <base ref> — the branch the pull request merges into" 2
+git rev-parse --verify --quiet "$base^{commit}" >/dev/null ||
+  die "base $base is not in this checkout — fetch it first (git fetch origin <branch>)" 2
+[ -f "$FILE" ] || die "$FILE is missing"
+
+# the Unreleased section's line range in HEAD's file: from its heading to the next `## [` heading
+range=$(awk '/^## \[Unreleased\]/ { f = NR; next } f && /^## \[/ { print f, NR - 1; done = 1; exit }
+  END { if (f && !done) print f, NR }' "$FILE")
+[ -n "$range" ] || die "$FILE has no '## [Unreleased]' section"
+read -r from to <<< "$range"
+
+# every line of the section is a `### ` heading, a `- ` bullet, a link reference (`[name]: url`, the footer when
+# Unreleased is the last section) or blank: a wrapped (indented) line is a second line
+bad=$(awk -v f="$from" -v t="$to" 'NR > f && NR <= t && !/^(### |- |\[[^]]+\]: |$)/ { print NR ": " $0 }' "$FILE")
+[ -z "$bad" ] || die "every Unreleased entry is one line ('- ' bullet, no wrapped lines); these are not:
+$bad"
+
+# the line numbers (in HEAD's file) this PR adds, from a zero-context diff's hunk headers
+added=$(git diff --unified=0 --no-color "$base...HEAD" -- "$FILE" | awk '
+  /^@@/ { split($3, n, ","); line = substr(n[1], 2) + 0; next }
+  /^\+\+\+/ { next }
+  /^\+/ { print line; line++ }')
+for n in $added; do
+  if [ "$n" -gt "$from" ] && [ "$n" -le "$to" ] && sed -n "${n}p" "$FILE" | grep -q '^- '; then
+    echo "changelog: line $n added under Unreleased: $(sed -n "${n}p" "$FILE")"
+    exit 0
+  fi
+done
+die "this pull request adds no line under '## [Unreleased]' in $FILE — add one '- ' line saying what changed ($base...HEAD)"

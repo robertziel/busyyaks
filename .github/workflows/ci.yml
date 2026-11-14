@@ -41,3 +41,8 @@ jobs:
           persist-credentials: false
       - name: scripts/ci/test.sh all
         run: scripts/ci/test.sh all
+      - name: scripts/ci/test.sh changelog
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          CHANGELOG_BASE: origin/${{ github.base_ref }}
+        run: scripts/ci/test.sh changelog
