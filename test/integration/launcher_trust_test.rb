@@ -112,7 +112,7 @@ class LauncherTrustTest < Minitest::Test
     File.write(File.join(@co, "config/busyyaks.yml"), YAML.dump(
       "roots" => [{ "path" => "/projects", "prefix" => "" }], "search_depth" => 2,
       "owner_remotes" => ["github.com/you/"], "author_emails" => ["you@example.com"], "window_days" => 7,
-      "reap_protect" => [], "auth" => { "provider" => "none" }, "agents" => { "collector" => "none" },
+      "reap_protect" => [], "auth" => { "provider" => "none" }, "agents" => { "collector" => "none" }, "dictation" => "none",
       "launch" => launch
     ))
   end

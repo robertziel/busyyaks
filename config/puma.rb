@@ -44,3 +44,8 @@ if puma_cluster_mode
     Hanami.shutdown
   end
 end
+
+# dictation (lib/busyyaks/dictation.rb): DICTATION_URL / DICTATION_TOKEN (web only) must match config/busyyaks.yml
+# `dictation` — checked here, so the web service never starts with a mic that cannot work or a token nobody uses
+require_relative "../lib/busyyaks/config"
+Busyyaks::Dictation.boot!(Busyyaks::Config.load.dictation, ENV)

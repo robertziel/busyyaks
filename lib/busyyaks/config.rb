@@ -8,6 +8,7 @@ require_relative "owner_remotes"
 require_relative "launch_trust"
 require_relative "launcher_rules"
 require_relative "agent_settings"
+require_relative "dictation"
 
 module Busyyaks
   # The deployment's YAML (config/busyyaks.yml). Every key required, unknown keys refused,
@@ -15,11 +16,11 @@ module Busyyaks
   class Config
     class Invalid < StandardError; end
 
-    KEYS = %w[roots search_depth owner_remotes author_emails window_days reap_protect auth agents launch].freeze
+    KEYS = %w[roots search_depth owner_remotes author_emails window_days reap_protect auth agents launch dictation].freeze
     OPTIONAL = %w[engines daily_report_runners].freeze
     attr_reader :roots, :search_depth, :owner_remotes, :author_emails, :window_days, :reap_protect, :engines,
                 :daily_report_runners, :auth, :agent_collector, :trusted_paths, :launch_commands,
-                :launch_start_seconds
+                :launch_start_seconds, :dictation
 
     # mount: where compose mounts PROJECTS_ROOT (.env PROJECTS_MOUNT, the one place it is set): every root is under it.
     def self.load(path = ENV.fetch("BUSYYAKS_CONFIG"), mount: ENV.fetch("PROJECTS_MOUNT"))
@@ -96,6 +97,12 @@ module Busyyaks
       begin
         @engines = Engines.load(hash["engines"])
       rescue Engines::Invalid => e
+        raise Invalid, e.message
+      end
+      begin
+        # the card dialog's mic (Dictation): none, or {model, timeout_seconds, max_seconds}
+        @dictation = Dictation.parse!(hash["dictation"])
+      rescue Dictation::Invalid => e
         raise Invalid, e.message
       end
       begin

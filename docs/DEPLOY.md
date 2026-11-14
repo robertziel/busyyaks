@@ -308,6 +308,62 @@ table (`test/unit/db_copy_test.rb`).
    mcp scanner github notifier`: the services open the untouched SQLite file. Writes made on PostgreSQL in between
    are not in it.
 
+## Dictation (the card dialog's mic)
+
+An open card's comment box has a mic button; **⌥R / Alt+R** held anywhere in the card records (push-to-talk: release it to stop) (each viewer picks
+another key, or none, on **Settings → Shortcuts**: kept in that browser; combos the browser, the OS or the editor owns are
+refused with the reason; a combo another app on the computer takes never reaches the browser — the recorder shows
+the modifiers but never the key, and says so). You speak, the words
+appear in the comment while you talk (2.5 s windows, the words two passes agree on are kept, the rest shown as it
+settles), and Save posts it like a typed comment. The text is read-only while it records; a failed window shows the
+server's reason under the box and is retried. Off by default (`dictation: none`: no mic anywhere).
+
+```
+browser (16 kHz mono WAV windows) ── POST /api/dictation (session + CSRF) ──▶ web ── multipart ──▶ speech server
+                                                                                     DICTATION_URL /v1/audio/transcriptions
+```
+
+The speech server is any **OpenAI-compatible** `POST /v1/audio/transcriptions` that answers `verbose_json` with word
+timings (`words`, or `segments[].words`; both `timestamp_granularities[]=word` and `timestamp_granularities=word` are
+sent): OpenAI itself, a faster-whisper server, a vLLM fleet's load balancer serving a whisper model. Its URL and token
+stay in the web container (`.env`), never in the browser.
+
+| where | key | value |
+|---|---|---|
+| `config/busyyaks.yml` | `dictation` | `none`, or `{model: <the server's model id>, timeout_seconds: 1..300, max_seconds: 30..600}` (30 = the mic's longest window) |
+| `.env` (web only) | `DICTATION_URL` | the server's base or full endpoint, http(s); empty with `none` |
+| `.env` (web only) | `DICTATION_TOKEN` | its bearer; empty = none sent; empty with `none` |
+| `.env` (optional) | `COMPOSE_FILE`, `DICTATION_NETWORK` | a server reachable only on a docker network (below) |
+
+The web boot (`config/puma.rb`) refuses a config and env that disagree. `/api/dictation`: 404 off · 400 not that WAV ·
+413 longer than `max_seconds` · 502 the server unreachable, timed out or erroring (its reason) · 503 misconfigured.
+
+**No speech server yet?** Run one on the same host (CPU; a GPU image `0.8.3-cuda` exists), then download a model into it:
+
+```sh
+docker run -d --name speaches --restart unless-stopped -p 127.0.0.1:8000:8000 \
+  -v speaches-cache:/home/ubuntu/.cache/huggingface ghcr.io/speaches-ai/speaches:0.8.3-cpu
+curl -X POST http://127.0.0.1:8000/v1/models/Systran/faster-whisper-small     # once: fetches the model
+```
+
+The web container cannot reach the host's `127.0.0.1`; publish the server where the container sees it, or put both on
+one docker network:
+
+**A server on a docker network** (e.g. a fleet load balancer that serves inference only to containers on its client
+network, never on a public address): `docker-compose.dictation-network.yml` moves the web service from the default
+bridge onto that existing network, where the server answers by its container name. In `.env`:
+
+```sh
+COMPOSE_FILE=docker-compose.yml:docker-compose.dictation-network.yml
+DICTATION_NETWORK=speech-clients              # docker network ls; must exist, not --internal
+DICTATION_URL=http://speaches:8000            # the server's container name on that network
+DICTATION_TOKEN=
+```
+
+and `dictation: {model: Systran/faster-whisper-small, timeout_seconds: 30, max_seconds: 120}`; then
+`docker compose up -d --no-build web`. Check: open a card, press the mic (the browser asks for the microphone once:
+https or localhost only), speak, stop — the words are in the box.
+
 ## Reading the scanned repos
 
 Every service reads a repo under `PROJECTS_ROOT` only through `bin/git-read` (`lib/busyyaks/git_read.rb`): one

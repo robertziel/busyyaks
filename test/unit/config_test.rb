@@ -8,9 +8,20 @@ require "tmpdir"
 class ConfigTest < Minitest::Test
   OK = { "roots" => [{ "path" => "/p", "prefix" => "" }], "search_depth" => 2, "owner_remotes" => ["github.com/me/"],
          "author_emails" => ["Me@x.io"], "window_days" => 7, "reap_protect" => [], "auth" => { "provider" => "none" },
-         "agents" => { "collector" => "none" }, "launch" => LAUNCH_CLAUDE, }.freeze
+         "agents" => { "collector" => "none" }, "dictation" => "none", "launch" => LAUNCH_CLAUDE, }.freeze
 
   def test_valid = assert_equal ["me@x.io"], Busyyaks::Config.new(OK).author_emails
+
+  # dictation is required — none, or the speech server's model + limits (Busyyaks::Dictation.parse!)
+  def test_dictation_is_required_none_or_the_three_keys
+    assert_nil Busyyaks::Config.new(OK).dictation
+    on = { "model" => "whisper-1", "timeout_seconds" => 30, "max_seconds" => 120 }
+    assert_equal 120, Busyyaks::Config.new(OK.merge("dictation" => on)).dictation.max_seconds
+    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.except("dictation")) }
+    assert_match(/missing keys: dictation/, e.message)
+    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.merge("dictation" => on.except("model"))) }
+    assert_match(/dictation must be `none` or a mapping with exactly/, e.message)
+  end
 
   # sign-in is chosen, never defaulted
   def test_auth_is_required_and_names_a_provider

@@ -1,0 +1,17 @@
+# Optional: the web service joins an EXISTING docker network on which the speech server is reachable by
+# name (e.g. a fleet load balancer's client network), instead of the default bridge — for a speech server that listens
+# only inside docker, never on a public address. Only `web` calls it (lib/busyyaks/dictation.rb); the others stay as
+# they are. Enable in .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.dictation-network.yml
+#   DICTATION_NETWORK=<that network's name>          DICTATION_URL=http://<its container name>:<port>
+# The network must exist (`docker network ls`) and not be `internal` (web still reaches the auth provider).
+# docs/DEPLOY.md § Dictation.
+services:
+  web:
+    network_mode: !reset null
+    networks: [dictation]
+
+networks:
+  dictation:
+    external: true
+    name: ${DICTATION_NETWORK:?set DICTATION_NETWORK in .env (docker-compose.dictation-network.yml)}

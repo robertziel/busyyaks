@@ -587,3 +587,149 @@ table.as-preview th:nth-child(1),
 table.as-preview th:nth-child(2) {
   width: 18%;
 }
+
+/* Settings → Shortcuts */
+/* the title and its one-line explanation read as one block: 4px between them, the section's 12px to the controls */
+.shortcuts > h2 + p {
+  margin: -8px 0 0;
+}
+.shortcuts .sc-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+/* the shortcut: key caps in a well; recording = the well listens (an accent ring that breathes) */
+.shortcuts .sc-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 132px;
+  min-height: 44px;
+  padding: 6px 14px;
+  border-radius: var(--radius-ctl);
+  background: var(--panel-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font: 600 14px var(--sans);
+  transition:
+    box-shadow 0.25s ease,
+    background-color 0.25s ease;
+}
+.shortcuts .sc-cap {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow:
+    0 0 0 1px var(--line-strong),
+    0 2px 0 0 var(--line-strong);
+  transform: translateY(-1px);
+}
+.shortcuts .sc-plus {
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+.shortcuts .sc-hint {
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+.shortcuts .sc-key.rec {
+  background: rgba(var(--accent-rgb), 0.06);
+  box-shadow:
+    inset 0 0 0 1.5px rgba(var(--accent-rgb), 0.7),
+    0 0 0 3px rgba(var(--accent-rgb), 0.14);
+  animation: sc-listen 1.8s ease-in-out infinite;
+}
+.shortcuts .sc-key.rec .sc-cap {
+  animation: sc-press 0.22s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.shortcuts .sc-key.rec.refused {
+  animation:
+    sc-shake 0.36s cubic-bezier(0.36, 0.07, 0.19, 0.97) both,
+    sc-listen 1.8s 0.36s ease-in-out infinite;
+}
+.shortcuts .sc-key.saved .sc-cap {
+  animation: sc-settle 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.shortcuts .sc-key.saved .sc-cap:nth-of-type(n + 2) {
+  animation-delay: 0.05s;
+}
+.shortcuts .sc-msg {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0;
+  animation: sc-msg-in 0.3s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.shortcuts .sc-msg.sc-taken {
+  animation-delay: 1.5s; /* only once the key has not come: a normal combo is recorded long before */
+}
+.shortcuts .sc-msg.ok {
+  color: var(--ok);
+}
+.shortcuts .sc-msg::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  transform: translateY(-1px);
+}
+@keyframes sc-listen {
+  50% {
+    box-shadow:
+      inset 0 0 0 1.5px rgba(var(--accent-rgb), 0.7),
+      0 0 0 6px rgba(var(--accent-rgb), 0.07);
+  }
+}
+@keyframes sc-press {
+  from {
+    opacity: 0;
+    transform: translateY(-5px) scale(0.9);
+  }
+}
+@keyframes sc-settle {
+  from {
+    opacity: 0;
+    transform: translateY(3px) scale(0.86);
+  }
+  60% {
+    transform: translateY(-2px) scale(1.04);
+  }
+}
+@keyframes sc-shake {
+  20% {
+    transform: translateX(-5px);
+  }
+  40% {
+    transform: translateX(4px);
+  }
+  60% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
+}
+@keyframes sc-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shortcuts .sc-key,
+  .shortcuts .sc-key.rec,
+  .shortcuts .sc-key.rec.refused,
+  .shortcuts .sc-key .sc-cap,
+  .shortcuts .sc-msg {
+    animation: none;
+    transition: none;
+  }
+}
