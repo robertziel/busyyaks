@@ -28,7 +28,9 @@ module Busyyaks
     # CSP directives a provider may extend (each starts at the core's own sources)
     CSP_BASE = { connect_src: %w['self'], script_src: %w['self'],
                  # + GitHub's avatar CDN (the /github feed, tl:github); report/card markdown never loads a remote image
-                 img_src: %w['self' data: https://avatars.githubusercontent.com], }.freeze
+                 img_src: %w['self' data: https://avatars.githubusercontent.com],
+                 # the web app manifest (/manifest.webmanifest): default-src is 'none'
+                 manifest_src: %w['self'], }.freeze
 
     # What the core asks of a provider. Override what differs; the defaults are a provider with no page assets.
     class Provider

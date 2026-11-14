@@ -3,6 +3,7 @@
 module Busyyaks
   class Routes < Hanami::Routes
     get "/up", to: "health.show"
+    get "/manifest.webmanifest", to: "manifest.show"   # the SPA installable as a desktop app
 
     # sign-in: the auth provider's page, its own endpoints under /auth/ (config/busyyaks.yml `auth`)
     get "/login", to: "sessions.new"

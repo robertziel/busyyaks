@@ -105,7 +105,8 @@ class CliTest < Minitest::Test
 
   def test_usage_errors_exit_2_with_the_usage
     [[], ["bogus"], %w[server], %w[server bogus], %w[env], %w[panel extra], %w[panel --nope], %w[server status x],
-     %w[server logs bogus], %w[server logs web mcp], %w[doctor x],].each do |argv|
+     %w[server logs bogus], %w[server logs web mcp], %w[doctor x], %w[desktop], %w[desktop bogus],
+     %w[desktop install], %w[desktop install --browser], %w[desktop uninstall x],].each do |argv|
       code, out, err = yaks(*argv)
       assert_equal 2, code, argv.inspect
       assert_empty out
@@ -113,11 +114,14 @@ class CliTest < Minitest::Test
     end
   end
 
+  # the stack's commands: Linux only; help and desktop run on any Unix with a desktop
   def test_only_linux_and_a_new_enough_ruby
-    code, _, err = yaks("help", os: "Darwin")
+    code, _, err = yaks("panel", "--print", os: "Darwin")
     assert_equal 1, code
     assert_includes err, "busyyaks runs on Linux only"
     assert_includes err, "this is Darwin"
+    %w[server env doctor].each { |c| assert_equal 1, yaks(c, os: "FreeBSD").first, c }
+    assert_equal 0, yaks("help", os: "Darwin").first
     code, _, err = yaks("help", ruby: "3.1.9")
     assert_equal 1, code
     assert_includes err, "Ruby 3.1.9 is older than #{CLI::MIN_RUBY}"
@@ -181,6 +185,209 @@ class CliTest < Minitest::Test
     code, _, err = yaks("panel", "--print")
     assert_equal 1, code
     assert_includes err, 'WEB_HOST_PORT="0" is not a port'
+  end
+
+  # `yaks desktop`: an Applications entry opening the dashboard in a window of its own
+  def desktop_env = { "PATH" => "/usr/bin", "HOME" => @home }
+  def entry_file = File.join(@home, ".local/share/applications/busyyaks.desktop")
+
+  def with_icon
+    FileUtils.mkdir_p(File.join(@home, "public/static"))
+    File.write(File.join(@home, "public/static/icon-512.png"), "png")
+  end
+
+  def test_desktop_install_writes_the_entry_and_uninstall_removes_it
+    with_icon
+    @runner = FakeRunner.new(tools: %w[google-chrome])
+    code, out, = yaks("desktop", "install", "--browser", "google-chrome", env: desktop_env)
+    assert_equal 0, code
+    assert_includes out, "installed #{entry_file}"
+    body = File.read(entry_file)
+    assert_includes body, "[Desktop Entry]\nType=Application\nName=busyyaks\n"
+    assert_includes body, "\nExec=/usr/bin/google-chrome --app=http://127.0.0.1:8080\n"
+    assert_includes body, "\nIcon=#{@home}/public/static/icon-512.png\n"
+    assert_includes body, "\nTerminal=false\n"
+    assert_includes body, "\nX-Busyyaks-Checkout=#{@home}\n"
+    assert_empty @runner.calls, "nothing spawned: the browser is only found on PATH"
+    assert_equal 0, yaks("desktop", "install", "--browser", "google-chrome", env: desktop_env).first, "reinstall"
+    code, out, = yaks("desktop", "uninstall", env: desktop_env)
+    assert_equal [0, "removed #{entry_file}\n"], [code, out]
+    refute File.exist?(entry_file)
+    code, _, err = yaks("desktop", "uninstall", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "not installed: no #{entry_file}"
+  end
+
+  def test_desktop_install_uses_the_public_host
+    with_icon
+    @runner = FakeRunner.new(tools: %w[chromium])
+    File.write(File.join(@home, ".env"), format(ENV_FILE, run: @run).sub("PUBLIC_HOST=", "PUBLIC_HOST=dash.example.com"))
+    assert_equal 0, yaks("desktop", "install", "--browser", "chromium", env: desktop_env).first
+    assert_includes File.read(entry_file), "Exec=/usr/bin/chromium --app=https://dash.example.com\n"
+  end
+
+  def test_desktop_install_refusals
+    @runner = FakeRunner.new(tools: %w[google-chrome firefox])
+    code, _, err = yaks("desktop", "install", "--browser", "firefox", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "--browser firefox: not a Chromium-family browser"
+    code, _, err = yaks("desktop", "install", "--browser", "chromium", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "chromium not on PATH"
+    code, _, err = yaks("desktop", "install", "--browser", "google-chrome", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "public/static/icon-512.png missing"
+    with_icon
+    code, _, err = yaks("desktop", "install", "--browser", "google-chrome", env: { "PATH" => "/usr/bin" })
+    assert_equal 1, code
+    assert_includes err, "HOME is not set"
+    refute File.exist?(entry_file)
+  end
+
+  # an entry that is not this checkout's is never overwritten or removed
+  def test_desktop_leaves_a_foreign_entry_alone
+    with_icon
+    @runner = FakeRunner.new(tools: %w[google-chrome])
+    FileUtils.mkdir_p(File.dirname(entry_file))
+    File.write(entry_file, "[Desktop Entry]\nName=other\n")
+    code, _, err = yaks("desktop", "install", "--browser", "google-chrome", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "is not this checkout's entry (no X-Busyyaks-Checkout): left as is"
+    File.write(entry_file, "[Desktop Entry]\nX-Busyyaks-Checkout=/srv/other\n")
+    code, _, err = yaks("desktop", "uninstall", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "X-Busyyaks-Checkout=/srv/other"
+    assert_equal "[Desktop Entry]\nX-Busyyaks-Checkout=/srv/other\n", File.read(entry_file)
+  end
+
+  # macOS: ~/Applications/busyyaks.app, a bundle that execs the browser app's binary with --app=<url>
+  def mac_browser(app = "Google Chrome", script: "#!/bin/sh\nexit 0\n")
+    exe = File.join(@home, "Applications/#{app}.app/Contents/MacOS/#{app}")
+    FileUtils.mkdir_p(File.dirname(exe))
+    File.write(exe, script)
+    File.chmod(0o755, exe)
+    exe
+  end
+
+  def bundle = File.join(@home, "Applications/busyyaks.app")
+
+  def test_desktop_install_on_macos_writes_an_app_bundle
+    with_icon
+    args_file = File.join(@home, "chrome-args")
+    exe = mac_browser(script: "#!/bin/sh\nprintf '%s\\n' \"$@\" > '#{args_file}'\n")
+    code, out, = yaks("desktop", "install", "--browser", "google-chrome", os: "Darwin", env: desktop_env)
+    assert_equal 0, code
+    assert_includes out, "installed #{bundle}"
+    plist = File.read(File.join(bundle, "Contents/Info.plist"))
+    { "CFBundleExecutable" => "busyyaks", "CFBundleIconFile" => "busyyaks.icns", "CFBundlePackageType" => "APPL",
+      "CFBundleName" => "busyyaks", "BusyyaksCheckout" => @home, }.each do |k, v|
+      assert_match %r{<key>#{k}</key>\s*<string>#{Regexp.escape(v)}</string>}, plist, k
+    end
+    icns = File.binread(File.join(bundle, "Contents/Resources/busyyaks.icns"))
+    head = [icns[0, 4], icns[4, 4].unpack1("N"), icns[8, 4], icns[12, 4].unpack1("N")]
+    assert_equal ["icns", icns.bytesize, "ic09", 3 + 8], head
+    assert_equal "png", icns[16..]
+    launcher = File.join(bundle, "Contents/MacOS/busyyaks")
+    assert File.executable?(launcher)
+    assert_equal "#!/bin/sh\nexec '#{exe}' '--app=http://127.0.0.1:8080'\n", File.read(launcher)
+    assert system(launcher), "the bundle's executable runs"
+    assert_equal "--app=http://127.0.0.1:8080\n", File.read(args_file)
+    assert_equal 0, yaks("desktop", "install", "--browser", "google-chrome", os: "Darwin", env: desktop_env).first
+    code, out, = yaks("desktop", "uninstall", os: "Darwin", env: desktop_env)
+    assert_equal [0, "removed #{bundle}\n"], [code, out]
+    refute File.exist?(bundle)
+  end
+
+  def test_desktop_on_macos_refusals
+    with_icon
+    code, _, err = yaks("desktop", "install", "--browser", "google-chrome", os: "Darwin", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "Google Chrome.app not found in /Applications or #{@home}/Applications"
+    code, _, err = yaks("desktop", "install", "--browser", "chromium-browser", os: "Darwin", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "not a Chromium-family browser here (google-chrome, chromium, microsoft-edge"
+    mac_browser("Microsoft Edge")
+    FileUtils.mkdir_p(File.join(bundle, "Contents"))
+    File.write(File.join(bundle, "Contents/Info.plist"), "<key>BusyyaksCheckout</key><string>/srv/a &amp; b</string>")
+    code, _, err = yaks("desktop", "install", "--browser", "microsoft-edge", os: "Darwin", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "is not this checkout's entry (BusyyaksCheckout=/srv/a & b): left as is"
+    assert_equal 1, yaks("desktop", "uninstall", os: "Darwin", env: desktop_env).first
+    assert File.exist?(File.join(bundle, "Contents/Info.plist")), "a foreign bundle is left as is"
+  end
+
+  # a symlink at the entry or the bundle path is never written or deleted through (dangling or not)
+  def test_desktop_refuses_a_symlink_at_its_path
+    with_icon
+    @runner = FakeRunner.new(tools: %w[chromium])
+    target = File.join(@home, "elsewhere.desktop")
+    FileUtils.mkdir_p(File.dirname(entry_file))
+    File.symlink(target, entry_file)
+    code, _, err = yaks("desktop", "install", "--browser", "chromium", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "#{entry_file} is a symlink: left as is"
+    refute File.exist?(target), "nothing written through the link"
+    assert_equal 1, yaks("desktop", "uninstall", env: desktop_env).first
+    assert File.symlink?(entry_file)
+    mac_browser
+    FileUtils.mkdir_p(File.join(@home, "real.app"))
+    File.symlink(File.join(@home, "real.app"), bundle)
+    code, _, err = yaks("desktop", "uninstall", os: "Darwin", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "#{bundle} is a symlink"
+    assert File.directory?(File.join(@home, "real.app"))
+  end
+
+  # a failure while the new bundle is built leaves the installed one whole, and no build dir behind
+  def test_desktop_macos_reinstall_failure_keeps_the_old_bundle
+    with_icon
+    mac_browser
+    assert_equal 0, yaks("desktop", "install", "--browser", "google-chrome", os: "Darwin", env: desktop_env).first
+    before = File.read(File.join(bundle, "Contents/MacOS/busyyaks"))
+    CLI::Desktop.stub(:icns, ->(_) { raise IOError, "disk full" }) do
+      assert_raises(IOError) { yaks("desktop", "install", "--browser", "google-chrome", os: "Darwin", env: desktop_env) }
+    end
+    assert_equal before, File.read(File.join(bundle, "Contents/MacOS/busyyaks"))
+    assert_equal ["Google Chrome.app", "busyyaks.app"], Dir.children(File.join(@home, "Applications")).sort
+  end
+
+  # an unknown command is a usage error everywhere; only the stack's commands are Linux-only
+  def test_unknown_command_is_usage_on_any_os
+    code, _, err = yaks("bogus", os: "Darwin")
+    assert_equal 2, code
+    assert_includes err, "unknown command"
+  end
+
+  def test_desktop_runs_on_the_bsds_as_xdg_and_refuses_other_systems
+    with_icon
+    @runner = FakeRunner.new(tools: %w[chromium])
+    assert_equal 0, yaks("desktop", "install", "--browser", "chromium", os: "FreeBSD", env: desktop_env).first
+    assert File.file?(entry_file)
+    code, _, err = yaks("desktop", "install", "--browser", "chromium", os: "SunOS", env: desktop_env)
+    assert_equal 1, code
+    assert_includes err, "yaks desktop runs on Linux, FreeBSD, OpenBSD, NetBSD, DragonFly, Darwin (macOS); this is SunOS"
+  end
+
+  def test_macos_values_are_escaped
+    d = CLI::Desktop
+    assert_equal %q('/Apps/it'\''s') , d.sh("/Apps/it's")
+    assert_includes d.info_plist(%q(/h/<a> & "b")), "<string>/h/&lt;a&gt; &amp; &quot;b&quot;</string>"
+    assert_equal %q(/h/<a> & "b'), d.xml_unescape("/h/&lt;a&gt; &amp; &quot;b&apos;")
+    assert_raises(CLI::Refused) { d.sh("a\nb") }
+  end
+
+  # a checkout path with a space, a quote, a % and a backslash: quoted and escaped per the Desktop Entry spec
+  def test_desktop_entry_escapes_values
+    d = CLI::Desktop
+    assert_equal "/usr/bin/chromium", d.exec_arg("/usr/bin/chromium")
+    assert_equal %q("/opt/my \"b\" \$x"), d.exec_arg(%q(/opt/my "b" $x))
+    body = d.entry("/opt/my chrome", "http://127.0.0.1:8080", "/home/a b/i%.png", "/home/a\\b")
+    assert_includes body, %q(Exec="/opt/my chrome" --app=http://127.0.0.1:8080) + "\n"
+    assert_includes body, "Icon=/home/a b/i%.png\n"
+    assert_includes body, "X-Busyyaks-Checkout=/home/a\\\\b\n"
+    assert_equal "/home/a\\b", d.unescape("/home/a\\\\b")
+    assert_includes d.entry("/x/100%", "http://h", "/i", "/h"), "Exec=/x/100%% --app=http://h\n"
+    assert_raises(CLI::Refused) { d.string("a\nb") }
   end
 
   def test_server_logs_execs_compose_logs
@@ -390,7 +597,7 @@ class CliTest < Minitest::Test
       assert_equal "Darwin", CLI::Host.os
       out = StringIO.new
       err = StringIO.new
-      code = CLI.run(["help"], home: @home, env: { "PATH" => "/usr/bin" }, out: out, err: err, runner: @runner)
+      code = CLI.run(%w[server status], home: @home, env: { "PATH" => "/usr/bin" }, out: out, err: err, runner: @runner)
       assert_equal [1, ""], [code, out.string]
       assert_includes err.string, "this is Darwin"
     end

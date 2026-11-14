@@ -1,0 +1,12 @@
+#!/bin/sh
+# Renders the installable app's PNG icons (public/static/icon-<size>.png, named by /manifest.webmanifest) from
+# public/static/icon.svg, the one source of the icon — in a throwaway container with librsvg's rsvg-convert. Re-run
+# after any change to icon.svg and commit the PNGs: test/unit/app_manifest_test.rb fails while a PNG's size is wrong.
+set -eu
+cd "$(dirname "$0")/../.."
+docker run --rm -v "$PWD/public/static":/icons -w /icons alpine:3.22.2 sh -euc '
+  apk add --no-cache rsvg-convert >/dev/null
+  for s in 192 512; do rsvg-convert -w "$s" -h "$s" icon.svg -o "icon-$s.png"; done
+  chown '"$(id -u):$(id -g)"' icon-192.png icon-512.png
+'
+ls -l public/static/icon-192.png public/static/icon-512.png

@@ -49,6 +49,19 @@ class WebTest < Minitest::Test
     assert_equal 200, last_response.status
   end
 
+  # the desktop app: the manifest is public (a browser fetches it without the cookie), the shell links it
+  # and the CSP lets it load (default-src is 'none')
+  def test_web_app_manifest_is_public_linked_and_allowed
+    get "/manifest.webmanifest"
+    assert_equal 200, last_response.status
+    assert_equal "application/manifest+json", last_response.content_type.split(";").first
+    assert_equal "standalone", JSON.parse(last_response.body).fetch("display")
+    sign_in
+    get "/"
+    assert_includes last_response.body, '<link rel="manifest" href="/manifest.webmanifest">'
+    assert_includes last_response.headers["content-security-policy"], "manifest-src 'self'"
+  end
+
   def test_pages_redirect_and_api_answers_401_when_signed_out
     %w[/ /projects /projects/x/y /reports /reports/3 /commit/abcdef1 /nope].each do |path|
       get path
