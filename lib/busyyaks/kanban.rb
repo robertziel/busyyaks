@@ -114,8 +114,22 @@ module Busyyaks
     def tools(st = default, sessions: nil)
       AgentsKanban::Tools.new(store: st, attachments: attachments(st), projects: method(:project), backlog: method(:backlog),
                               sessions: sessions || -> { LauncherClient.session_names }, grace: grace,
-                              card_url: ->(slug, id) { DashboardUrl.card(slug, id) }) # each card's `url` (Links rule)
+                              card_url: ->(slug, id) { card_url(slug, id) }) # each card's `url` (Links rule)
     end
+
+    # config/kanban.yml session_boards' slug prefix (nil = session boards off).
+    # The key is required (KeyError when missing); null = off.
+    def session_prefix = file_config.fetch("session_boards")&.fetch("slug_prefix")
+
+    # The SPA path of a card: its project's board, or — a session board's card — the /session-boards page.
+    def card_path(slug, id)
+      pre = session_prefix
+      return DashboardUrl.session_card_path(slug.to_s.delete_prefix(pre), id) if pre && slug.to_s.start_with?(pre)
+
+      DashboardUrl.card_path(slug, id)
+    end
+
+    def card_url(slug, id) = "#{DashboardUrl.origin}#{card_path(slug, id)}"
 
     # The engine's operator API with the session ports (launches / launch / sessions): live names from the launcher's
     # `sessions` op, starts through its `name` + `launch` ops (LauncherClient::LaunchPort). Extras are the caller's.

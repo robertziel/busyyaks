@@ -5,6 +5,7 @@ import { useTitle } from "./lib/title";
 import { needsSetup } from "./lib/setupGate";
 import { Commit } from "./routes/Commit";
 import { GitHub } from "./routes/GitHub";
+import { SessionBoards } from "./routes/SessionBoards";
 import { Hello } from "./routes/Hello";
 import { Components } from "./routes/Components";
 import { Project } from "./routes/Project";
@@ -49,6 +50,7 @@ export function App() {
           <Route path="reports/:id" element={<Report />} />
           <Route path="commit/:sha" element={<Commit />} />
           <Route path="github" element={<GitHub />} />
+          <Route path="session-boards" element={<SessionBoards />} />
           <Route path="settings" element={<Settings />} />
           <Route path="settings/daily-report" element={<DailyReportSettings />} />
           <Route path="*" element={<NotFound />} />

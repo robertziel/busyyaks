@@ -43,6 +43,7 @@ module Busyyaks
     get "/api/boards", to: "api.board.index"
     get "/api/waiting/rev", to: "api.waiting.rev"                # the "waiting for you" widget: poll, refetch on change
     get "/api/waiting", to: "api.waiting.index"
+    get "/api/session-boards", to: "api.session_boards.index"   # every agent session's own board, read-only
     get "/api/cards/:id/rev", to: "api.cards.rev"
     get "/api/cards/:id", to: "api.cards.show"
     post "/api/cards/:id", to: "api.cards.update"

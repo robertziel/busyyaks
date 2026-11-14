@@ -339,4 +339,18 @@ err("kanban_move", id: c["id"], column: "qa", author: "lead"))
     # the Links rule reaches every agent through busyyaks's server (text pinned by the engine's tools_test)
     assert init.end_with?(AgentsKanban::Tools::LINKS)
   end
+
+  # a session's own board over busyyaks's MCP server — opened by kanban_session_board, used only by that
+  # session, every card's url on the read-only /session-boards page
+  def test_a_session_board_is_its_sessions_own
+    assert(rpc("tools/list")["result"]["tools"].any? { |t| t["name"] == "kanban_session_board" })
+    b = ok("kanban_session_board", tmux_session: "lead_1", author: "lead_1")
+    assert_equal ["session:lead_1", "created"], [b["project"], b["state"]]
+    c = ok("kanban_create", project: "session:lead_1", title: "Plan", author: "lead_1", tmux_session: "lead_1")
+    assert_match %r{/session-boards\?session=lead_1&card=#{c["id"]}\z}, c["url"]
+    assert_match(/session lead_1's own board/,
+                 err("kanban_card", id: c["id"], author: "tl_g_r", tmux_session: "tl_g_r"))
+    assert_match(/session lead_1's own board/, err("kanban_card", id: c["id"], author: "lead_1")) # a bare name: nobody
+    assert_equal "Plan", ok("kanban_card", id: c["id"], author: "lead_1", tmux_session: "lead_1")["card"]["title"]
+  end
 end

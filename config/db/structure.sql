@@ -362,7 +362,8 @@ CREATE TABLE `boards`(
   `project_slug` varchar(255) NOT NULL UNIQUE,
   `updated_by` varchar(255) NOT NULL,
   `updated_at` integer NOT NULL,
-  `created_at` integer NOT NULL
+  `created_at` integer NOT NULL,
+  `archived_at` integer
 );
 CREATE TABLE `board_columns`(
   `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -481,4 +482,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261202000000_agent_settings.rb'),
 ('20261203000000_cards_assigned_prs.rb'),
 ('20261204000000_daily_report_settings.rb'),
-('20261205000000_setup_completions.rb');
+('20261205000000_setup_completions.rb'),
+('20261206000000_agents_kanban_session_boards.rb');

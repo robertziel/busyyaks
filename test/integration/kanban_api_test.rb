@@ -423,4 +423,16 @@ ans.values_at("body", "author")
     assert_match(/only a card in Local: Human review or Local: Deploy check or Public: Human review can be approved/,
 j["error"])
   end
+
+  # the operator reads every session's own board, read-only
+  def test_session_boards_are_listed
+    assert_equal [], api(:get, "/api/session-boards")["session_boards"]
+    kb.session_board!("lead_1", by: "lead_1")
+    kb.create(slug: "session:lead_1", title: "Plan", by: "lead_1", owner_session: "lead_1", agent: true)
+    j = api(:get, "/api/session-boards")
+    assert_equal 200, last_response.status
+    assert_equal 24, j["idle_hours"]
+    assert_equal [["lead_1", ["Plan"]]], j["session_boards"].map { |b| [b["session"], b["cards"].map { |c| c["title"] }] }
+    assert_equal 1, api(:get, "/api/session-boards?archived=1")["session_boards"].size
+  end
 end
