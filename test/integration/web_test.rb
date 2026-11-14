@@ -177,6 +177,23 @@ class WebTest < Minitest::Test
     assert_equal 404, last_response.status
   end
 
+  # outside a card, "card #N" in a note or a report is a chip naming its card (the hover preview reads
+  # data-card-id); a bare #N there is no card — no board to read it on
+  def test_card_mentions_in_notes_and_reports
+    store.upsert_project(slug: "group/same", path: "/p/group/same", remote: nil, branch: "main", own: true, last_commit_at: 1,
+                         commits_window: 0, mine_window: 0, dirty: 0, unpushed: nil, scanned_at: 1)
+    id = Busyyaks::Kanban.default.create(slug: "group/same", title: "the card", by: "op", column: "todo")
+    sign_in
+    j = api(:post, "/api/notes", { slug: "group/same", body: "see card ##{id}, not #99999" }, csrf: shell_csrf)
+    assert_equal 201, last_response.status
+    assert_includes j["note"]["html"],
+%(href="/projects/group/same?tab=board&amp;card=#{id}" title="card ##{id}" data-card-id="#{id}")
+    assert_includes j["note"]["html"], "not #99999"
+    r = store.add_report(date: "2026-11-01", title: "R", body_md: "## Act on\n\n- card ##{id} then ##{id}", author: "c")
+    html = api(:get, "/api/reports/#{r}")["report"]["html"]
+    assert_equal 1, html.scan(%(data-card-id="#{id}")).size, "card #N is a chip, the bare ##{id} stays text"
+  end
+
   def test_commit_redirects_to_github_and_report_has_neighbours_toc_and_sha_links
     store.upsert_project(slug: "r", path: "/p/r", remote: "git@github.com:o/r.git", branch: "main", own: true,
                          last_commit_at: Time.now.to_i, commits_window: 1, mine_window: 1, dirty: 0, unpushed: nil,

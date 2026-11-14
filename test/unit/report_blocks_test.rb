@@ -75,7 +75,7 @@ class ReportBlocksTest < Minitest::Test
 
     needs = html("```tl:needs\n- { title: Ship it, repo: blog, card: 7, ask: \"**yes**\" }\n" \
                  "- { title: Ghost, repo: ghost, card: 8 }\n```\n")
-    assert_includes needs, %(<a class="tl-need-title" href="/projects/blog?tab=board&amp;card=7">Ship it</a>)
+    assert_includes needs, %(<a class="tl-need-title" href="/projects/blog?tab=board&amp;card=7" data-card-id="7">Ship it</a>)
     assert_includes needs, %(<span class="tl-need-title">Ghost</span>)
     assert_includes html("```tl:needs\n- { title: x, repo: blog, card: seven }\n```\n"), "card must be a whole number"
 

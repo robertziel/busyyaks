@@ -185,7 +185,9 @@ class KanbanTrelloApiTest < Minitest::Test
     kb.comment(@id, body: "see ##{first}, card ##{other}; then ##{far}, PR #5 and #999999", author: "agent-a")
     html = api(:get, "/api/cards/#{@id}")["activity"].last["body_html"]
     assert_includes html, %(<a class="gh-ref gh-comment" href="#a-#{first}" title="activity on this card ##{first}">)
-    assert_includes html, %(<a class="gh-ref gh-card" href="/projects/g/r?tab=board&amp;card=#{other}" title="card ##{other}">)
+    card_chip = %(<a class="gh-ref gh-card" href="/projects/g/r?tab=board&amp;card=#{other}" title="card ##{other}")
+    assert_includes html, %(#{card_chip} data-card-id="#{other}">),
+                    "a card chip names its card for the hover preview"
     assert_includes html, "; then ##{far}, PR #5 and #999999",
                     "another board's card (bare), a PR with no repo, no such id → text"
     refute_includes html, "/pull/"

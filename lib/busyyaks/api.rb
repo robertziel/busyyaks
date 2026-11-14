@@ -88,7 +88,7 @@ module Busyyaks
     end
 
     def note(n)
-      { id: n[:id], author: n[:author], created_at: n[:created_at], body: n[:body], html: Markdown.render(n[:body]) }
+      { id: n[:id], author: n[:author], created_at: n[:created_at], body: n[:body], html: Markdown.note(n[:body]) }
     end
 
     # The SPA URL that opens a card on its project's board (the engine's "card #N" chips, search hits, reports).

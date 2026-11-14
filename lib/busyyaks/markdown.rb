@@ -42,9 +42,8 @@ module Busyyaks
 
           text = CGI.unescapeHTML(html.gsub(/<[^>]+>/, " "))
           links = report_links(text, p, store, branches)
-          # outside a card only "PR #N" resolves (no activity, no board): a bare #N stays text
-          refs = CardLinks::Refs.new(repo: Github.repo_url(p[:remote]), activity_ids: Set.new, card_slugs: ->(_) { {} },
-                                     card_path: ->(slug, id) { API.card_path(slug, id) })
+          # outside a card "PR #N" and "card #N" resolve (no activity, no board): a bare #N stays text
+          refs = card_refs(repo: Github.repo_url(p[:remote]))
           CardLinks.linkify(html, links.reject { |l| l[:kind] == "repo" }, refs: refs)
         end, }
     end
@@ -64,6 +63,7 @@ module Busyyaks
     def report(md, store, ctx = report_ctx(store))
       src, blocks = ReportBlocks.extract(md, ctx)
       html = ReportBlocks.inline(ReportBlocks.inject(render(src), blocks), ctx)
+      html = CardLinks.linkify(html, [], refs: card_refs) # "card #N" anywhere in the report (a repo block already did its own)
       # a status line right under a section heading is that section's meta ("0 cards in Human Check"): it sits on the
       # heading's row, so it never reads as one of the section's items
       html = html.gsub(SECTION_STATUS) { %(<div class="tl-sechead">#{Regexp.last_match(1)}#{Regexp.last_match(2)}</div>) }
@@ -88,5 +88,15 @@ module Busyyaks
     def card(md) = Kanban.markdown.card(md)
     def inline(md) = Kanban.markdown.inline(md)
     def render(md) = Kanban.markdown.render(md)
+
+    # #N references outside a card (a report, a note): no activity, no board — "card #N" names a card of any board (a
+    # chip with data-card-id: the hover preview), "PR #N" a PR of `repo` (nil = none), a bare #N stays text.
+    def card_refs(repo: nil)
+      CardLinks::Refs.new(repo: repo, activity_ids: Set.new, slug: nil, card_slugs: ->(ids) { Kanban.default.card_slugs(ids) },
+                          card_path: ->(slug, id) { API.card_path(slug, id) })
+    end
+
+    # a note: the shared renderer, then its "card #N" references as chips
+    def note(md) = CardLinks.linkify(render(md), [], refs: card_refs)
   end
 end

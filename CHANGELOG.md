@@ -19,6 +19,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - Skins are files: `skins/<key>.yml` (Light, Dark and any added, e.g. Matrix), picked in the settings cog.
 - Desktop app: `yaks desktop install --browser NAME` adds busyyaks to the app menu (Linux, the BSDs, macOS), or install it from Chrome or Edge; its own window, the icon's badge counts the cards waiting for you.
 - Board: cards glide to their new place (agent moves, drops, filter and order changes) instead of jumping.
+- Hover a card mention (comments, the question and its option buttons, the agents rail, the waiting list, reports, notes) to see that card's details.
 
 ### Changed
 

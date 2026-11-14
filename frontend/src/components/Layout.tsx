@@ -2,11 +2,17 @@
 // the agents rail (a drawer below 1180px), the flash.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, NavigationType, NavLink, Outlet, useLocation, useNavigationType } from "react-router-dom";
+import { CardPeek, type CardData } from "../vendor/agents_kanban";
+import { apiGet } from "../api";
 import { Agents, type AgentTotals } from "./Agents";
 import { FlashView, useFlash } from "./Flash";
 import { Search } from "./Search";
 import { Settings } from "./Settings";
 import { WaitingWidget } from "./Waiting";
+
+// a card's details on hover over any card mention on any page (data-card-id: chips, option buttons, the agents rail, the
+// waiting list) — the engine's CardPeek, reading GET /api/cards/:id
+const loadCard = (id: number) => apiGet<CardData>(`/api/cards/${id}`);
 
 export function Layout() {
   const location = useLocation();
@@ -109,6 +115,7 @@ export function Layout() {
         </aside>
       </div>
       <WaitingWidget />
+      <CardPeek load={loadCard} />
     </>
   );
 }

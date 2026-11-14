@@ -7,8 +7,18 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 TAG="busyyaks:lint-$(cat Gemfile Gemfile.lock scripts/lint/Dockerfile | sha256sum | cut -c1-12)"
 
+# CI's Lint and Audit stages run this at the same time: on a Docker host without the image both would build it and the
+# second export fails ("image ... already exists"). One build at a time per user: flock on a fixed /tmp path named by
+# the uid (a rootless Docker daemon, as on CI, keeps one image cache per user; a lock file another user created could
+# not be opened), the image looked up again once the lock is held.
+LOCK="/tmp/busyyaks-lint-image.$(id -u).lock"
 if ! docker image inspect "$TAG" >/dev/null 2>&1; then
-  echo "lint: building $TAG (Gemfile.lock changed or first run)" >&2
-  tar -c Gemfile Gemfile.lock -C scripts/lint Dockerfile | docker build -q -t "$TAG" - >&2
+  exec 9>"$LOCK"
+  flock 9
+  if ! docker image inspect "$TAG" >/dev/null 2>&1; then
+    echo "lint: building $TAG (Gemfile.lock changed or first run)" >&2
+    tar -c Gemfile Gemfile.lock -C scripts/lint Dockerfile | docker build -q -t "$TAG" - >&2
+  fi
+  exec 9>&-
 fi
 echo "$TAG"
