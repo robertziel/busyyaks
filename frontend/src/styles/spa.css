@@ -218,6 +218,39 @@ div.launch {
 h1 .picon {
   margin-right: 2px;
 }
+/* the project page's title (Project.tsx): pinned under the header while the page scrolls, one line at every width (a long
+   name ends in an ellipsis), on the header's glass fading out at its bottom edge; z-index below the tab's menus (5) */
+h1.proj-title {
+  position: sticky;
+  top: var(--top-h);
+  z-index: 4;
+  isolation: isolate;
+  margin: 0 -16px 8px;
+  padding: 6px 16px;
+  flex-wrap: nowrap;
+}
+h1.proj-title::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 -12px;
+  z-index: -1;
+  background: var(--mat-bar);
+  -webkit-backdrop-filter: var(--mat-blur);
+  backdrop-filter: var(--mat-blur);
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  pointer-events: none;
+}
+h1.proj-title > * {
+  flex: none;
+}
+h1.proj-title > .proj-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* click-to-copy chips + team terminal links (components/Copy.tsx) */
 .copychip {

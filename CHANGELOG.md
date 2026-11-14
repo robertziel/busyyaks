@@ -15,6 +15,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - Approve buttons name the step they approve; the `local_v4` board template opens the public PR in its own column before review.
 - `yaks` command line (`bin/yaks`, host Ruby ≥ 3.2): `server status`, `server logs`, `panel`, `env`, `doctor`.
 - Board: left/right arrow click areas scroll the lists.
+- Project page: the title stays pinned under the header while the page scrolls, on one line.
 - Skins are files: `skins/<key>.yml` (Light, Dark and any added, e.g. Matrix), picked in the settings cog.
 - Desktop app: `yaks desktop install --browser NAME` adds busyyaks to the app menu (Linux, the BSDs, macOS), or install it from Chrome or Edge; its own window, the icon's badge counts the cards waiting for you.
 - Board: cards glide to their new place (agent moves, drops, filter and order changes) instead of jumping.
