@@ -218,6 +218,42 @@ div.launch {
 h1 .picon {
   margin-right: 2px;
 }
+/* the project page's title (Project.tsx): stays under the header while the board / overview scrolls.
+   A frosted band the width of the page's gutters (the header's --mat-bar + --mat-blur), fading out towards its bottom edge:
+   its ::before carries the glass under a mask, so the title's text is never masked; z-index under the board's menus (5).
+   One line at every width: a long name is cut with an ellipsis (full name in the tab title), so the band never grows on a
+   phone */
+h1.proj-title {
+  position: sticky;
+  top: var(--top-h);
+  z-index: 4;
+  isolation: isolate;
+  margin: 0 -16px 8px;
+  padding: 6px 16px;
+  flex-wrap: nowrap;
+}
+h1.proj-title::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 -12px;
+  z-index: -1;
+  background: var(--mat-bar);
+  -webkit-backdrop-filter: var(--mat-blur);
+  backdrop-filter: var(--mat-blur);
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  pointer-events: none;
+}
+h1.proj-title > * {
+  flex: none;
+}
+h1.proj-title > .proj-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* click-to-copy chips + team terminal links (components/Copy.tsx) */
 .copychip {
