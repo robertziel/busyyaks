@@ -6,6 +6,10 @@ All notable changes to busyyaks are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Board: cards glide to their new place (agent moves, drops, filter and order changes) instead of jumping.
+
 ### Changed (breaking for hosts)
 
 - **Agent settings in the database**: the launchers and agent types left `config/kanban.yml` (a file that still has
