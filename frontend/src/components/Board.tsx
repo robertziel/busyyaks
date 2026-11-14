@@ -1,12 +1,14 @@
 // The project's Board tab: the vendored agents_kanban Board (frontend/src/vendor/agents_kanban) bound to this app —
 // its KanbanApi port over api.ts (session cookie + X-CSRF-Token, docs/API-kanban.md routes), the open card / panel /
 // archived flag in the URL (?card=&panel=&archived=), the router for same-origin links in rendered markdown, and the
-// /api/boards cache invalidated after every write. No board logic lives here (test/unit/no_kanban_code_test.rb).
-import { useCallback, useMemo, useState } from "react";
+// /api/boards cache invalidated after every write; the comment box's mic over /api/dictation when the config turns it
+// on (<meta name="dictation">). No board logic lives here (test/unit/no_kanban_code_test.rb).
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { apiDelete, apiGet, apiPost, apiUpload, invalidate, userEmail } from "../api";
+import { apiDelete, apiGet, apiPost, apiPostForm, apiUpload, dictationOn, invalidate, userEmail } from "../api";
 import { projectPath } from "../lib/format";
 import { pickYak } from "./YakLoader";
+import { CHANGED as SHORTCUT_CHANGED, readShortcut } from "../lib/dictationShortcut";
 import {
   Board as KanbanBoard,
   PANELS,
@@ -14,9 +16,12 @@ import {
   type BoardData,
   type BoardShapeData,
   type CardData,
+  type DictationApi,
   type KanbanApi,
+  type KeyCombo,
   type MoveResult,
   type Panel,
+  type Transcript,
 } from "../vendor/agents_kanban";
 
 const encSlug = (slug: string) => slug.split("/").map(encodeURIComponent).join("/");
@@ -67,12 +72,32 @@ export function busyyaksKanbanApi(): KanbanApi {
   };
 }
 
+// one WAV window → the speech server's words, through the web service (the server's URL and token never reach here)
+export function busyyaksDictationApi(shortcut: KeyCombo | null): DictationApi {
+  return {
+    shortcut,
+    transcribe: (wav, prompt) => {
+      const form = new FormData();
+      form.append("audio", wav, "dictation.wav");
+      form.append("prompt", prompt);
+      return apiPostForm<Transcript>("/api/dictation", form);
+    },
+  };
+}
+
 export function ProjectBoard({ slug }: { slug: string }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   // the engine wants (path) => void; BrowserRouter's navigate returns nothing to await. Stable, so the engine's host memo holds.
   const go = useCallback((path: string) => void navigate(path), [navigate]);
   const api = useMemo(busyyaksKanbanApi, []);
+  const [shortcut, setShortcut] = useState(() => readShortcut().combo);
+  useEffect(() => {
+    const on = () => setShortcut(readShortcut().combo);
+    document.addEventListener(SHORTCUT_CHANGED, on);
+    return () => document.removeEventListener(SHORTCUT_CHANGED, on);
+  }, []);
+  const dictation = useMemo(() => (dictationOn() ? busyyaksDictationApi(shortcut) : undefined), [shortcut]);
   const [yak] = useState(pickYak); // the vendored board's loading states (.spin) show this yak (spa.css)
   const panelParam = params.get("panel") as Panel;
   const view = {
@@ -100,6 +125,7 @@ export function ProjectBoard({ slug }: { slug: string }) {
         projectHref={projectPath(slug)}
         cardHref={(s, id) => `${projectPath(s)}?tab=board&card=${id}`}
         onChanged={() => invalidate("/api/boards")}
+        dictation={dictation}
       />
     </div>
   );

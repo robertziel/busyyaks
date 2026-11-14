@@ -34,6 +34,7 @@ module Busyyaks
             h: Helpers, csrf: res.session[:_csrf_token].to_s, email: res.session[:email], scripts: Auth.provider.scripts(:app),
             sign_out: Auth.provider.sign_out? ? "/logout" : "", theme_css: theme_css, **Helpers.skins_head,
             setup: SetupAPI.completed?(Kanban.db) ? "done" : "pending",
+            dictation: Config.load.dictation ? "on" : "off", # the card dialog's mic (config/busyyaks.yml dictation)
             js: "/app/#{entry.fetch('file')}", css: Array(entry["css"]).map { |f| "/app/#{f}" }
           )
         end

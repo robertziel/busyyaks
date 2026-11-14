@@ -20,12 +20,14 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - Desktop app: `yaks desktop install --browser NAME` adds busyyaks to the app menu (Linux, the BSDs, macOS), or install it from Chrome or Edge; its own window, the icon's badge counts the cards waiting for you.
 - Board: cards glide to their new place (agent moves, drops, filter and order changes) instead of jumping.
 - Hover a card mention (comments, the question and its option buttons, the agents rail, the waiting list, reports, notes) to see that card's details.
+- Dictation: hold ⌥R / Alt+R in an open card (or click the mic) to talk a comment into the box, transcribed by the deployment's speech server (`dictation` in config/busyyaks.yml, `DICTATION_URL`); the key is picked on **Settings → Shortcuts**.
 
 ### Changed
 
 - **Breaking:** launchers and agent types moved from `config/kanban.yml` to the database; migrate per `docs/DEPLOY.md` § Agent settings.
 - **Breaking:** required `config/busyyaks.yml` `launch.commands`: the allowlist of whole invocations a launcher may be.
 - **Breaking:** daily report settings moved from `config/busyyaks.yml` to the database; migrate per `docs/DAILY-REPORT.md` § Moving off config/busyyaks.yml.
+- **Breaking:** required `config/busyyaks.yml` `dictation` (`none`, or the speech server's model and limits) and `.env` `DICTATION_URL` / `DICTATION_TOKEN` (empty when `none`); see `docs/DEPLOY.md` § Dictation.
 - Board: cards that wait for the operator are highlighted with a needs-you badge.
 - Board: a dragged card near the edge scrolls the lists sideways, with edge shades.
 - The operator's drag is never stuck behind the green-CI gate.

@@ -120,7 +120,10 @@ services:
     volumes: *launcher_volumes   # x-app's + the launcher socket dir
     environment: { <<: *env, HANAMI_PORT: "${WEB_CONTAINER_PORT:?}", LOG_LEVEL: info,
                    HANAMI_MAX_THREADS: "${HANAMI_MAX_THREADS:?}", HANAMI_MIN_THREADS: "${HANAMI_MIN_THREADS:?}",
-                   HANAMI_WEB_CONCURRENCY: "${HANAMI_WEB_CONCURRENCY:?}", LAUNCHER_SOCKET: /launcher/launcher.sock }
+                   HANAMI_WEB_CONCURRENCY: "${HANAMI_WEB_CONCURRENCY:?}", LAUNCHER_SOCKET: /launcher/launcher.sock,
+                   # the speech server for the card dialog's mic (config/busyyaks.yml dictation): web only,
+                   # declared in .env, empty with `dictation: none` (config/puma.rb checks they match)
+                   DICTATION_URL: "${DICTATION_URL?}", DICTATION_TOKEN: "${DICTATION_TOKEN?}" }
     ports: ["127.0.0.1:${WEB_HOST_PORT:?}:${WEB_CONTAINER_PORT:?}"]
     depends_on:
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)

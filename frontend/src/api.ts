@@ -20,6 +20,12 @@ export const csrfToken = (): string => meta("csrf-token");
 export const userEmail = (): string => meta("user-email");
 // where "Sign out" posts, or null when the auth provider has no session to end (provider none)
 export const signOutPath = (): string | null => signOutTarget(meta("sign-out"));
+// the card dialog's mic: config/busyyaks.yml `dictation` is on (the shell's <meta name="dictation"> on | off)
+export function dictationOn(): boolean {
+  const v = meta("dictation");
+  if (v !== "on" && v !== "off") throw new Error(`<meta name="dictation"> is ${JSON.stringify(v)}, not on | off`);
+  return v === "on";
+}
 
 async function parse<T>(r: Response): Promise<T> {
   if (r.status === 401) {
@@ -52,6 +58,18 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
       credentials: "same-origin",
       headers: { Accept: "application/json", "Content-Type": "application/json", "X-CSRF-Token": csrfToken() },
       body: JSON.stringify(body),
+    }),
+  );
+}
+
+// a multipart form (the mic's WAV window) with the CSRF token, no progress; same errors as the JSON calls
+export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
+  return parse<T>(
+    await fetch(path, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Accept: "application/json", "X-CSRF-Token": csrfToken() },
+      body: form,
     }),
   );
 }
