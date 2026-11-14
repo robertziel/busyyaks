@@ -1,108 +1,86 @@
 # Changelog
 
-All notable changes to busyyaks are recorded here. The format follows
-[Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and the project uses
-[Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
+One line per change a user would notice. Format: [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/);
+versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed (breaking for hosts)
+### Added
 
-- **Agent settings in the database**: the launchers and agent types left `config/kanban.yml` (a file that still has
-  `launchers` / `agent_types` stops the boot) for table `agent_settings` (one row per saved revision, newest =
-  current), edited on **Settings → Agents & launchers** (the header's new cog menu, which also holds the skin switch
-  and Sign out) or with `bin/agent-settings show | import < file`. Every launcher has a `kind`: `claude_code` (as
-  before) or `hermes` (Hermes Agent, no remote control). **Required:** `config/busyyaks.yml` `launch.commands`, the
-  host allowlist of whole invocations `{kind, command, args, via_shell}` a launcher may be — refused on save and by
-  the launcher. **Migrating:** one maintenance window, `docs/DEPLOY.md` § Agent settings.
+- First-run hello screen: boot checks, projects dir, launchers and a default.
+- Settings menu in the header; launchers and agent types edited in the database; launcher kind `hermes`.
+- Daily report settings edited on **Settings → Daily report**.
+- PRs are assigned to cards explicitly (`kanban_pr_assign`), never found by branch name or text.
+- Alert when a board-started session fails to start.
+- Approve buttons name the step they approve; the `local_v4` board template opens the public PR in its own column before review.
+- `yaks` command line (`bin/yaks`, host Ruby ≥ 3.2): `server status`, `server logs`, `panel`, `env`, `doctor`.
+- Board: left/right arrow click areas scroll the lists.
+- Skins are files: `skins/<key>.yml` (Light, Dark and any added, e.g. Matrix), picked in the settings cog.
 
 ### Changed
 
-- **Skins are files**: every skin is `skins/<key>.yml` — `light.yml` (the default) and `dark.yml` hold all the
-  colour tokens (moved out of `public/static/app.css`), and any other file adds a skin over one of them (shipped:
-  `matrix.yml`). The settings menu's Skin switch lists Light · Dark · Auto · the others. A new skin is a new file and a
-  restart; a bad file stops the boot and names it. Format: `skins/README.md`.
-- **Public: Create PR** on the private local-repo boards (the engine's `local_v4` board): the operator's "Open public
-  PR" moves a card from Local: Deploy check into this new column, where the agent opens the public PR, then "Public PR
-  opened" moves it to Public: Agent review — no review of a PR that does not exist yet. A board is data: an existing
-  board takes the new shape in the Workflow editor (or `POST /api/projects/*slug/workflow`); no migration. The approve
-  button names its step ("✓ Open public PR → Public: Create PR"). The workflow graph folds for the box height too, so
-  the 15-column board shows whole at 1920 × 1080.
+- **Breaking:** launchers and agent types moved from `config/kanban.yml` to the database; migrate per `docs/DEPLOY.md` § Agent settings.
+- **Breaking:** required `config/busyyaks.yml` `launch.commands`: the allowlist of whole invocations a launcher may be.
+- **Breaking:** daily report settings moved from `config/busyyaks.yml` to the database; migrate per `docs/DAILY-REPORT.md` § Moving off config/busyyaks.yml.
+- Board: cards that wait for the operator are highlighted with a needs-you badge.
+- Board: a dragged card near the edge scrolls the lists sideways, with edge shades.
+- The operator's drag is never stuck behind the green-CI gate.
+- Projects page: compact rows, sessions shown once, card layout on phones and tablets.
+- Agent comments: the review header renders as a badge strip; GitHub PR / issue / commit URLs as chips.
+- Links to other servers open in a new tab.
+- Blocked externally no longer counts as waiting for the operator.
+- PR flags read the card's assigned PR from its metadata, whatever the branch name.
+- Worker prompt: QA and Reviewer subagents run on haiku.
+- README intro: your local agent agency; install and usage text updated.
+- One CI build per push.
+
+### Fixed
+
+- Launcher: a launch whose claude never comes up fails (422), the session is killed and its cards released.
+- Launcher start check never refuses before `launch.start_seconds`.
+- Scanner: one project per repo — linked worktrees are never projects, and are read through the projects mount.
+- First approval step read off its own gate's handoff and approve entries.
+- CI: launcher test waits until the socket accepts a connection; the readme-images build keeps its awk filter.
+- Public files: the readme-images build checks only its own files.
 
 ## [1.0.0-beta.1] - 2026-11-10
 
-Everything below ships as **1.0.0-beta.1**, the first public release: one self-hosted panel over every git repo on a
-Linux box and the coding agents working them. A beta (a SemVer pre-release): the configuration keys, the JSON API and
-the MCP tools may still change before 1.0.0, each change recorded here.
+First public release (SemVer pre-release: config keys, JSON API and MCP tools may still change before 1.0.0).
 
 ### Added
 
-- **`yaks`**, a command line for the checkout (`bin/yaks`, host Ruby ≥ 3.2, Linux): `server status`, `server logs`,
-  `panel`, `env`, `doctor`. A new CI stage, `scripts/ci/test.sh host`, runs the host-side programs' tests on Ruby 3.2.
-
-- **Today** page: commits, your commits, active repos and your merged pull requests per day over `window_days`, a
-  53-week contribution heatmap, tracked / uncommitted / unpushed counts and the last scan. Unknown values are shown as
-  `—`, never 0.
-- **Scanner**: reads git log, status and upstream of every repo under the configured roots (mounted read-only) on an
-  interval; failures are recorded and shown next to the last good scan.
-- **Projects** and **project** pages: branch, last commit, window commits, dirty and unpushed state, notes, cards per
-  column; create or clone a repo from the browser. A [Backlog.md](https://github.com/MrLesk/Backlog.md) `backlog/`
-  folder is shown on the board, read-only.
-- **Kanban board per repo**, from the vendored [busyyaks_agents_kanban_module](https://github.com/robertziel/busyyaks_agents_kanban_module):
-  drag and drop, labels, checklists, due dates, covers, attachments, Markdown comments, keyboard shortcuts; the board's
-  columns, column types and transitions are edited in a workflow graph and kept in the database.
-- **Agents on the board**: Claude Code sessions claim cards, ask the operator a question (the card is flagged
-  `needs_operator` where it sits) or flag an external blocker, and hand work over into a gate with the PR, the CI build
-  and screenshots; only the operator approves, and an agent never merges before that.
-- **Approval on green CI**: a gate is handed off only once its PR checks are green, the checks of every gate card are
-  read ahead (conditional requests, no rate limit spent on an unchanged PR), and Approve is refused on commits pushed
-  after the handoff; "waiting for you" counts only the cards Approve would pass now, red CI pings the owner.
-- **Workflow v3**: a fixed set of column types (`parked`, `queued`, `working`, `review`, `gate`, `done`, `cancelled`)
-  that carry every rule; named transitions per board; agent review loops with review rounds counted per column;
-  stored boards migrated on upgrade.
-- **Workflow graph editor**: the whole board on screen, laid out automatically by
-  [dagre](https://github.com/dagrejs/dagre) (no stored positions); add, rename, retype and connect columns.
-- **Launch and supervise agents** in tmux from the browser (lead, worker, sub team, plain), with concurrency caps per
-  type and project; every session is started with Claude Code Remote Control.
-- **Agents sidebar**: every agent session by project, worst first (blocked, review, working, finished, idle), read from
-  what the pane shows; a permission dialog in a session becomes a question on its card and can be answered from the
-  browser.
-- **MCP server** (streamable HTTP, bearer token, local only): projects, commits, notes, reports, the daily-report facts,
-  the GitHub network and every `kanban_*` tool.
-- **Daily report** written by a local LLM through the same MCP tools, with every number computed by the server and
-  checked before it is posted; a systemd user timer runs it.
-- **GitHub network**: what the people you follow starred and whom they followed, and your github.com feed summarised,
-  read with conditional requests.
-- **Pull request flags** on cards: each linked PR's state (open, draft, merged) read from GitHub.
-- **Search** over projects, cards, commits and reports (`⌘K`); light and dark skins.
-- **Pluggable sign-in**: `auth: none` for localhost, or your own provider class; the shipped example is `none`.
-- **Database**: SQLite (WAL, a stated busy timeout, immediate transactions, safe under concurrent writers) or
-  PostgreSQL (`DATABASE_ADAPTER`, required; an optional compose `postgres` profile and a verified SQLite → PostgreSQL
-  copy, `bin/db-copy-sqlite-to-postgres`).
-- **Deployment as configuration**: `.env` and `config/*.yml` with loud validation and no defaults; localhost, nginx +
-  TLS, or a tunnel ([docs/DEPLOY.md](docs/DEPLOY.md)). A generic `config/kanban.example.yml`: one plain `claude`
-  launcher, Claude Code's default permission mode, no model names, prompts that name no board's columns.
-- **Quality gates**: `scripts/ci/test.sh all` (RuboCop with Cookpad's style guide, ShellCheck, the Ruby suite with a
-  coverage floor, TypeScript, ESLint, Prettier, vitest, dependency audit, gitleaks), in Docker on every CPU; a signed
-  overcommit pre-commit hook running the same checks on staged files. GitHub Actions runs the same `all` on the
-  public repo.
-- Community files: [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md),
-  [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), issue and pull request templates, and [NOTICE](NOTICE) with the
-  third-party attributions.
+- **Today** page: commits, your commits, active repos, merged PRs per day; 53-week heatmap; unknown shown as `—`.
+- Scanner: git log, status, upstream of every repo under the roots (read-only), failures shown beside the last good scan.
+- **Projects** / project pages: branch, last commit, dirty, unpushed, notes, cards per column; create or clone a repo.
+- [Backlog.md](https://github.com/MrLesk/Backlog.md) `backlog/` tasks shown on the board, read-only.
+- Kanban board per repo from [busyyaks_agents_kanban_module](https://github.com/robertziel/busyyaks_agents_kanban_module): drag and drop, labels, checklists, due dates, attachments, shortcuts.
+- Agents on the board: claim cards, ask the operator, flag external blockers, hand off into a gate with PR + CI + screenshots.
+- Approval on green CI: gate handoff and Approve refused until the PR checks are green.
+- Workflow v3: fixed column types, named transitions per board, agent review loops with counted rounds.
+- Workflow graph editor, auto-laid out by [dagre](https://github.com/dagrejs/dagre).
+- Launch and supervise agents in tmux from the browser (lead, worker, sub team, plain) with concurrency caps.
+- Agents sidebar: every session worst first; a permission dialog becomes a question answerable from the browser.
+- MCP server (HTTP, bearer token, local only): projects, commits, notes, reports, GitHub network, every `kanban_*` tool.
+- Daily report written by a local LLM over MCP, every number computed and checked server-side; systemd timer.
+- GitHub network: what the people you follow starred and followed, and your feed summarised.
+- PR flags on cards: open / draft / merged, read from GitHub.
+- Search (`⌘K`) over projects, cards, commits, reports; light and dark skins.
+- Pluggable sign-in: `auth: none` for localhost or your own provider class.
+- Database: SQLite (WAL, concurrent-writer safe) or PostgreSQL (`DATABASE_ADAPTER`); `bin/db-copy-sqlite-to-postgres`.
+- Deployment as configuration: `.env` + `config/*.yml`, loud validation, no defaults ([docs/DEPLOY.md](docs/DEPLOY.md)).
+- Quality gates: `scripts/ci/test.sh all` in Docker (RuboCop, ShellCheck, tests + coverage floor, tsc, ESLint, Prettier, vitest, audit, gitleaks); signed pre-commit hook.
+- Community files: [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [NOTICE](NOTICE).
 
 ### Security
 
-- `auth: { provider: none }` boots only with the explicit `allow_unauthenticated: true` and logs a banner on every
-  boot; the session cookie is always `HttpOnly`, its `Secure` and `SameSite` set in `.env` and validated at boot;
-  sign-in redirects only to a validated local path.
-- The MCP port is published on a loopback address only (`MCP_HOST` validated); every refused bearer token is logged;
-  any `Origin` header is refused.
-- The daily report's agent runs exactly two git commands, matched byte for byte (`log`, `status` with repo-config
-  programs off) in a repo under the projects root; anything else is refused.
-- CI passes GitHub tokens to `curl` through a pipe, never on its command line.
-- The launcher socket is created private (umask); git's `safe.directory` is scoped to the mounted repos.
-- Credentials in git remote URLs are stripped before they are stored; report and card Markdown is rendered with raw
-  HTML dropped.
+- `auth: none` boots only with `allow_unauthenticated: true` and logs a banner on every boot.
+- Session cookie always `HttpOnly`; `Secure` / `SameSite` from `.env`, validated at boot; sign-in redirects to local paths only.
+- Host allowlist + Origin check against DNS rebinding.
+- MCP on loopback only; refused tokens logged; any `Origin` header refused.
+- Daily-report agent limited to two exact git commands in repos under the projects root.
+- CI passes GitHub tokens through a pipe, never on a command line.
+- Launcher socket private (umask); git `safe.directory` scoped to the mounted repos.
+- Credentials stripped from stored remote URLs; Markdown rendered with raw HTML dropped.
 
 [Unreleased]: https://github.com/robertziel/busyyaks/commits/main
 [1.0.0-beta.1]: https://github.com/robertziel/busyyaks/releases/tag/v1.0.0-beta.1
