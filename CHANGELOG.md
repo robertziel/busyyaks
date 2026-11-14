@@ -12,6 +12,7 @@ All notable changes to busyyaks are recorded here. The format follows
   NAME` adds it to the app menu (Linux and the BSDs: a desktop entry; macOS: `~/Applications/busyyaks.app`) and
   `yaks desktop uninstall` removes it; or install it from Chrome or Edge. It opens in its own window, and the app
   icon's badge counts the cards waiting for you. README § Desktop app.
+- Board: cards glide to their new place (agent moves, drops, filter and order changes) instead of jumping.
 
 ### Changed (breaking for hosts)
 
