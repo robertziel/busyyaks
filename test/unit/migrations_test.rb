@@ -17,10 +17,11 @@ class MigrationsTest < Minitest::Test
   BEFORE_V3 = 20_261_121_000_000 # the last migration before workflow v3 (whose down refuses: the rollback tests stop here)
   V3 = 20_261_122_000_000
   V3_FLAGS = 20_261_123_000_000 # the last migration before the v9 graph-position drop
-  V9 = 20_261_124_000_000 # the last migration before v10 (card #248: gate head / state)
-  BEFORE_LOCAL = 20_261_125_000_000 # the last migration before the local naming (card #249)
+  V9 = 20_261_124_000_000 # the last migration before v10 (gate head / state)
+  BEFORE_LOCAL = 20_261_125_000_000 # the last migration before the local naming
   LOCAL = 20_261_130_000_000
   BEFORE_PRS = 20_261_202_000_000 # the last migration before the assigned PRs
+  BEFORE_SESSION_BOARDS = 20_261_205_000_000 # the last migration before v11 (session boards: boards.archived_at)
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -192,6 +193,23 @@ class MigrationsTest < Minitest::Test
     assert_includes @db.schema(:gh_pr_checks).map(&:first), :head
   end
 
+  # v11 adds boards.archived_at; its rollback is refused while session boards exist (below v11 a
+  # `session:*` row would read as a project's board) and goes once they are removed
+  def test_v11_session_boards_roll_back_only_without_session_boards
+    migrate
+    assert_includes @db.schema(:boards).map(&:first), :archived_at
+    st = store
+    st.session_board!("s_one", by: "s_one")
+    e = assert_raises(StandardError) { migrate(BEFORE_SESSION_BOARDS) }
+    assert_match(/rollback refused: 1 session board\(s\) exist \(session:s_one\)/, e.message)
+    assert_includes @db.schema(:boards).map(&:first), :archived_at
+    %i[board_transitions board_columns boards].each { |t| @db[t].where(project_slug: "session:s_one").delete }
+    migrate(BEFORE_SESSION_BOARDS)
+    refute_includes @db.schema(:boards).map(&:first), :archived_at
+    migrate
+    assert_includes @db.schema(:boards).map(&:first), :archived_at
+  end
+
   # a board saved before v7 has NULL in the new column: it reads as its column types' defaults
   def test_rows_from_before_v7_read_as_the_type_defaults
     migrate
@@ -280,7 +298,7 @@ class MigrationsTest < Minitest::Test
     assert_equal 3, store.board_of("m/p").approvals.size
   end
 
-  # ── local naming (20261130000000, card #249): the enrolment columns + the v3 private board's keys and labels ─────────
+  # ── local naming (20261130000000): the enrolment columns + the v3 private board's keys and labels ─────────
 
   # the suite's host config with review_loop.columns naming the old (mirror_) keys — what a pre-#249 kanban.yml says
   def with_old_review_loop
