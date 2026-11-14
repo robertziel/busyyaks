@@ -86,6 +86,23 @@ dependencies: false
 # session dialogs: asked only once on screen 30 s (a prompt cleared in seconds never reaches the operator);
 # the question quotes the agent's last comment on the card from the last 10 min, or says it gave no reason
 session_dialogs: { settle_seconds: 30, context_minutes: 10 }
+
+# SESSION BOARDS: an agent session's OWN board, attached to no project (any CLI in tmux: Claude Code,
+# Hermes, Codex …). The MCP tool kanban_session_board(tmux_session) opens `<slug_prefix><session>`; only that session
+# may use it; after idle_hours with no activity its cards are archived and the board hidden (kept, never deleted) —
+# the session's next call brings it back. Read-only on /session-boards. board = its shape (no gate column). null = off.
+session_boards:
+  slug_prefix: "session:"
+  idle_hours: 24
+  board:
+    columns:
+      - { key: todo, label: To do, type: queued }
+      - { key: doing, label: In progress, type: working }
+      - { key: done, label: Done, type: done }
+    transitions:
+      - { name: Start, from: todo, to: doing, by: any }
+      - { name: Pause, from: doing, to: todo, by: any }
+      - { name: Finish, from: [todo, doing], to: done, by: any }
 # the cross-cutting card flags (workflow v3): needs_operator (kanban_ask, a session dialog) and blocked_external
 # (kanban_block). A flagged card keeps its column and refuses agent moves; a needs_operator card counts as waiting for
 # you, a blocked_external one waits for the world and does not; after 24 h the notifier posts ONE reminder.

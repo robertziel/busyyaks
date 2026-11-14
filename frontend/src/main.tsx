@@ -11,6 +11,7 @@ import "./vendor/agents_kanban/styles/kanban.css";
 import "./styles/spa.css";
 import "./styles/search.css";
 import "./styles/github.css";
+import "./styles/session-boards.css";
 import "./styles/waiting.css";
 import "./styles/hello.css";
 

@@ -564,8 +564,18 @@ form.note textarea {
   .top .in {
     gap: 10px;
   }
+  /* five tabs are wider than a phone (376 px at 320 – 390): the control scrolls inside its row, the page never does */
+  .top nav {
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .top nav::-webkit-scrollbar {
+    display: none;
+  }
   .top nav a {
-    padding: 0.3rem 0.7rem;
+    flex: none;
+    padding: 0.3rem 0.45rem;
   }
 }
 @media (prefers-reduced-transparency: reduce) {

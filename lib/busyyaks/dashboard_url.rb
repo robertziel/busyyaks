@@ -30,6 +30,10 @@ module Busyyaks
       "/projects/#{slug.to_s.split('/').map { |s| ERB::Util.url_encode(s) }.join('/')}?tab=board&card=#{id}"
     end
 
+    # The SPA path of a card on a SESSION board (an agent session's own board, no project): the read-only
+    # /session-boards page.
+    def session_card_path(session, id) = "/session-boards?session=#{ERB::Util.url_encode(session.to_s)}&card=#{id}"
+
     # The absolute URL that opens card `id` on project `slug`'s board (the engine's Tools card_url port → each card's `url`).
     def card(slug, id, env = ENV) = "#{origin(env)}#{card_path(slug, id)}"
 
