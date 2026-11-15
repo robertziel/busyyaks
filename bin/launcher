@@ -532,7 +532,8 @@ rescue Errno::ENOENT, Errno::EACCES, JSON::ParserError, KeyError => e
   { ok: false, error: "agents snapshot unreadable (#{COLLECTOR.snapshot}): #{e.class}: #{e.message}", status: 503 }
 end
 
-# What the pane draws now, read by herdr's rules (Busyyaks::AgentScreen): {state, rule} — plus, when blocked on a
+# What the pane draws now, read by herdr's rules (Busyyaks::AgentScreen): {state, rule} — plus, when working, what it
+# does (Busyyaks::AgentActivity: thinking / tool / writing, nil when the screen does not say), and, when blocked on a
 # Claude Code dialog, the dialog (question, command, options, hash: what the sidebar shows and answers). Only the
 # verdict leaves the host, never the screen. A pane tmux cannot read → {error} (shown), never a guessed state.
 def pane_screen(socket, pane_id, family)
@@ -545,10 +546,26 @@ def pane_screen(socket, pane_id, family)
 
   title, = tmux(*base, "display-message", "-p", "-t", pane_id, "\#{pane_title}")
   verdict = Busyyaks::AgentScreen.detect(family.rules, text, title.to_s.chomp)
+  verdict[:activity] = settled_activity("#{sock}/#{pane_id}", family.activity(text)) if verdict[:state] == "working"
   if verdict[:state] == "blocked" && (d = AgentsKanban::SessionDialog.parse(text))
     verdict[:dialog] = d.slice(:question, :command, :options, :escape, :free_text, :hash).merge(answerable: sock == "default")
   end
   verdict
+end
+
+# Each pane's previous ↓ count, so a rise between two reads names it writing (Busyyaks::AgentActivity.settle): this
+# process's memory only — a restart starts every pane at "no previous read" (phase nil until the next read).
+ACTIVITY_MEMO = {}
+ACTIVITY_LOCK = Mutex.new
+
+def settled_activity(key, activity)
+  ACTIVITY_LOCK.synchronize do
+    now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    ACTIVITY_MEMO.delete_if { |_, m| now - m[:at] > Busyyaks::AgentActivity::STREAM_WINDOW_S } # panes gone or quiet
+    act, memo = Busyyaks::AgentActivity.settle(activity, ACTIVITY_MEMO[key], now)
+    memo ? ACTIVITY_MEMO[key] = memo : ACTIVITY_MEMO.delete(key)
+    act
+  end
 end
 
 # ── reap: stop agent tmux sessions that are not working ──────────────────────────────────────────────

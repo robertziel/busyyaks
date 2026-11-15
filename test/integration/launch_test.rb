@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 require "rack/test"
 require "socket"
 require "json"
@@ -26,6 +27,7 @@ class LaunchTest < Minitest::Test
   end
 
   def teardown
+    Busyyaks::LauncherClient.forget_agents_snapshot! # the shared ≤ 2 s snapshot must not carry one test's fake into the next
     @server&.close
     @thread&.kill
     File.unlink(SOCK) if File.socket?(SOCK)
@@ -74,7 +76,7 @@ class LaunchTest < Minitest::Test
     when "jobs"
       { ok: true, jobs: [{ url: "https://github.com/o/r.git", path: "/projects/r", status: "failed", exit: 128,
                            tail: ["fatal: nope"], }], }
-    when "agents" then agents_snapshot
+    when "agents" then @agents_refused || agents_snapshot
     when "agent_tasks"
       { ok: true,
         agents: [{ id: "a1", description: "Sweep exhibitor pages", type: "subagent", state: "running", mtime: Time.now.to_f }],
@@ -113,7 +115,10 @@ class LaunchTest < Minitest::Test
              claude_url: "https://claude.ai/code/session_x",
              panes: [{ target: "0.0", cwd: "/mnt/x/group/repo/sub", project_path: "/projects/group/repo/sub",
                        engine: "claudeapi", engine_label: "Claude", model: "opus", status: "busy", title: "kanban work",
-                       subagents_running: 3, }], }
+                       subagents_running: 3,
+                       screen: { state: "working", rule: "live_turn_working",
+                                 activity: { phase: "tool", elapsed_s: 65, tokens: "↓ 1.6k", tool: "busyyaks · kanban_comment",
+                                             card: 7, }, }, }], }
     unconfigured = { name: "elsewhere", socket: "default", attached: 0, created: 1, activity: 1,
                      panes: [{ target: "0.0", cwd: "/tmp", project_path: nil, engine: "codex", status: "idle", status_at: 100.0,
                                screen: { error: "engine \"codex\" is not configured (config/busyyaks.yml engines; known: " \
@@ -331,6 +336,75 @@ class LaunchTest < Minitest::Test
     assert_equal 200, last_response.status
     assert_equal "opus", j["session_links"]["group_repo"]["model"]
     assert_nil j["session_links"]["elsewhere"]["model"]
+  end
+
+  # the card dialog's live line — what the card's project's sessions and its owner do now, never the screen
+  def test_card_live_reads_what_the_sessions_do_now
+    fake_launcher
+    k = Busyyaks::Kanban.default
+    id = k.create(slug: "group/repo", title: "t", by: "op", column: "doing")
+    j = api(:get, "/api/cards/#{id}/live")
+    assert_equal 200, last_response.status
+    assert_equal %w[asker group_repo], j["sessions"].keys.sort # "elsewhere" runs outside this project
+    assert_equal({ "state" => "working", "state_by" => "screen: live_turn_working", "phase" => "tool", "elapsed_s" => 65,
+                   "tokens" => "↓ 1.6k", "tool" => "busyyaks · kanban_comment", "card" => 7, "subagents" => 3, },
+                 j["sessions"]["group_repo"])
+    # only the verdict's fields, for every session: no screen text, no dialog (its question / command is the sidebar's)
+    fields = %w[state state_by phase elapsed_s tokens tool card subagents]
+    j["sessions"].each_value { |v| assert_equal fields, v.keys }
+    assert_equal({ "state" => "blocked", "state_by" => "screen: bash_permission_prompt", "phase" => nil, "elapsed_s" => nil,
+                   "tokens" => nil, "tool" => nil, "card" => nil, "subagents" => nil, },
+                 j["sessions"]["asker"])
+
+    # the owner session counts wherever it runs
+    other = k.create(slug: "group/repo", title: "t", by: "op", column: "doing")
+    Hanami.app["db.gateway"].connection[:cards].where(id: other).update(owner_session: "elsewhere")
+    assert_equal %w[asker elsewhere group_repo], api(:get, "/api/cards/#{other}/live")["sessions"].keys.sort
+    assert_equal "idle", api(:get, "/api/cards/#{other}/live")["sessions"]["elsewhere"]["state"] # its collector says so
+    api(:get, "/api/cards/999999/live")
+    assert_equal 404, last_response.status
+  end
+
+  def test_card_live_says_the_launcher_is_down_or_refuses
+    id = Busyyaks::Kanban.default.create(slug: "group/repo", title: "t", by: "op", column: "doing")
+    File.unlink(SOCK) if File.socket?(SOCK)
+    j = api(:get, "/api/cards/#{id}/live") # no launcher at all
+    assert_equal 503, last_response.status
+    assert_match(/\Aagent sessions: launcher not reachable/, j["error"])
+    fake_launcher
+    @agents_refused = { ok: false, error: "agents snapshot unreadable (/x): Errno::ENOENT" }
+    j = api(:get, "/api/cards/#{id}/live") # the launcher answers, the collector's snapshot is not there
+    assert_equal 503, last_response.status
+    assert_equal "agent sessions: agents snapshot unreadable (/x): Errno::ENOENT", j["error"]
+    refute_includes j.keys, "sessions"
+  end
+
+  # the sidebar and every open card dialog share one launcher `agents` call per 2 s; a refusal is never kept,
+  # and an older good answer never stands in for it
+  def test_the_agents_snapshot_is_shared_and_never_replaces_a_refusal
+    fake_launcher
+    id = Busyyaks::Kanban.default.create(slug: "group/repo", title: "t", by: "op", column: "doing")
+    asks = -> { @requests.count { |r| r["op"] == "agents" } }
+    # the snapshot's clock stands still: four reads inside one window, however slow the machine (in the past, so the
+    # real clock's reads below are all past that window)
+    t0 = Busyyaks::LauncherClient.clock - 100
+    Busyyaks::LauncherClient.stub(:clock, t0) do
+      3.times { api(:get, "/api/cards/#{id}/live") }
+      api(:get, "/api/agents")
+    end
+    assert_equal 1, asks.()
+    Busyyaks::LauncherClient.stub(:clock, t0 + Busyyaks::LauncherClient::SNAPSHOT_SECONDS) do
+      api(:get, "/api/agents")
+    end
+    assert_equal 2, asks.() # the window ended: asked again
+    @agents_refused = { ok: false, error: "collector down" }
+    api(:get, "/api/cards/#{id}/live")
+    assert_equal 503, last_response.status
+    api(:get, "/api/cards/#{id}/live")
+    assert_equal [503, 4], [last_response.status, asks.()] # the refusal was asked again, not served from memory
+    @agents_refused = nil
+    api(:get, "/api/cards/#{id}/live")
+    assert_equal [200, 5], [last_response.status, asks.()]
   end
 
   def test_reap_preview_and_stop_go_through_the_launcher
