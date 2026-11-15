@@ -5,6 +5,8 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.2] - 2026-11-15
+
 ### Added
 
 - First-run hello screen: boot checks, projects dir, launchers and a default.
@@ -12,21 +14,23 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - Daily report settings edited on **Settings → Daily report**.
 - PRs are assigned to cards explicitly (`kanban_pr_assign`), never found by branch name or text.
 - Alert when a board-started session fails to start.
-- Approve buttons name the step they approve; the `local_v4` board template opens the public PR in its own column before review.
+- Approve buttons name the step they approve.
 - `yaks` command line (`bin/yaks`, host Ruby ≥ 3.2): `server status`, `server logs`, `panel`, `env`, `doctor`.
 - Board: left/right arrow click areas scroll the lists.
 - Project page: the title stays pinned under the header while the page scrolls, on one line.
-- Skins are files: `skins/<key>.yml` (Light, Dark and any added, e.g. Matrix), picked in the settings cog.
-- Desktop app: `yaks desktop install --browser NAME` adds busyyaks to the app menu (Linux, the BSDs, macOS), or install it from Chrome or Edge; its own window, the icon's badge counts the cards waiting for you.
 - Board: cards glide to their new place (agent moves, drops, filter and order changes) instead of jumping.
-- Hover a card mention (comments, the question and its option buttons, the agents rail, the waiting list, reports, notes) to see that card's details.
+- Skins are files: `skins/<key>.yml` (Light, Dark and any added, e.g. Matrix), picked in the settings cog.
 - Dictation: hold ⌥R / Alt+R in an open card (or click the mic) to talk a comment into the box, transcribed by the deployment's speech server (`dictation` in config/busyyaks.yml, `DICTATION_URL`); the key is picked on **Settings → Shortcuts**.
+- Desktop app: `yaks desktop install --browser NAME` adds busyyaks to the app menu (Linux, the BSDs, macOS), or install it from Chrome or Edge; its own window, the icon's badge counts the cards waiting for you.
+- Session boards: each agent session gets its own board, attached to no project (`kanban_session_board`), shown read-only on **Sessions**; idle boards are archived, never deleted.
+- Hover a card mention (comments, the question and its option buttons, the agents rail, the waiting list, reports, notes) to see that card's details.
 
 ### Changed
 
 - **Breaking:** launchers and agent types moved from `config/kanban.yml` to the database; migrate per `docs/DEPLOY.md` § Agent settings.
 - **Breaking:** required `config/busyyaks.yml` `launch.commands`: the allowlist of whole invocations a launcher may be.
 - **Breaking:** daily report settings moved from `config/busyyaks.yml` to the database; migrate per `docs/DAILY-REPORT.md` § Moving off config/busyyaks.yml.
+- Daily report: a day with no runnable settings posts one `NOT CONFIGURED` report saying why; a settings change re-installs the timer at the next tick.
 - **Breaking:** required `config/busyyaks.yml` `dictation` (`none`, or the speech server's model and limits) and `.env` `DICTATION_URL` / `DICTATION_TOKEN` (empty when `none`); see `docs/DEPLOY.md` § Dictation.
 - Board: cards that wait for the operator are highlighted with a needs-you badge.
 - Board: a dragged card near the edge scrolls the lists sideways, with edge shades.
@@ -36,18 +40,18 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - Links to other servers open in a new tab.
 - Blocked externally no longer counts as waiting for the operator.
 - PR flags read the card's assigned PR from its metadata, whatever the branch name.
-- Worker prompt: QA and Reviewer subagents run on haiku.
+- Shipped agent prompt: the QA and Reviewer subagents an agent starts run on haiku.
 - README intro: your local agent agency; install and usage text updated.
-- One CI build per push.
 
 ### Fixed
 
+- A link the browser cannot parse is left as written instead of blanking the card.
+- Header nav fits phones: it scrolls in its own row, never the whole page sideways.
+- Scan errors name an orphaned worktree by its host path and git dir.
 - Launcher: a launch whose claude never comes up fails (422), the session is killed and its cards released.
 - Launcher start check never refuses before `launch.start_seconds`.
-- Scanner: one project per repo — linked worktrees are never projects, and are read through the projects mount.
+- Scanner: one project per repo — linked worktrees are never projects.
 - First approval step read off its own gate's handoff and approve entries.
-- CI: launcher test waits until the socket accepts a connection; the readme-images build keeps its awk filter.
-- Public files: the readme-images build checks only its own files.
 
 ## [1.0.0-beta.1] - 2026-11-10
 
@@ -88,5 +92,6 @@ First public release (SemVer pre-release: config keys, JSON API and MCP tools ma
 - Launcher socket private (umask); git `safe.directory` scoped to the mounted repos.
 - Credentials stripped from stored remote URLs; Markdown rendered with raw HTML dropped.
 
-[Unreleased]: https://github.com/robertziel/busyyaks/commits/main
+[Unreleased]: https://github.com/robertziel/busyyaks/compare/v1.0.0-beta.2...main
+[1.0.0-beta.2]: https://github.com/robertziel/busyyaks/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [1.0.0-beta.1]: https://github.com/robertziel/busyyaks/releases/tag/v1.0.0-beta.1
