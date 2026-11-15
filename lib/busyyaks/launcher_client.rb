@@ -20,6 +20,31 @@ module Busyyaks
     def create(root:, name:, url:) = call(op: "create", root: root, name: name, url: url)
     def jobs = call(op: "jobs")["jobs"]
     def agents = call(op: "agents")
+
+    # The `agents` answer shared by the pollers of one web process (the sidebar every 10 s, each open card dialog's live
+    # line every 3 s): one launcher call per SNAPSHOT_SECONDS, concurrent askers wait for the one in flight.
+    # Only a good answer is kept: a refusal or an unreachable launcher raises for every asker and is asked afresh next
+    # time — an older snapshot never stands in for it.
+    SNAPSHOT_SECONDS = 2.0
+    SNAPSHOT_LOCK = Mutex.new
+    @snapshot = nil # [socket path, monotonic time, answer]
+
+    def agents_snapshot
+      sock = ENV.fetch("LAUNCHER_SOCKET")
+      SNAPSHOT_LOCK.synchronize do
+        now = clock
+        at, snap = @snapshot&.then { |path, t, a| path == sock ? [t, a] : nil }
+        return snap if at && now - at < SNAPSHOT_SECONDS
+
+        @snapshot = nil
+        snap = agents
+        @snapshot = [sock, now, snap]
+        snap
+      end
+    end
+
+    def clock = Process.clock_gettime(Process::CLOCK_MONOTONIC) # the snapshot's clock (seconds)
+    def forget_agents_snapshot! = SNAPSHOT_LOCK.synchronize { @snapshot = nil }
     def reap_preview = call(op: "reap_preview")
     def reap(sessions) = call(op: "reap", sessions: sessions)
     # kill this project's named sessions (operator Stop / Stop all): {"results"=>[{name, stopped, reason}]}

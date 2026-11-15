@@ -78,6 +78,16 @@ module Busyyaks
       def engines = panes.map { |p| p["engine_label"] || "#{p['engine']} (not configured)" }.uniq
       def title = panes.map { |p| p["title"] }.compact.first
       def model = panes.map { |p| p["model"] }.compact.first
+
+      # what the session does now, for the card dialog's live line: its state + what a working screen shows
+      # (Busyyaks::AgentActivity: phase thinking / tool / writing, elapsed, tokens, the tool, the card a comment tool
+      # writes on — nil fields when the screen does not say) + its running subagents (nil = not reported)
+      def live
+        act = state == "working" ? screens.filter_map { |sc| sc["activity"] }.first : nil
+        { state: state, state_by: state_by, phase: act&.dig("phase"), elapsed_s: act&.dig("elapsed_s"),
+          tokens: act&.dig("tokens"), tool: act&.dig("tool"), card: act&.dig("card"),
+          subagents: subagents_known? ? subagents : nil, }
+      end
     end
 
     module_function

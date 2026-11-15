@@ -1,0 +1,10 @@
+  moving through the snapshot, screen reader announcements. · summary
+  Running cd /srv/app && cat lib/example.rb | sed -n 1,60p; grep -n…
+  ⎿  $ cd /srv/app && cat lib/example.rb | sed -n 1,60p; grep -n
+     "Example.agents" -r lib app | head
+
+· Tomfoolering… (30s · ↓ 2.5k tokens · thought for 12s)
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · esc to interrupt · ↓ to manage

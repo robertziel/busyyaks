@@ -145,6 +145,23 @@ module Busyyaks
       { live_sessions: nil, project_sessions: [], session_links: {}, sessions_error: e.message }
     end
 
+    # GET /api/cards/:id/live → {sessions: {name => Session#live}} — the card's project's agent sessions and its owner
+    # session (wherever it runs), from the launcher's shared snapshot (LauncherClient.agents_snapshot, ≤ 2 s old); the open
+    # card dialog polls it for its live line. The
+    # launcher down → 503 with the reason, never an empty "nobody works".
+    def card_live(id)
+      i = Integer(id.to_s, exception: false)
+      card = i && kanban.card(i)
+      return [404, { error: "no card #{id}" }] unless card
+
+      groups = Busyyaks::Agents.groups(LauncherClient.agents_snapshot, store.projects)
+      all = groups.flat_map { |_, _, ss| ss }
+      mine = all.select { |s| s.project == card[:project_slug] || s.name == card[:owner_session] }
+      [200, { sessions: mine.to_h { |s| [s.name, s.live] } }]
+    rescue LauncherClient::Unavailable, LauncherClient::Refused => e
+      [503, { error: "agent sessions: #{e.message}" }]
+    end
+
     # Assignee / member candidates: the operator, this project's live tmux sessions, the configured agent types' labels,
     # and every agent / session name seen in the board's activity. The launcher being down is reported (launcher_error),
     # never papered over.
