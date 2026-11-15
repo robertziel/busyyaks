@@ -154,6 +154,7 @@ rm -rf data/run                                   # the old socket dir: nothing 
 | git on untrusted repos | busyyaks runs the git CLI on repos it does not control in: the scanner container, **mcp** (the full scan through `scan_now` — the operator's own `MCP_TOKEN` only — and, under the daily report's token too, the daily facts' churn and the report rendering's card links in `check_report` / `post_report`) and **web** (the kanban engine's card links: plain git, without SafeGit's flags), and on the host in the launcher. SafeGit's flags are defence in depth only. A program a repo's own `.git/config` names in a way the flags miss (known: a filter name holding `=`. A promisor lazy fetch is turned off by `GIT_NO_LAZY_FETCH=1` plus `protocol.allow=never` and `protocol.<file|ssh|git|http|https|ext>.allow=never` in command scope (a repo's own `protocol.<name>.allow=always` beats the bare `protocol.allow`, not the named keys) — set by SafeGit for its own calls and, for every git in the containers including the engine's card links, in docker-compose.yml's `x-app` environment; on the host the launcher's git gets them from SafeGit; still only flags) runs with that process's access. mcp and web hold the launcher socket, so for them that is a path to the host (launch / type into a session as the operator); the scanner and github containers do **not** mount the socket (`test/unit/compose_test.rb` `test_launcher_socket_reaches_only_web_mcp_and_notifier`) but write the database (see shared database). Open, and a blocker for the beta: reading repos with a library that runs no repo-configured program (libgit2) removes this from mcp, web, the scanner and the launcher |
 | dialog answers | the launcher's `answer` op presses a key on any dialog a session shows — Claude Code's folder-trust prompt included — when the caller sends the dialog's current hash, which its `dialog` op returns. The web UI calls it for the operator only, but any client of the launcher socket (web · mcp · notifier, and code running in them) can call both ops: a prompt "left for the operator" is not a boundary against those containers. The socket mount is the boundary (§ git on untrusted repos). Open |
 | a hung git | a repo whose `.git` holds a FIFO (or anything git blocks reading) hangs the git that reads it, with no per-git timeout: the scanner's whole scan, a `scan_now` or churn in mcp, and the request in web (the kanban card links) that reads that repo. Open until repos are read with a library instead of the git CLI |
+| terminals | an open terminal shows the agent's screen to the browser, and in control types into it as the operator. The checks are the web's session + Origin + registration and the launcher's running-agent check; the launcher cannot read the database, so any client of the launcher socket (web · mcp · notifier, and code running in them) can call `attach` on any running agent session — the socket mount is the boundary, as for dialog answers. `attach` adds reading the screen to what such a client already has: `notify` types up to 8000 characters + Enter into any running agent session and `stop` ends one, with no registration check either (the launcher reads no database: every service writes it, so a row there would be no proof). Through `PUBLIC_HOST` only with `terminal.public_host: allow`. Open |
 
 ## Agent settings (launchers + agent types) and the command allowlist
 
@@ -363,6 +364,24 @@ DICTATION_TOKEN=
 and `dictation: {model: Systran/faster-whisper-small, timeout_seconds: 30, max_seconds: 120}`; then
 `docker compose up -d --no-build web`. Check: open a card, press the mic (the browser asks for the microphone once:
 https or localhost only), speak, stop — the words are in the box.
+
+## Terminals (an agent's live screen)
+
+**Open terminal** in the Agents sidebar and a card's **Terminals** section show an agent session's tmux pane
+in the browser, live, at the pane's own size (the browser never resizes the agent's window). It opens **read-only**;
+**Take control** lets your keys reach the agent until **Release control**. This reverses the launcher's earlier rule
+that only a verdict about the screen leaves the host: the screen and your keys now cross the web.
+
+| | |
+|---|---|
+| config | `config/busyyaks.yml` `terminal: { public_host: allow \| deny, max_open: 1..64 }`, required, no default. `public_host: deny` refuses a terminal opened through `PUBLIC_HOST` (modes 2 and 3); `127.0.0.1` / `localhost` on `WEB_HOST_PORT` (an `ssh -L` forward included) always may. `max_open` = terminals open at once in the web process (each holds one thread); one more → 503 |
+| who | a signed-in session only (`Auth.identify`; with `provider: none` that is anyone who reaches the port, as for the rest of the dashboard); never the MCP bearer (the MCP server has no such route) |
+| page | the upgrade must carry an `Origin` equal to its Host's own origin (no Origin, or another site's → 403): a page elsewhere cannot open one |
+| which session | only a session with an open registration on a board (busyyaks launched it, or it ran `kanban_register`) → else 404; the launcher then attaches only a running session with an agent (claude, or a `launch.commands` command) in its pane → else 404 / 403 |
+| keys | dropped unless in control, in the page, in the web relay and in the launcher (each refuses on its own); control = the tmux client's `read-only` flag, switched by the launcher and read back from `list-clients` before it is confirmed |
+| audit | each open, take and release → a `terminal` event by you on every card the session works on (owns, or is assigned to its agent name; a session on no card: the launcher log line only), and a launcher log line (`journalctl --user -u busyyaks-launcher`) |
+| proxy | mode 2 / 3 with `public_host: allow`: the nginx template's `location = /api/terminal` passes the WebSocket upgrade (`bin/render-deploy` again after an update) |
+| wire | the launcher's `attach` op on its socket: one JSON line `{ok, session, cols, rows, screen}`, then JSON lines both ways (`lib/busyyaks/terminal.rb`); the web relays it as WebSocket text messages |
 
 ## Reading the scanned repos
 

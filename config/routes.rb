@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+require_relative "../lib/busyyaks/terminal_endpoint"
+require_relative "../lib/busyyaks/host_guard"
+require_relative "../lib/busyyaks/config"
+
 module Busyyaks
   class Routes < Hanami::Routes
     get "/up", to: "health.show"
@@ -41,12 +45,19 @@ module Busyyaks
     post "/api/agents/reap", to: "api.agents.reap"
     post "/api/agents/seen", to: "api.agents.seen"
     post "/api/agents/answer", to: "api.agents.answer"     # operator only: press a dialog option on a session's screen
+    # an agent session's live terminal, a WebSocket (its checks: lib/busyyaks/terminal_endpoint.rb)
+    get Busyyaks::TerminalEndpoint::PATH, to: Busyyaks::TerminalEndpoint.new(
+      # per request: the Hosts HostGuard answers under the provider of now (Auth.use swaps it in tests)
+      origins: -> { Busyyaks::HostGuard.origins(ENV, provider: Busyyaks::Auth.provider) },
+      settings: Busyyaks::Config.load.terminal, public_host: ENV.fetch("PUBLIC_HOST")
+    )
     get "/api/boards", to: "api.board.index"
     get "/api/waiting/rev", to: "api.waiting.rev"                # the "waiting for you" widget: poll, refetch on change
     get "/api/waiting", to: "api.waiting.index"
     get "/api/session-boards", to: "api.session_boards.index"   # every agent session's own board, read-only
     get "/api/cards/:id/rev", to: "api.cards.rev"
     get "/api/cards/:id/live", to: "api.cards.live"   # the card dialog's live agent line: poll
+    get "/api/cards/:id/terminals", to: "api.cards.terminals"   # the card's agent sessions, for its Terminals section
     get "/api/cards/:id", to: "api.cards.show"
     post "/api/cards/:id", to: "api.cards.update"
     patch "/api/cards/:id", to: "api.cards.update"

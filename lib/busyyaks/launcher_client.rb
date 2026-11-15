@@ -61,6 +61,32 @@ module Busyyaks
     # otherwise
     def answer(session:, socket:, hash:, key:) = call(op: "answer", session: session, socket: socket, hash: hash, key: key)
 
+    # The live terminal of a session (Busyyaks::Terminal): the launcher's `attach` stream. → [socket, hello]:
+    # the open connection (JSON lines both ways from now on; the caller closes it) and the first line, parsed. A
+    # refusal (not running, no agent in it, a bad name) → Refused with the launcher's reason and status, closed.
+    def attach(session:, socket:)
+      sock = UNIXSocket.new(ENV.fetch("LAUNCHER_SOCKET"))
+      sock.puts(JSON.generate(op: "attach", session: session, socket: socket))
+      hello = JSON.parse(sock.gets.to_s)
+      return [sock, hello] if hello["ok"]
+
+      sock.close
+      raise AttachRefused.new(hello["error"].to_s, status: hello["status"])
+    rescue Errno::ENOENT, Errno::ECONNREFUSED, Errno::EACCES, JSON::ParserError => e
+      sock&.close
+      raise Unavailable, "launcher not reachable at #{ENV.fetch('LAUNCHER_SOCKET')}: #{e.class}"
+    end
+
+    # an attach the launcher refused: its reason + HTTP status (404 not running, 403 no agent, 400 a bad name)
+    class AttachRefused < Refused
+      attr_reader :status
+
+      def initialize(message, status:)
+        super(message)
+        @status = Integer(status || 409)
+      end
+    end
+
     # The engine's LAUNCH port (AgentsKanban::Api launcher:): a free session name for the board, then the start of the
     # session the engine registered — the host renders the type's prompt ({dir} is the host's) and confirms Remote Control.
     # One per api, holding the agent settings revision {id, doc} that api's config was built from: the plan and the

@@ -8,7 +8,8 @@ require "tmpdir"
 class ConfigTest < Minitest::Test
   OK = { "roots" => [{ "path" => "/p", "prefix" => "" }], "search_depth" => 2, "owner_remotes" => ["github.com/me/"],
          "author_emails" => ["Me@x.io"], "window_days" => 7, "reap_protect" => [], "auth" => { "provider" => "none" },
-         "agents" => { "collector" => "none" }, "dictation" => "none", "launch" => LAUNCH_CLAUDE, }.freeze
+         "agents" => { "collector" => "none" }, "dictation" => "none",
+         "terminal" => TERMINAL_DENY, "launch" => LAUNCH_CLAUDE, }.freeze
 
   def test_valid = assert_equal ["me@x.io"], Busyyaks::Config.new(OK).author_emails
 
@@ -21,6 +22,23 @@ class ConfigTest < Minitest::Test
     assert_match(/missing keys: dictation/, e.message)
     e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.merge("dictation" => on.except("model"))) }
     assert_match(/dictation must be `none` or a mapping with exactly/, e.message)
+  end
+
+  # the terminal is stated — public_host allow|deny + max_open 1..64 (Busyyaks::Terminal.parse!)
+  def test_terminal_is_required_public_host_and_max_open
+    t = Busyyaks::Config.new(OK).terminal
+    assert_equal ["deny", 4, false], [t.public_host, t.max_open, t.public_allowed?]
+    assert Busyyaks::Config.new(OK.merge("terminal" => { "public_host" => "allow", "max_open" => 64 })).terminal.public_allowed?
+    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.except("terminal")) }
+    assert_match(/missing keys: terminal/, e.message)
+    { "deny" => /must be a mapping with exactly public_host, max_open/,
+      { "public_host" => "deny" } => /exactly public_host, max_open/,
+      { "public_host" => "yes", "max_open" => 4 } => /public_host must be allow or deny/,
+      { "public_host" => "deny", "max_open" => 0 } => /max_open must be an integer 1..64/,
+      { "public_host" => "deny", "max_open" => "4" } => /max_open must be an integer 1..64/, }.each do |bad, msg|
+      e = assert_raises(Busyyaks::Config::Invalid, bad.inspect) { Busyyaks::Config.new(OK.merge("terminal" => bad)) }
+      assert_match msg, e.message
+    end
   end
 
   # sign-in is chosen, never defaulted
