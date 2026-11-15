@@ -1,12 +1,14 @@
 // /hello — the first-run hello screen. A boot screen (the trotting yak + every check GET /api/setup ran,
-// each ticked in turn), then three steps: Projects (the host dir, read-only — .env), Agents (which allowlisted commands
-// become launchers, and the default — a new agent settings revision) and Done (POST /api/setup/complete). The shell
+// each ticked in turn), then four steps: Skin (this browser's skin, over /static/skin.js — applied live), Projects
+// (the host dir, read-only — .env), Agents (which allowlisted commands become launchers, and the default — a new agent
+// settings revision) and Done (POST /api/setup/complete). The shell
 // opens it while <meta name="setup"> is "pending"; the settings cog reopens it any time. Every step carries the note
 // "ask your agent to set it up for you" with a prompt to copy: the host-only parts are its job, never this page's.
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ApiError, apiPost, invalidate, useResource } from "../api";
 import { CopyChip } from "../components/Copy";
+import { SkinSwitch, skinName } from "../components/Skin";
 import { ErrorState } from "../components/States";
 import { YakLoader } from "../components/YakLoader";
 import { invocationLine, type AgentSettingsData } from "../lib/agentSettings";
@@ -25,7 +27,11 @@ import { markSetupDone } from "../lib/setupGate";
 import { useTitle } from "../lib/title";
 
 const KEY = "/api/setup";
-const STEPS = ["Welcome", "Projects", "Agents", "Done"] as const;
+export const STEPS = ["Welcome", "Skin", "Projects", "Agents", "Done"] as const;
+const SKIN = STEPS.indexOf("Skin");
+const PROJECTS = STEPS.indexOf("Projects");
+const AGENTS = STEPS.indexOf("Agents");
+const DONE = STEPS.indexOf("Done");
 const TICK_MS = 420; // one boot check revealed per tick
 
 function Boot({ checks, onNext }: { checks: Check[] | null; onNext: () => void }) {
@@ -95,6 +101,44 @@ function AskAgent({ data }: { data: SetupData }) {
         <span className="btn small">Copy prompt</span>
       </CopyChip>
     </aside>
+  );
+}
+
+export function Skin() {
+  return (
+    <section className="hello-step">
+      <h2>Skin</h2>
+      <div className="hello-skin">
+        <SkinSwitch />
+      </div>
+      <p className="muted hello-host">
+        this browser · settings cog → Skin · more: <code>skins/&lt;key&gt;.yml</code> (host, restart)
+      </p>
+    </section>
+  );
+}
+
+export type Summary = { launchers: string[]; def: string };
+
+// the Ready step's facts: the skin chosen on the Skin step, then what the other steps found or saved
+export function ReadyFacts({ data, summary }: { data: SetupData; summary: Summary }) {
+  return (
+    <dl className="hello-facts">
+      <dt>skin</dt>
+      <dd>{skinName()}</dd>
+      <dt>repos</dt>
+      <dd>{data.projects.repos}</dd>
+      <dt>launchers</dt>
+      <dd>{summary.launchers.join(" · ")}</dd>
+      <dt>default</dt>
+      <dd>
+        <code>{summary.def}</code>
+      </dd>
+      <dt>checks</dt>
+      <dd>
+        {data.checks.filter((c) => c.ok).length}/{data.checks.length} ok
+      </dd>
+    </dl>
   );
 }
 
@@ -301,7 +345,7 @@ export function Hello() {
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState<string | null>(null);
   const agents = saved ?? data?.agents ?? null;
-  const summary = useMemo(() => {
+  const summary = useMemo((): Summary | null => {
     if (!agents) return null;
     const lead = agents.doc.agent_types.find((t) => t.key === "lead") ?? agents.doc.agent_types[0];
     return {
@@ -339,38 +383,26 @@ export function Hello() {
         </button>
       </header>
       {error && !data && <ErrorState error={error} what="setup" retry={reload} />}
-      {step === 0 && <Boot checks={data ? data.checks : null} onNext={() => setStep(1)} />}
+      {step === 0 && <Boot checks={data ? data.checks : null} onNext={() => setStep(SKIN)} />}
       {step > 0 && data && agents && (
         <div className="hello-body">
           <div className="hello-main">
-            {step === 1 && <Projects data={data} />}
-            {step === 2 && (
+            {step === SKIN && <Skin />}
+            {step === PROJECTS && <Projects data={data} />}
+            {step === AGENTS && (
               <Agents
                 key={agents.revision.id}
                 agents={agents}
                 onSaved={(s) => {
                   setSaved(s);
-                  setStep(3);
+                  setStep(DONE);
                 }}
               />
             )}
-            {step === 3 && summary && (
+            {step === DONE && summary && (
               <section className="hello-step">
                 <h2>Ready</h2>
-                <dl className="hello-facts">
-                  <dt>repos</dt>
-                  <dd>{data.projects.repos}</dd>
-                  <dt>launchers</dt>
-                  <dd>{summary.launchers.join(" · ")}</dd>
-                  <dt>default</dt>
-                  <dd>
-                    <code>{summary.def}</code>
-                  </dd>
-                  <dt>checks</dt>
-                  <dd>
-                    {data.checks.filter((c) => c.ok).length}/{data.checks.length} ok
-                  </dd>
-                </dl>
+                <ReadyFacts data={data} summary={summary} />
                 <div className="hello-actions">
                   <span />
                   <button type="button" className="btn primary" disabled={finishing} onClick={() => void finish()}>
@@ -383,9 +415,9 @@ export function Hello() {
               <button type="button" className="btn" onClick={() => setStep(step - 1)}>
                 Back
               </button>
-              {step < 3 && (
+              {step < DONE && (
                 <button type="button" className="btn" onClick={() => setStep(step + 1)}>
-                  {step === 2 ? "Keep current launchers" : "Next"}
+                  {step === AGENTS ? "Keep current launchers" : "Next"}
                 </button>
               )}
             </div>
