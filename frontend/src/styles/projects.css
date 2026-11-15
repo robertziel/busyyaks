@@ -145,6 +145,9 @@
 .flash.bad span {
   color: var(--bad);
 }
+.flash.warn span {
+  color: var(--warn);
+}
 
 /* ── custom select: a trigger + a frosted listbox (moved to <body> while open, so no overflow clips it) ── */
 .chev {
