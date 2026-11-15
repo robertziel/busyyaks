@@ -46,6 +46,7 @@ module Busyyaks
     get "/api/waiting", to: "api.waiting.index"
     get "/api/session-boards", to: "api.session_boards.index"   # every agent session's own board, read-only
     get "/api/cards/:id/rev", to: "api.cards.rev"
+    get "/api/cards/:id/live", to: "api.cards.live"   # the card dialog's live agent line: poll
     get "/api/cards/:id", to: "api.cards.show"
     post "/api/cards/:id", to: "api.cards.update"
     patch "/api/cards/:id", to: "api.cards.update"

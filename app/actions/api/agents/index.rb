@@ -14,7 +14,7 @@ module Busyyaks
         # Launcher or snapshot down → 503 {error} (ApiAction); the sidebar shows that state.
         class Index < Busyyaks::APIAction
           def handle(_req, res)
-            snap = LauncherClient.agents
+            snap = LauncherClient.agents_snapshot # shared with the card dialogs' live line (≤ 2 s old)
             projects = store.projects
             kb = Busyyaks::Kanban.default
             w = kb.waiting_cards(projects.map { |p| p[:slug] })

@@ -1,0 +1,10 @@
+● Now writing only on evidence.
+
+● Running sed -n 28,60p lib/example.rb
+  ⎿  $ sed -n 28,60p lib/example.rb
+
+* Tomfoolering… (1m 4s · ↓ 5.2k tokens · thought for 1s)
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · esc to interrupt · ↓ to manage

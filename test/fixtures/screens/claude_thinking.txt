@@ -1,0 +1,7 @@
+● Agent "Reviewer round 1" finished · 2m 21s
+
+✢ Tomfoolering… (18s · ↓ 1.2k tokens · thinking with medium effort)
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · esc to interrupt · ↓ to manage

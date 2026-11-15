@@ -2,6 +2,7 @@
 
 require "yaml"
 require_relative "agent_screen"
+require_relative "agent_activity"
 
 module Busyyaks
   # The coding-agent engines: the names the agent_engines collector reports per pane. What an engine IS is
@@ -18,6 +19,8 @@ module Busyyaks
       def rules = raise(NotImplementedError)
       # may a busyyaks message be typed into the pane mid-turn (bin/launcher notify)?
       def typeable? = false
+      # what a working pane is doing (AgentActivity's verdict), nil = this family's screen does not say
+      def activity(_screen) = nil
     end
 
     # Claude Code queues a prompt typed mid-turn.
@@ -25,6 +28,7 @@ module Busyyaks
       def name = "claude"
       def rules = AgentScreen::CLAUDE
       def typeable? = true
+      def activity(screen) = AgentActivity.claude(screen)
     end
 
     # Hermes' input state is unreadable, so typing into it is not risked.

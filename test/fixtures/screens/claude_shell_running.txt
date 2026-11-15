@@ -1,0 +1,11 @@
+● Recording one now: a 12 s command.
+
+● Running 2 shell commands · 2s…
+  ⎿  $ sleep 12; echo slept (3s)
+     (ctrl+b ctrl+b (twice) to run in background)
+
+✶ Tomfoolering… (2m 58s · ↓ 15.1k tokens)
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · esc to interrupt · ↓ to manage
