@@ -329,3 +329,11 @@
     grid-area: def;
   }
 }
+
+/* skin step: the settings menu's switch (Skin.tsx), larger — a choice applies to the page at once */
+.hello-skin .seg.skin-switch {
+  font-size: 15px;
+}
+.hello-skin .seg.skin-switch button {
+  padding: 0.5rem 1.1rem;
+}

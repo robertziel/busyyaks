@@ -19,6 +19,12 @@ function api(): SkinApi {
   return a;
 }
 
+// the current choice's label ("Light", "Auto", …), for summaries (the /hello Ready step)
+export function skinName(): string {
+  const skin = api();
+  return skin.label(skin.get());
+}
+
 export function SkinSwitch() {
   const skin = api();
   const [choice, setChoice] = useState<SkinChoice>(skin.get());
