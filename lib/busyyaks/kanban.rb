@@ -7,6 +7,7 @@
 # the projects table as the boards, the launcher socket as delivery. test/unit/no_kanban_code_test.rb fails when
 # engine code grows back here.
 require "monitor"
+require "uri"
 require_relative "../../vendor/agents_kanban/ruby/lib/agents_kanban"
 require_relative "agent_settings"
 require_relative "launcher_client"
@@ -55,6 +56,14 @@ module Busyyaks
     # own keys — the running config is always the database's revision: `config`). No database is touched here, so
     # `hanami db migrate` boots before the agent_settings table exists.
     def check_file! = AgentSettings.host(file_config, AgentSettings.template)
+
+    # The origin a person's picture comes from (the host config's `avatar_url`) — the one image host the CSP
+    # adds for it; nil = avatar_url null (initials only, no request leaves the page). The engine validated the template.
+    def avatar_origin
+      url = check_file!.avatar_url or return nil
+      u = URI(url.sub("{sha256}", "0"))
+      "#{u.scheme}://#{u.host}#{":#{u.port}" unless u.port == u.default_port}"
+    end
 
     # The engine's host config = the file + the newest agent settings revision. Rebuilt when a newer revision is saved
     # (one indexed max(id) per call), so web, mcp and the notifier run what Settings saved without a restart.

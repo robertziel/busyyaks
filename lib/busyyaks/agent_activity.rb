@@ -34,9 +34,11 @@ module Busyyaks
       /\A\s*⎿\s+\$\s\S.*\s\((?:\d+[hms]\s?)+\)\s*\z/,
       /\A\s*\(ctrl\+b ctrl\+b \(twice\) to run in background\)\s*\z/,
     ].freeze
-    # kanban tools that write a comment on the card their `id` names
-    COMMENT_TOOLS = %w[kanban_comment kanban_comment_edit kanban_ask kanban_attach kanban_handoff].freeze
-    CARD_ARG = /(?:\A|[\s,])id:\s*(\d{1,9})\b/
+    # the card a kanban tool acts on: its `id:` argument (kanban_card reads it, kanban_comment writes on it, kanban_move
+    # moves it…) — the card the session is on right now (its face shows on that card). Another id argument
+    # (comment_id, item_id, checklist_id) names no card and does not match.
+    CARD_TOOL = /\Akanban_/
+    CARD_ARG = /(?:\A|[\s,(])id:\s*(\d{1,9})\b/
 
     module_function
 
@@ -111,7 +113,7 @@ module Busyyaks
 
       m = block[dot].match(TOOL) or return { name: nil, card: nil }
       name = m[:server] ? "#{m[:server]} · #{m[:name]}" : m[:name]
-      card = COMMENT_TOOLS.include?(m[:name]) ? m[:args][CARD_ARG, 1]&.to_i : nil
+      card = m[:name].match?(CARD_TOOL) ? m[:args][CARD_ARG, 1]&.to_i : nil
       { name: name, card: card }
     end
   end

@@ -15,8 +15,12 @@ class LaunchTest < Minitest::Test
   SOCK = ENV.fetch("LAUNCHER_SOCKET")
   def app = Hanami.app
 
+  # the card the fake launcher's busy session's running tool names (its verdict's `card`); a test sets it to its own card
+  TOOL_CARD = 7
+
   def setup
     super
+    @tool_card = TOOL_CARD
     store.upsert_project(slug: "group/repo", path: "/projects/group/repo", remote: nil, branch: "main", own: true,
                          last_commit_at: Busyyaks::Clock.epoch, commits_window: 1, mine_window: 1, dirty: 0, unpushed: nil,
                          scanned_at: 1)
@@ -119,7 +123,7 @@ mtime: Busyyaks::Clock.now.to_f, }],
                        subagents_running: 3,
                        screen: { state: "working", rule: "live_turn_working",
                                  activity: { phase: "tool", elapsed_s: 65, tokens: "↓ 1.6k", tool: "busyyaks · kanban_comment",
-                                             card: 7, }, }, }], }
+                                             card: @tool_card, }, }, }], }
     unconfigured = { name: "elsewhere", socket: "default", attached: 0, created: 1, activity: 1,
                      panes: [{ target: "0.0", cwd: "/tmp", project_path: nil, engine: "codex", status: "idle", status_at: 100.0,
                                screen: { error: "engine \"codex\" is not configured (config/busyyaks.yml engines; known: " \
@@ -262,11 +266,13 @@ mtime: Busyyaks::Clock.now.to_f, }],
     s = agent(api(:get, "/api/agents"), "elsewhere")
     assert_equal ["idle", false, []], s.values_at("state", "cards_known", "cards"),
                  "no open registration: its cards are unknown"
+    assert_equal [nil, nil], s.values_at("agent", "agent_type"), "no registration: no agent name, no type"
     kb.register_session(session: "elsewhere", project: "group/repo", type: "plain", launcher: "fullclaude", by: "op")
     id = kb.create(slug: "group/repo", title: "ship it", by: "op", column: "doing")
     kb.set_owner(id, session: "elsewhere", by: "op")
     s = agent(api(:get, "/api/agents"), "elsewhere")
     assert_equal ["idle", true, 0], s.values_at("state", "cards_known", "cards_finished")
+    assert_equal ["claude-elsewhere", "plain", nil], s.values_at("agent", "agent_type", "phase"), "its face"
     assert_equal [[id, "In progress", "working", "/projects/group/repo?tab=board&card=#{id}"]],
                  s["cards"].map { |c| c.values_at("id", "column_label", "column_type", "path") }
     kb.move(id, column: "merged", by: "op")
@@ -349,7 +355,7 @@ mtime: Busyyaks::Clock.now.to_f, }],
     assert_equal 200, last_response.status
     assert_equal %w[asker group_repo], j["sessions"].keys.sort # "elsewhere" runs outside this project
     assert_equal({ "state" => "working", "state_by" => "screen: live_turn_working", "phase" => "tool", "elapsed_s" => 65,
-                   "tokens" => "↓ 1.6k", "tool" => "busyyaks · kanban_comment", "card" => 7, "subagents" => 3, },
+                   "tokens" => "↓ 1.6k", "tool" => "busyyaks · kanban_comment", "card" => TOOL_CARD, "subagents" => 3, },
                  j["sessions"]["group_repo"])
     # only the verdict's fields, for every session: no screen text, no dialog (its question / command is the sidebar's)
     fields = %w[state state_by phase elapsed_s tokens tool card subagents]
@@ -365,6 +371,42 @@ mtime: Busyyaks::Clock.now.to_f, }],
     assert_equal "idle", api(:get, "/api/cards/#{other}/live")["sessions"]["elsewhere"]["state"] # its collector says so
     api(:get, "/api/cards/999999/live")
     assert_equal 404, last_response.status
+  end
+
+  # who works on a card RIGHT NOW — the dialog's `present` and the board's presence poll: a registered session
+  # at work whose agent wrote on the card this turn (or whose running tool names it); ownership alone is not presence
+  def test_presence_is_the_registered_sessions_at_work_on_the_card_now
+    # the clock stands still: the comment and the reads share one instant, so "this turn" (elapsed_s 65) is no
+    # wall-clock window the test could race
+    Busyyaks::Clock.stub(:now, Time.at(1_800_000_000)) do
+      fake_launcher
+      k = Busyyaks::Kanban.default
+      k.register_session(session: "group_repo", project: "group/repo", type: "lead", launcher: "fullclaude", by: "op")
+      agent = k.agent_types("group/repo").key("lead")
+      here = k.create(slug: "group/repo", title: "checked now", by: "op", column: "doing")
+      owned = k.create(slug: "group/repo", title: "owned, untouched", by: "op", column: "doing")
+      reading = k.create(slug: "group/repo", title: "its tool reads it", by: "op", column: "doing")
+      @tool_card = reading # the running kanban tool names this card (set before the first snapshot read)
+      k.set_owner(owned, session: "group_repo", by: "op")
+      k.comment(here, body: "looked", author: agent) # the turn runs 65 s; the clock stands still, so this is in it
+      j = api(:get, "/api/cards/#{here}/live")
+      assert_equal 200, last_response.status
+      assert_equal [["group_repo", agent, "lead", "activity", "working"]],
+                   j["present"].map { |w| [*w.values_at("session", "agent", "type", "why"), w["live"]["state"]] }
+      assert_equal [], api(:get, "/api/cards/#{owned}/live")["present"], "ownership alone is not presence"
+      tool = api(:get, "/api/cards/#{reading}/live")["present"]
+      assert_equal [%w[group_repo tool]], tool.map { |w| w.values_at("session", "why") }
+      b = api(:get, "/api/projects/group/repo/board/presence")
+      assert_equal 200, last_response.status
+      assert_equal [here.to_s, reading.to_s].sort, b["cards"].keys.sort
+      assert_equal "no-store", last_response.headers["Cache-Control"]
+      api(:get, "/api/projects/nope/board/presence")
+      assert_equal 404, last_response.status
+      File.unlink(SOCK)
+      Busyyaks::LauncherClient.forget_agents_snapshot! # the 2 s shared read would still answer
+      assert_match(/\Aagent sessions: /, api(:get, "/api/projects/group/repo/board/presence")["error"])
+      assert_equal 503, last_response.status
+    end
   end
 
   def test_card_live_says_the_launcher_is_down_or_refuses

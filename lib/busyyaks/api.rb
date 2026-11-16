@@ -113,6 +113,8 @@ module Busyyaks
         ssh_attach: ssh_attach(s.name), attached: s.attached, activity: s.activity,
         state: s.state, state_by: s.state_by, unread: s.unread?, turn_ended_at: s.turn_ended_at, seen_at: s.seen_at,
         cards_known: s.cards_known?,
+        # its face: the registered agent name + type (nil = no open registration), the live phase = its mood
+        agent: s.registration&.dig(:agent), agent_type: s.registration&.dig(:type), phase: s.live[:phase],
         cards: s.open_cards.map do |c|
           agent_card(c, column_label: c[:column_label], column_type: c[:column_type], gate_hold: c[:gate_hold],
                         blocked_external: c[:blocked_external])

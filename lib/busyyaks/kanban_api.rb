@@ -154,12 +154,36 @@ module Busyyaks
       card = i && kanban.card(i)
       return [404, { error: "no card #{id}" }] unless card
 
-      groups = Busyyaks::Agents.groups(LauncherClient.agents_snapshot, store.projects)
-      all = groups.flat_map { |_, _, ss| ss }
-      mine = all.select { |s| s.project == card[:project_slug] || s.name == card[:owner_session] }
-      [200, { sessions: mine.to_h { |s| [s.name, s.live] } }]
+      live = live_sessions
+      mine = live.select { |name, (s, _)| s.project == card[:project_slug] || name == card[:owner_session] }
+      present = present_json(card[:project_slug], live).fetch(card[:id], [])
+      [200, { sessions: mine.transform_values { |(_, l)| l }, present: present }]
     rescue LauncherClient::Unavailable, LauncherClient::Refused => e
       [503, { error: "agent sessions: #{e.message}" }]
+    end
+
+    # GET /api/projects/*slug/board/presence → {cards: {id => [PresentAgent]}}: who works on each card right now (the
+    # engine's Store#presence over the launcher's live reading), polled by the board
+    def board_presence(slug)
+      p = store.project(slug.to_s) or return [404, { error: "no project #{slug}" }]
+
+      [200, { cards: present_json(p[:slug], live_sessions) }]
+    rescue LauncherClient::Unavailable, LauncherClient::Refused => e
+      [503, { error: "agent sessions: #{e.message}" }]
+    end
+
+    # {session name => [Agents::Session, its live verdict]} from the shared launcher snapshot
+    def live_sessions
+      Busyyaks::Agents.groups(LauncherClient.agents_snapshot, store.projects)
+                      .flat_map { |_, _, ss| ss }.to_h { |s| [s.name, [s, s.live]] }
+    end
+
+    # Store#presence + each present session's live verdict → {card id => [{session, agent, type, why, live}]}
+    def present_json(slug, live)
+      verdicts = live.transform_values { |(_, l)| l }
+      kanban.presence(slug, live: verdicts).transform_values do |ws|
+        ws.map { |w| w.merge(live: verdicts.fetch(w[:session])) }
+      end
     end
 
     # Assignee / member candidates: the operator, this project's live tmux sessions, the configured agent types' labels,

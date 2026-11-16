@@ -64,7 +64,7 @@ class GithubApiTest < Minitest::Test
     get "/github"
     assert_equal 200, last_response.status
     img = last_response.headers["Content-Security-Policy"][/img-src ([^;]+)/, 1]
-    # + the auth provider's (the test stub: none)
-    assert_equal ["'self'", "data:", "https://avatars.githubusercontent.com"], img.split
+    # + the auth provider's (the test stub: none) + the origin of kanban.yml avatar_url (a person's picture)
+    assert_equal ["'self'", "data:", "https://avatars.githubusercontent.com", "https://gravatar.com"], img.split
   end
 end

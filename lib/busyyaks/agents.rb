@@ -13,8 +13,9 @@ module Busyyaks
     # nothing about the work being done).
     STATES = %w[blocked review working finished idle unknown].freeze
 
+    # registration: its open registration's {agent, type} (Store#owned_cards; nil = none — its face has no type colour)
     Session = Struct.new(:name, :socket, :attached, :activity, :panes, :project, :cwd, :claude_url, :asks, :reviews, :cards,
-                         :seen_at, keyword_init: true) do
+                         :seen_at, :registration, keyword_init: true) do
       def key = "#{socket}/#{name}"
       def screens = panes.map { |p| p["screen"] || {} }
       def dialogs = screens.filter_map { |sc| sc["dialog"] }
@@ -105,7 +106,8 @@ module Busyyaks
         Session.new(name: s["name"], socket: s["socket"], attached: s["attached"].to_i.positive?, activity: s["activity"].to_i,
                     panes: s["panes"], project: proj && proj[:slug], cwd: pane["cwd"], claude_url: s["claude_url"],
                     asks: asks.fetch(s["name"], []), reviews: reviews.fetch(s["name"], []),
-                    cards: cards[[s["name"], s["socket"]]]&.fetch(:cards), seen_at: seen["#{s['socket']}/#{s['name']}"])
+                    cards: cards[[s["name"], s["socket"]]]&.fetch(:cards), seen_at: seen["#{s['socket']}/#{s['name']}"],
+                    registration: cards[[s["name"], s["socket"]]]&.slice(:agent, :type))
       end
       sessions.group_by { |s| s.project || "other" }.map do |key, ss|
         ss = ss.sort_by { |s| [rank(s), -s.activity] }
