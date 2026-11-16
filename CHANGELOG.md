@@ -7,6 +7,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A board card whose agent is working (thinking, running a tool, writing, waiting on its subagents) glows blue, read from the same screen evidence as the live agent line; no glow when idle, without evidence or when the agents read failed (the board says why); a card that needs you stays red. `GET /api/projects/*slug/board/live` answers the whole board from one shared agents snapshot. Colour: skin token `--working` (`--ak-working` in `config/kanban.yml` theme).
 - CI checks for the approval gate: only each repo's required contexts gate (`ci.required`, the rest informational); a check pending past `ci.max_pending_minutes` turns red as stuck and pings the owner once; every page of checks is read; one bad PR no longer stops the others; a handoff's build URL must be the head's; `/github` names enrolled repos missing from `ci.required`.
 - Agent faces: every agent wears two eyes on a disc in its type's colour (`config/kanban.yml` theme `--ak-face-type-<type>`; `face_roles` colours subagent roles such as `reviewer-*`, `qa-*`), its mood from the live session — in comments, card faces, the project's tmux list and the Agents sidebar. A person shows their picture from `avatar_url` (an https template with the email's SHA-256, e.g. Gravatar with `d=404`; its origin joins the CSP `img-src`), else the initials.
 - Who is at work on a card now: `GET /api/cards/:id/live` adds `present`; `GET /api/projects/*slug/board/presence` returns it for every card, and the board shows those faces on the card faces. `/api/agents` adds `agent`, `agent_type` and `phase` to each session.
@@ -15,6 +16,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** the boot refuses a `config/kanban.yml` `theme` that leaves out any `--ak-*` token the vendored engine's CSS declares, naming each; add `--ak-working: var(--working)` and `--ak-step-overhang: 12px` (see `docs/DEPLOY.md` § The board theme).
 - **Breaking:** required `config/busyyaks.yml` `ci` (`max_pending_minutes: 1..1440`, `required: {owner/name: [contexts]}`); see `docs/DEPLOY.md` § CI checks.
 - **Breaking:** required `config/busyyaks.yml` `terminal` (`public_host: allow | deny`, `max_open: 1..64`); see `docs/DEPLOY.md` § Terminals.
 - **Breaking:** required `config/kanban.yml` `face_roles` and `avatar_url` (null allowed; boot refuses a config without them); copy them and the `--ak-face-type-*` theme colours from `config/kanban.example.yml`.

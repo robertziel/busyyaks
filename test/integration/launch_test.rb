@@ -451,6 +451,46 @@ mtime: Busyyaks::Clock.now.to_f, }],
     assert_equal [200, 5], [last_response.status, asks.()]
   end
 
+  # the board's working glow — ONE answer for the whole board (the project's sessions + every live card's owner
+  # session, wherever it runs), read from the shared agents snapshot: no launcher call per card or per poll
+  def test_board_live_is_one_answer_from_the_shared_snapshot
+    fake_launcher
+    k = Busyyaks::Kanban.default
+    3.times { k.create(slug: "group/repo", title: "t", by: "op", column: "doing") }
+    owned = k.create(slug: "group/repo", title: "t", by: "op", column: "doing")
+    Hanami.app["db.gateway"].connection[:cards].where(id: owned).update(owner_session: "elsewhere")
+    asks = -> { @requests.count { |r| r["op"] == "agents" } }
+    # the snapshot's clock stands still: every read inside one window, however slow the machine
+    j = Busyyaks::Clock.stub(:monotonic, -1_000_000.0) do
+      api(:get, "/api/agents")
+      Array.new(2) { api(:get, "/api/projects/group/repo/board/live") }.last
+    end
+    assert_equal 200, last_response.status
+    assert_equal 1, asks.() # the sidebar and two board polls of a 4-card board: one launcher call
+    assert_equal %w[asker elsewhere group_repo], j["sessions"].keys.sort # "elsewhere" owns a card on this board
+    assert_equal({ "state" => "working", "state_by" => "screen: live_turn_working", "phase" => "tool", "elapsed_s" => 65,
+                   "tokens" => "↓ 1.6k", "tool" => "busyyaks · kanban_comment", "card" => 7, "subagents" => 3, },
+                 j["sessions"]["group_repo"])
+    assert_equal "idle", j["sessions"]["elsewhere"]["state"]
+    Hanami.app["db.gateway"].connection[:cards].where(id: owned).update(owner_session: nil)
+    Busyyaks::LauncherClient.forget_agents_snapshot!
+    assert_equal %w[asker group_repo], api(:get, "/api/projects/group/repo/board/live")["sessions"].keys.sort
+    api(:get, "/api/projects/no/such/board/live")
+    assert_equal 404, last_response.status
+  end
+
+  def test_board_live_says_the_launcher_is_down_never_nobody_works
+    File.unlink(SOCK) if File.socket?(SOCK)
+    j = api(:get, "/api/projects/group/repo/board/live")
+    assert_equal 503, last_response.status
+    assert_match(/\Aagent sessions: launcher not reachable/, j["error"])
+    fake_launcher
+    @agents_refused = { ok: false, error: "collector down" }
+    j = api(:get, "/api/projects/group/repo/board/live")
+    assert_equal [503, "agent sessions: collector down"], [last_response.status, j["error"]]
+    refute_includes j.keys, "sessions"
+  end
+
   def test_reap_preview_and_stop_go_through_the_launcher
     fake_launcher
     api(:get, "/api/agents/reap")

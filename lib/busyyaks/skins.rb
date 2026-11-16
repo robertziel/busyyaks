@@ -24,7 +24,7 @@ module Busyyaks
       --bg --panel --panel-2 --surface-3 --line --line-strong --ink --ink-dim --ink-faint --track --row-rule --row-hover
       --mat-bar --mat-card --mat-fill --mat-fill-2 --mat-thumb
       --vivid-blue --vivid-green --vivid-orange --vivid-red --vivid-yellow --vivid-purple --vivid-teal --vivid-pink
-      --button-fill --ok --warn --bad --accent
+      --button-fill --ok --warn --bad --accent --working
     ].freeze
     # a token whose "r, g, b" triple app.css also keeps (rgba() tints): written from the colour
     RGB_PAIRS = %w[--ok --warn --bad --accent].freeze

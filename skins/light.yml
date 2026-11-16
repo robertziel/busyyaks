@@ -32,3 +32,4 @@ tokens:
   "--warn": "#855900"
   "--bad": "#9f1239"
   "--accent": "#a8380a"
+  "--working": "#2f6fdb" # the board's blue glow: a card whose agent works now
