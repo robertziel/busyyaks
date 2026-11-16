@@ -2,6 +2,7 @@
 
 require "json"
 require "rbconfig"
+require_relative "clock"
 
 module Busyyaks
   # Every read of a repo under the projects mount goes through ONE short-lived child: `bin/git-read` (libgit2 via the
@@ -89,7 +90,7 @@ module Busyyaks
         nil # the child died before it read its request: its status says why
       end
       wr_in.close
-      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + limits[:timeout]
+      deadline = Busyyaks::Clock.monotonic + limits[:timeout]
       out = read_until(rd_out, deadline)
       status = out.is_a?(String) ? exit_status(pid, deadline) : nil
       out = :timeout if status.nil? && out.is_a?(String)
@@ -102,7 +103,7 @@ module Busyyaks
     def read_until(io, deadline)
       buf = +""
       loop do
-        left = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        left = deadline - Busyyaks::Clock.monotonic
         return :timeout if left <= 0
         return :timeout unless io.wait_readable(left)
 
@@ -121,7 +122,7 @@ module Busyyaks
       loop do
         _, status = Process.wait2(pid, Process::WNOHANG)
         return status if status
-        return nil if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+        return nil if Busyyaks::Clock.monotonic > deadline
 
         sleep 0.005
       end

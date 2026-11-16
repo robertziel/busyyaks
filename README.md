@@ -551,8 +551,9 @@ never be exposed. The daily report has its own bearer, `MCP_REPORT_TOKEN`, which
 ## Tests and CI
 
 ```bash
-# lint · ruby (SQLite) · ruby-pg (PostgreSQL) · frontend · audit · secrets, all in Docker
-scripts/ci/test.sh all
+# lint · ruby (SQLite) · ruby-pg (PostgreSQL) · frontend · flake · audit · secrets · host, all in Docker
+# (the env and the CPUs it needs: CONTRIBUTING.md § Tests)
+CI_BASE_REF=origin/main CI_GITHUB_READ_TOKEN=$(gh auth token) CI_GITHUB_CACHE_DIR=~/.cache/busyyaks-ci scripts/ci/test.sh all
 # RuboCop only (Cookpad's style guide); -a autocorrects
 scripts/lint/rubocop [-a] [paths]
 # pre-commit: overcommit in Docker — RuboCop, ESLint, Prettier, gitleaks, ShellCheck on the staged files

@@ -3,6 +3,7 @@
 require "etc"
 require "open3"
 require "rbconfig"
+require_relative "../../lib/busyyaks/clock"
 
 # Runs minitest files in parallel worker PROCESSES: one per test file. Most of the suite waits on
 # I/O (SQLite, sockets), not CPU, so capping workers at the CPU count only queued files behind each other; the OS shares
@@ -35,32 +36,78 @@ module ParallelRunner
   # files: the test files · libs: -I dirs · env_for: worker index → its ENV additions · prepare: called with the index
   # before that worker starts (e.g. copy its database) · boot: worker index → Ruby code the worker runs before it loads
   # its files (e.g. start coverage). Returns true when every worker passed.
-  def run(files:, libs:, env_for:, prepare: nil, boot: nil, out: $stdout)
+  def run(...) = run_results(...).then { |results| results.all? { passed?(_1) } }
+
+  # The same run, returning every worker's Result (each already reported to `out`): the flake gate counts them per file.
+  # max: at most that many workers at once, the rest queue (nil = every one at once)
+  def run_results(files:, libs:, env_for:, prepare: nil, boot: nil, out: $stdout, max: nil)
     raise ArgumentError, "no test files" if files.empty?
 
     buckets = balance(files, files.size)
-    out.puts "parallel: #{files.size} files in #{buckets.size} workers (#{cpus} CPUs)"
-    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    results = buckets.each_with_index.map do |fs, i|
-      Thread.new { run_worker(i, fs, libs, env_for, prepare, boot) }
-    end.map(&:value)
-    report(results, Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, out)
+    out.puts "parallel: #{files.size} files in #{buckets.size} workers (#{cpus} CPUs#{max ? ", #{max} at once" : ''})"
+    queue = Queue.new
+    buckets.each_with_index { |bucket, i| queue << [bucket, i] }
+    queue.close
+    results = []
+    lock = Mutex.new
+    _, wall = Busyyaks::Clock.stopwatch do
+      Array.new([max || buckets.size, buckets.size].min) do
+        Thread.new do
+          loop do
+            fs, i = queue.pop
+            break unless fs
+
+            r = run_worker(i, fs, libs, env_for, prepare, boot)
+            lock.synchronize { results << r }
+          end
+        end
+      end.each(&:join)
+    end
+    results.sort_by!(&:index)
+    report(results, wall, out)
+    results
+  end
+
+  def passed?(r) = r.status&.success? && r.counts && r.counts[2].zero? && r.counts[3].zero?
+
+  # true when every worker passed. Runs the host failed are named apart ("infrastructure"): red all the same, never read
+  # as a red test
+  def verdict(results, out:)
+    report_infrastructure(results.reject { passed?(_1) }.select { infrastructure?(_1) }, out, "parallel")
+    results.all? { passed?(_1) }
+  end
+
+  def report_infrastructure(infra, out, what)
+    infra.each { |r| out.puts "#{what}: infrastructure: #{r.files.join(' ')} did not run cleanly — #{infrastructure?(r)}" }
+    out.puts "#{what}: #{infra.size} run(s) hit the host's limits — not a test result" unless infra.empty?
+  end
+
+  # the host failed the run, not the test (a task limit): no worker process, no minitest
+  # summary, or a resource error in its output. The reason, or nil
+  RESOURCE = Regexp.union("Resource temporarily unavailable", "Cannot fork", "Errno::EAGAIN", "Errno::ENOMEM",
+                          "failed to allocate memory", "Cannot allocate memory")
+  def infrastructure?(r)
+    return "the worker process did not start (#{r.output.lines.first&.strip})" if r.status.nil?
+    return "it ran out of a host resource: #{r.output[RESOURCE]}" if r.output.match?(RESOURCE)
+
+    "it ended (#{r.status.inspect}) without a minitest summary" unless r.counts
   end
 
   def run_worker(index, files, libs, env_for, prepare, boot)
-    t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    prepare&.call(index)
-    # the files leave ARGV before minitest parses it (as its own options) at exit
-    cmd = [RbConfig.ruby, *libs.flat_map { ["-I", _1] }, *(boot ? ["-e", boot.call(index)] : []), "-e", LOAD, *files]
-    output, status = Open3.capture2e(env_for.call(index), *cmd)
+    (output, status), seconds = Busyyaks::Clock.stopwatch do
+      prepare&.call(index)
+      # the files leave ARGV before minitest parses it (as its own options) at exit
+      cmd = [RbConfig.ruby, *libs.flat_map { ["-I", _1] }, *(boot ? ["-e", boot.call(index)] : []), "-e", LOAD, *files]
+      Open3.capture2e(env_for.call(index), *cmd)
+    end
     counts = output.scan(SUMMARY).last&.map(&:to_i)
-    Result.new(index, files, status, output, counts, Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0)
+    Result.new(index, files, status, output, counts, seconds)
   rescue StandardError => e
     Result.new(index, files, nil, "worker #{index} did not run: #{e.class}: #{e.message}", nil, 0)
   end
 
   def report(results, wall, out)
-    failed = results.reject { |r| r.status&.success? && r.counts && r.counts[2].zero? && r.counts[3].zero? }
+    failed = results.reject { passed?(_1) }
     failed.each do |r|
       out.puts "", "── worker #{r.index} FAILED (#{r.status&.exitstatus.inspect}) · #{r.files.join(' ')} ──", r.output
     end

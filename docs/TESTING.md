@@ -3,8 +3,9 @@
 Docker only; nothing is installed on the host.
 
 ```bash
-scripts/ci/test.sh all                 # lint · ruby · ruby-pg · frontend · audit · secrets, at once, logs kept apart
-scripts/ci/test.sh ruby                # one stage: lint | ruby | ruby-pg | frontend | audit | secrets
+# every stage at once, logs kept apart; the env: below the table
+CI_BASE_REF=origin/main CI_GITHUB_READ_TOKEN=$(gh auth token) CI_GITHUB_CACHE_DIR=~/.cache/busyyaks-ci scripts/ci/test.sh all
+scripts/ci/test.sh ruby                # one stage: lint | ruby | ruby-pg | frontend | flake | audit | secrets | host
 docker compose run --rm --build test; s=$?; docker compose --profile test rm -sfv test-postgres; (exit $s)   # the Ruby suite only (its exit status kept), then its test-postgres (never `down`: it would stop the stack)
 ```
 
@@ -14,15 +15,31 @@ docker compose run --rm --build test; s=$?; docker compose --profile test rm -sf
 | `ruby` | the minitest suite in the compose `test` service, on SQLite (the public default); its `test-postgres` is up too, as the SQLite → PostgreSQL copy test's target |
 | `ruby-pg` | the same suite on PostgreSQL: the `test` service's `test-postgres` (`postgres:16.10-alpine`, data on tmpfs; the test service runs in its network namespace), `DATABASE_ADAPTER=postgresql`; the coverage floor holds on both. Then a smoke over the compose `postgres` service as a deployment runs it (HOST_UID, Unix socket, scram, a wrong password refused) |
 | `frontend` | `tsc`, ESLint, Prettier and vitest in `frontend/` |
-| `audit` | `bundle-audit check --update` + `npm audit --audit-level=low`; any advisory fails, fixed by upgrading |
+| `flake` | each test file the change touches (vs `CI_BASE_REF`) run `CI_FLAKE_REPEATS` (5) times, in batches of `CI_RUNNER_CPUS` runs: a changed test file, and the tests that name a changed `lib/`, `bin/` or `cli/` file. Any other changed path (docs, `CHANGELOG.md`, config, the SPA, `test/support/`) or a deleted one repeats the whole suite. A heuristic, not coverage: an integration test that reaches a lib file only through the app is repeated only with the whole suite (`ruby` runs it once either way) |
+| `audit` | `bundle-audit check --update` + the image's libgit2 against its security releases + `npm audit --audit-level=low`; any advisory fails, fixed by upgrading |
 | `secrets` | gitleaks over the history |
+| `host` | the host-side programs' tests (`bin/yaks`, the launcher's rules, the installers) on the oldest host Ruby they support |
 
+What a run needs (CI passes the same; `.env.example` § CI):
+
+- Docker. The stages `ruby`, `ruby-pg`, `frontend` and `flake` run on the public runner's CPU count
+  (`scripts/ci/runner.env` `CI_RUNNER_CPUS`, 4) as a Docker CPU quota: the Docker host needs at least that many CPUs
+  and a daemon that applies `--cpus` (a rootless dockerd needs the cpu controller delegated to its user manager);
+  either missing → that stage is refused. `lint`, `audit`, `secrets` and `host` run on any host.
+- `CI_BASE_REF` for `flake` (and so `all`): the commit your change is measured against, e.g. `origin/main`.
+- `CI_GITHUB_READ_TOKEN` (a read-only GitHub token, e.g. `$(gh auth token)`) and `CI_GITHUB_CACHE_DIR` (any dir you
+  own) for `audit`.
+
+- **Time**: the code reads the clock only through `Busyyaks::Clock`, and a test never sleeps or waits with a timeout
+  itself — every wait is a `Wait` helper (`test/support/wait.rb`), an absence is asserted after the event that decides
+  it, a duration only from below (`Elapsed.at_least`); `test/unit/no_real_clock_test.rb` holds the rule.
 - The `test` service builds its own image (`busyyaks:test`), never the live `busyyaks:local`, so running the tests
   never restarts or migrates a running deployment.
 - **Every CPU**: the Ruby suite runs `rake test:parallel`, one worker process per test file (the suite mostly waits on
   I/O, so the OS shares the CPUs), each on its own copy of a once-migrated database (SQLite: a file copy; PostgreSQL: `CREATE DATABASE <db>_w<i> TEMPLATE <db>_template`, dropped after; `test/support/test_databases.rb`), attachments dir and launcher
   socket, all in a RAM `/tmp` (on disk every table wipe waits on fsync). `rake test` = the same files serially,
-  unmeasured (`TEST=<file>` for one). vitest runs with `--maxWorkers=$(nproc)`.
+  unmeasured (`TEST=<file>` for one). At most `TEST_WORKERS` files run at a time (`.env`; CI: `CI_RUNNER_CPUS`), and
+  vitest runs with `--maxWorkers=$CI_RUNNER_CPUS`.
 - **Coverage**: every `rake test:parallel` worker records SimpleCov line + branch coverage of `app/ config/ lib/ auth/`
   (tests and `vendor/` left out); the merged result is printed (`coverage: line … · branch …`) and the run fails below
   the floor in `test/support/coverage.rb` (line 95 % / branch 84 %, raised as the suite covers more, never lowered) or

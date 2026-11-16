@@ -2,6 +2,7 @@
 
 require "date"
 require "erb"
+require_relative "clock"
 
 module Busyyaks
   # GitHub-style contribution graph as inline SVG: 53 weeks × 7 days ending today, five levels by quartile.
@@ -10,7 +11,7 @@ module Busyyaks
     GAP = 3
     module_function
 
-    def svg(counts, today: Date.today)
+    def svg(counts, today: Busyyaks::Clock.today)
       start = today - 364 - ((today.wday - 0) % 7) # a Sunday, so columns are whole weeks
       max = counts.values.max.to_i
       days = (start..today).to_a
@@ -41,7 +42,7 @@ module Busyyaks
         "role=\"img\" aria-label=\"Commits per day, last year\">#{months.join}#{dows.join}#{cells.join}</svg>"
     end
 
-    def total(counts, today: Date.today)
+    def total(counts, today: Busyyaks::Clock.today)
       from = (today - 364).iso8601
       counts.sum { |d, n| d >= from ? n : 0 }
     end

@@ -87,19 +87,19 @@ module Busyyaks
 
       # the lock is held by a chooser that is starting or running: its record, within `wait` seconds, or Refused
       def running!(dir, wait)
-        deadline = Time.now + wait
+        deadline = Busyyaks::Clock.monotonic + wait
         loop do
           live = recorded(dir)
           return live if live
           raise Refused, "a chooser holds #{dir}/desktop.lock but answers on no recorded port after #{wait} s" \
-            if Time.now > deadline
+            if Busyyaks::Clock.monotonic > deadline
 
           sleep 0.1
         end
       end
 
       # a one-time launch code: <time>.<nonce>.<hmac of both under the chooser's secret>
-      def code(secret, now = Time.now.to_i)
+      def code(secret, now = Busyyaks::Clock.epoch)
         nonce = "#{now}.#{SecureRandom.hex(16)}"
         "#{nonce}.#{OpenSSL::HMAC.hexdigest('SHA256', secret, nonce)}"
       end
@@ -184,12 +184,13 @@ module Busyyaks
         # @seen = when a window's event stream last opened or closed (set by the stream itself: a window that comes and
         # goes between two checks still counts)
         def wait_for_windows
-          started = Time.now
+          started = Busyyaks::Clock.monotonic
           until @stop
             sleep 0.1
             clients, seen = @lock.synchronize { [@clients, @seen] }
             next if clients.positive?
-            break if seen ? Time.now - seen > @grace : Time.now - started > @first_window
+            now = Busyyaks::Clock.monotonic
+            break if seen ? now - seen > @grace : now - started > @first_window
           end
         end
 
@@ -357,9 +358,9 @@ module Busyyaks
         end
 
         def ready?(fwd, port, pid)
-          deadline = Time.now + @ready
+          deadline = Busyyaks::Clock.monotonic + @ready
           url = "http://#{DashboardUrl::LOOPBACK}:#{port}"
-          while Time.now < deadline
+          while Busyyaks::Clock.monotonic < deadline
             return true if Chooser.up?(url)
             return false unless alive?(pid)
 
@@ -457,7 +458,7 @@ module Busyyaks
         def use_code(given)
           time, nonce, mac = given.split(".", 3)
           return false unless time && nonce && mac && time.match?(/\A\d+\z/) &&
-                              (Time.now.to_i - time.to_i).between?(-5, CODE_TTL)
+                              (Busyyaks::Clock.epoch - time.to_i).between?(-5, CODE_TTL)
 
           want = OpenSSL::HMAC.hexdigest("SHA256", @secret, "#{time}.#{nonce}")
           return false unless want.bytesize == mac.bytesize && OpenSSL.fixed_length_secure_compare(want, mac)
@@ -477,7 +478,7 @@ module Busyyaks
                      "x-content-type-options: nosniff\r\n\r\n")
           @lock.synchronize do
             @clients += 1
-            @seen = Time.now
+            @seen = Busyyaks::Clock.monotonic
           end
           begin
             loop do
@@ -488,7 +489,7 @@ module Busyyaks
           ensure
             @lock.synchronize do
               @clients -= 1
-              @seen = Time.now
+              @seen = Busyyaks::Clock.monotonic
             end
           end
         end

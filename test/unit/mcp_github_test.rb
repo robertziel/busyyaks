@@ -28,7 +28,7 @@ class McpGithubTest < Minitest::Test
 
   def setup
     super
-    now = Time.now.to_i
+    now = Busyyaks::Clock.epoch
     login = ENV.fetch("GITHUB_LOGIN")
     db[:gh_runs].insert(login: login, started_at: now - 100, finished_at: now - 90, ok: true, baseline: true, calls: 9,
                         not_modified: 0, rate_limit: 5000, rate_remaining: 4991, rate_reset: now + 3000, followees: 2,
@@ -73,7 +73,7 @@ class McpGithubTest < Minitest::Test
   end
 
   def test_github_network_has_the_feed_part_and_check_report_verifies_it
-    now = Time.now.to_i
+    now = Busyyaks::Clock.epoch
     login = ENV.fetch("GITHUB_LOGIN")
     db[:gh_runs].where(login: login).update(feed_ok: true, feed_added: 2, feed_calls: 3, feed_not_modified: 0, feed_gap: false)
     db[:gh_events].insert(login: login, id: "901", type: "ReleaseEvent", action: "published", actor: "alice", actor_avatar: AV,
@@ -111,7 +111,8 @@ class McpGithubTest < Minitest::Test
   end
 
   def test_collector_error_is_in_status_and_block
-    db[:gh_runs].insert(login: ENV.fetch("GITHUB_LOGIN"), started_at: Time.now.to_i - 10, finished_at: Time.now.to_i - 5,
+    now = Busyyaks::Clock.epoch
+    db[:gh_runs].insert(login: ENV.fetch("GITHUB_LOGIN"), started_at: now - 10, finished_at: now - 5,
                         ok: false, baseline: false,
                         error: "GitHub rate limited (0/5000 left, resets 13:00) at /users/bob/starred")
     out = JSON.parse(tool("github_network", hours: 24)["content"][0]["text"])

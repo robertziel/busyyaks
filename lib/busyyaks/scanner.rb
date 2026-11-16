@@ -4,6 +4,7 @@ require "json"
 require_relative "icons"
 require_relative "git_read"
 require_relative "owner_remotes"
+require_relative "clock"
 
 module Busyyaks
   # Reads the git state of every repo under the configured roots — each repo in its own killable child (GitRead:
@@ -20,7 +21,7 @@ module Busyyaks
     CONFIG_KEYS = %w[branch.%{branch}.pushRemote remote.pushDefault branch.%{branch}.remote guard.mode
                      guard.mirrorRemote guard.upstreamRemote guard.publicRemote].freeze
 
-    def initialize(config, store, clock: -> { Time.now.to_i })
+    def initialize(config, store, clock: -> { Busyyaks::Clock.epoch })
       @config = config
       @store = store
       @clock = clock

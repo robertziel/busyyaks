@@ -44,7 +44,7 @@ class GitReadParityTest < Minitest::Test
     git!(dir, "rev-parse", "HEAD")
   end
 
-  NOW = Time.now.to_i
+  NOW = Busyyaks::Clock.epoch
   SINCE = NOW - (30 * 86_400)        # the scanner's window
   DAILY_SINCE = NOW - (371 * 86_400) # its daily series
   SCAN = { since: SINCE, max_commits: 500, daily_since: DAILY_SINCE, max_daily: 50_000,

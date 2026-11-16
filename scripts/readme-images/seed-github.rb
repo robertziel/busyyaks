@@ -3,12 +3,13 @@
 # The demo stack's merged PRs (the Today page's PR tile and list): what the `github` collector would have stored from a
 # GitHub search, written into the demo database directly — the demo runs no collector and holds no token. Synthetic
 # repos (acme/*) and titles only. Run by scripts/readme-images/build inside the demo web container:
-#   docker exec -i readme-demo-web-1 bundle exec ruby - < scripts/readme-images/seed-github.rb
+#   docker exec -i readme-demo-web-1 bundle exec ruby -I lib - < scripts/readme-images/seed-github.rb
 require "sequel"
+require "busyyaks/clock" # from the image's lib/ (-I lib): stdin has no file to require relative to
 
 login = ENV.fetch("GITHUB_LOGIN")
 db = Sequel.sqlite(ENV.fetch("SQLITE_PATH"))
-now = Time.now.to_i
+now = Busyyaks::Clock.epoch
 repos = %w[acme/storefront acme/payments-api acme/mobile-app acme/docs-site acme/infra].freeze
 titles = [
   "Paginate the product listing", "Fix currency rounding on invoices", "Upgrade to Ruby 3.4",

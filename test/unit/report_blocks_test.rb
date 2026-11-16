@@ -121,8 +121,8 @@ class ReportBlocksTest < Minitest::Test
     store.upsert_project(slug: "gh", path: "/p/gh", remote: "https://github.com/o/gh.git", branch: "main", own: true,
                          last_commit_at: 1, commits_window: 1, mine_window: 1, dirty: 0, unpushed: nil, scanned_at: 1)
     sha = "abcdef1234567"
-    store.replace_commits("gh", [{ sha: sha, author: "a", email: "a@x", committed_at: Time.now.to_i, subject: "fix the thing",
-                                   mine: true, }], 0)
+    store.replace_commits("gh", [{ sha: sha, author: "a", email: "a@x", committed_at: Busyyaks::Clock.epoch,
+                                   subject: "fix the thing", mine: true, }], 0)
     cards = html("```tl:cards\n- { repo: gh, shas: [#{sha}] }\n```\n")
     flags = html("```tl:flags\n- { level: warn, kind: breaking, repo: gh, sha: #{sha}, text: t }\n```\n")
     actions = html("```tl:actions\n- { priority: high, repo: gh, text: t }\n```\n")

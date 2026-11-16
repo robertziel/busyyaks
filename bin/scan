@@ -7,16 +7,17 @@ require "hanami/prepare"
 require "busyyaks/config"
 require "busyyaks/scanner"
 require "busyyaks/store"
+require "busyyaks/clock"
 
 interval = Integer(ENV.fetch("SCAN_INTERVAL_SECONDS"))
 config = Busyyaks::Config.load
 store = Busyyaks::Store.default
 $stdout.sync = true
 loop do
-  t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  t = Busyyaks::Clock.monotonic
   begin
     n = Busyyaks::Scanner.new(config, store).run
-    puts "scan ok repos=#{n} seconds=#{(Process.clock_gettime(Process::CLOCK_MONOTONIC) - t).round(1)}"
+    puts "scan ok repos=#{n} seconds=#{(Busyyaks::Clock.monotonic - t).round(1)}"
   rescue StandardError => e
     puts "scan FAILED #{e.class}: #{e.message}"
   end

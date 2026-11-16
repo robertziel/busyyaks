@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+require_relative "clock"
 
 module Busyyaks
   # All reads/writes, over the Sequel connection hanami-db already holds.
@@ -7,7 +8,7 @@ module Busyyaks
 
     attr_reader :db
 
-    def initialize(db, clock: -> { Time.now.to_i })
+    def initialize(db, clock: -> { Busyyaks::Clock.epoch })
       @db = db
       @clock = clock
     end
@@ -144,7 +145,7 @@ module Busyyaks
     # --- agents sidebar: when the operator last saw each session (herdr's "done" = a turn ended after that)
     # keys: the live sessions' keys; attached: the keys whose tmux session is attached now (= being looked at).
     # A key seen for the first time is recorded as seen now. → {key => seen_at}
-    def agent_seen(keys, attached: [], now: Time.now.to_f)
+    def agent_seen(keys, attached: [], now: Busyyaks::Clock.now.to_f)
       known = @db[:agent_seen].where(key: keys).select_hash(:key, :seen_at)
       ((keys - known.keys) | attached).each do |k|
         agent_seen!(k, now: now)
@@ -154,7 +155,7 @@ module Busyyaks
     end
 
     # an upsert on the key, the same SQL on SQLite and PostgreSQL (INSERT … ON CONFLICT (key) DO UPDATE)
-    def agent_seen!(key, now: Time.now.to_f)
+    def agent_seen!(key, now: Busyyaks::Clock.now.to_f)
       @db[:agent_seen].insert_conflict(target: :key, update: { seen_at: Sequel[:excluded][:seen_at] })
                       .insert(key: key, seen_at: now)
     end

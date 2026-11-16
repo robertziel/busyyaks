@@ -81,7 +81,7 @@ class WebTest < Minitest::Test
 
   def test_allowed_email_gets_the_shell_and_rendered_reports
     sign_in("Owner@example.com")
-    store.add_report(date: Date.today.iso8601, title: "Today report", body_md: "<script>x</script>\n\n**bold**",
+    store.add_report(date: Busyyaks::Clock.today.iso8601, title: "Today report", body_md: "<script>x</script>\n\n**bold**",
                      author: "claude")
     get "/"
     assert_equal 200, last_response.status
@@ -141,7 +141,7 @@ class WebTest < Minitest::Test
     store.upsert_project(attrs.merge(dirty: 2))
     dirty = api(:get, "/api/today/rev")["rev"]
     refute_equal first["rev"], dirty, "repo state"
-    store.add_report(date: Date.today.iso8601, title: "t", body_md: "b", author: "claude")
+    store.add_report(date: Busyyaks::Clock.today.iso8601, title: "t", body_md: "b", author: "claude")
     refute_equal dirty, api(:get, "/api/today/rev")["rev"], "a new report"
   end
 
@@ -196,11 +196,11 @@ class WebTest < Minitest::Test
 
   def test_commit_redirects_to_github_and_report_has_neighbours_toc_and_sha_links
     store.upsert_project(slug: "r", path: "/p/r", remote: "git@github.com:o/r.git", branch: "main", own: true,
-                         last_commit_at: Time.now.to_i, commits_window: 1, mine_window: 1, dirty: 0, unpushed: nil,
+                         last_commit_at: Busyyaks::Clock.epoch, commits_window: 1, mine_window: 1, dirty: 0, unpushed: nil,
                          scanned_at: 1)
-    commit = { sha: "abcdef1234567", author: "A B", email: "a@x", committed_at: Time.now.to_i, subject: "s", mine: true }
+    commit = { sha: "abcdef1234567", author: "A B", email: "a@x", committed_at: Busyyaks::Clock.epoch, subject: "s", mine: true }
     store.replace_commits("r", [commit], 0)
-    store.replace_daily("r", { Date.today.iso8601 => [3, 2] })
+    store.replace_daily("r", { Busyyaks::Clock.today.iso8601 => [3, 2] })
     a = store.add_report(date: "2026-10-31", title: "Old", body_md: "x", author: "c")
     b = store.add_report(date: "2026-11-01", title: "New", body_md: "## One\n\n## Two\n\n## Three `abcdef12`", author: "c")
     sign_in
@@ -227,22 +227,23 @@ class WebTest < Minitest::Test
     refute j["reports"][0].key?("html")
 
     j = api(:get, "/api/today")
-    assert_equal({ Date.today.iso8601 => 2 }, j["year"])
+    assert_equal({ Busyyaks::Clock.today.iso8601 => 2 }, j["year"])
     assert_equal 2, j["year_total"]
     assert_equal 3, j["year_all"]
     assert_equal "abcdef1234567", j["today_commits"][0]["sha"]
     assert_equal "https://github.com/o/r/commit/abcdef1234567", j["today_commits"][0]["url"]
     assert_equal ["r"], j["active_tree"].map { |n| n["project"]["slug"] }
     assert_equal Busyyaks::Config.load.window_days, j["days"].size
-    assert_equal({ "day" => Date.today.iso8601, "commits" => 1, "mine" => 1, "repos" => 1, "prs" => nil }, j["days"][0],
+    today = Busyyaks::Clock.today.iso8601
+    assert_equal({ "day" => today, "commits" => 1, "mine" => 1, "repos" => 1, "prs" => nil }, j["days"][0],
                  "PRs never read: unknown")
     assert_equal [[], 0, nil, nil], [j["merged_prs"], j["merged_prs_total"], j["pr_status"], j["stats"]["prs_today"]]
 
     db = Busyyaks::GithubNetwork::Data.default.db
-    db[:gh_pr_runs].insert(login: ENV.fetch("GITHUB_LOGIN"), since: (Date.today - 7).iso8601, started_at: 1, finished_at: 2,
-                           ok: true, found: 1, added: 1, calls: 1)
+    db[:gh_pr_runs].insert(login: ENV.fetch("GITHUB_LOGIN"), since: (Busyyaks::Clock.today - 7).iso8601, started_at: 1,
+                           finished_at: 2, ok: true, found: 1, added: 1, calls: 1)
     db[:gh_merged_prs].insert(login: ENV.fetch("GITHUB_LOGIN"), repo: "o/r", number: 5, title: "T",
-                              url: "https://github.com/o/r/pull/5", merged_at: Time.now.to_i, first_seen_at: 2)
+                              url: "https://github.com/o/r/pull/5", merged_at: Busyyaks::Clock.epoch, first_seen_at: 2)
     j = api(:get, "/api/today")
     assert_equal [1, 1], [j["stats"]["prs_today"], j["days"][0]["prs"]]
     assert_equal({ "repo" => "o/r", "number" => 5, "title" => "T", "url" => "https://github.com/o/r/pull/5",

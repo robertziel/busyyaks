@@ -16,6 +16,7 @@ require_relative "pr_states"
 require_relative "dashboard_url"
 require_relative "git_port"
 require_relative "session_git"
+require_relative "clock"
 
 module Busyyaks
   module Kanban
@@ -95,7 +96,7 @@ module Busyyaks
     end
 
     # A store over the app's connection (or any Sequel db, with a settable clock — tests).
-    def store(conn = db, clock: -> { Time.now.to_i })
+    def store(conn = db, clock: -> { Busyyaks::Clock.epoch })
       boards = ->(slug) { conn[:projects].where(slug: slug.to_s).any? }
       AgentsKanban::Store.new(conn, config: config(conn), markdown: markdown, clock: clock, boards: boards,
                               ci: ci_port(conn, clock: clock)) # approval.requires_green_ci
@@ -165,7 +166,7 @@ module Busyyaks
     # The idle watch's CI port: PR check status the github service polled (the token never leaves that service), the owner
     # branch and its last commit read here (SessionGit: the launcher names the session's dir, a GitRead child reads it).
     # An answer older than 3 poll intervals is Unavailable.
-    def ci_port(conn = db, clock: -> { Time.now.to_i })
+    def ci_port(conn = db, clock: -> { Busyyaks::Clock.epoch })
       interval = Integer(ENV.fetch("GITHUB_CI_INTERVAL_SECONDS"))
       CiChecks::Port.new(db: conn, projects: ->(slug) { conn[:projects].where(slug: slug.to_s).first },
                          approvals: ->(slug) { CiChecks.steps(store(conn, clock: clock).board_of(slug)) },

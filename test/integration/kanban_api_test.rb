@@ -172,7 +172,7 @@ class KanbanApiTest < Minitest::Test
     assert_equal [0, [[id, "no PR whose checks could be read"]]], [w["total"], w["held"][0]["cards"].map { |c|
  c.values_at("id", "gate_hold") },],
                  "card #248: a gate card that cannot be approved now waits for CI, not for you"
-    t = Time.now.to_i # its PR, read green by the github service
+    t = Busyyaks::Clock.epoch # its PR, read green by the github service
     Hanami.app["db.gateway"].connection[:gh_pr_checks].insert(repo: "o/r", ref: "pr:3", requested_at: t, checked_at: t,
                                                              number: 3, state: "success", finished_at: t)
     kb.assign_pr(id, url: "https://github.com/o/r/pull/3", role: "pr", by: "agent")
@@ -407,7 +407,7 @@ ans.values_at("body", "author")
   # the github service's answer for a card's PR: checks green, read just now (the approval gate reads it)
   def green_pr!(id)
     db = Hanami.app["db.gateway"].connection
-    now = Time.now.to_i
+    now = Busyyaks::Clock.epoch
     db[:gh_pr_checks].insert(repo: "o/r", ref: "pr:9", requested_at: now, checked_at: now, number: 9, state: "success",
                              finished_at: now)
     kb.assign_pr(id, url: "https://github.com/o/r/pull/9", role: "pr", by: "agent")

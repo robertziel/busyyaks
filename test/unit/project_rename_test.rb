@@ -18,7 +18,7 @@ class ProjectRenameTest < Minitest::Test
   def seed
     project("old")
     project("other")
-    now = Time.now.to_i
+    now = Busyyaks::Clock.epoch
     %w[old other].each do |s|
       db[:commits].insert(project_slug: s, sha: "a#{s}", author: "x", email: "x@example.com", committed_at: 1, subject: "s",
                           mine: false)

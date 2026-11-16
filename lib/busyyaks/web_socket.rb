@@ -2,6 +2,7 @@
 
 require "base64"
 require "digest"
+require_relative "clock"
 
 module Busyyaks
   # The server side of RFC 6455, as much as the terminal needs: the handshake, text messages each way,
@@ -126,7 +127,7 @@ module Busyyaks
       nil
     end
 
-    def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    def now = Clock.monotonic
 
     def read_len(n)
       raw = @io.read(n)

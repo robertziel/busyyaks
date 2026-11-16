@@ -1,7 +1,13 @@
 // busyyaks CI: every pushed branch runs scripts/ci/test.sh — RuboCop + ShellCheck, the Ruby suite (the compose `test`
-// service), the SPA's tsc + ESLint + vitest, the dependency audit (bundle-audit + npm audit), gitleaks over the full
-// history and the host-side tests on the oldest host Ruby (scripts/ci/test.sh host) — and reports ONE GitHub commit
-// status, context `jenkins/ci`, whose link is this build. A PR shows its head branch's status.
+// service), the SPA's tsc + ESLint + vitest, the flake gate (the tests the change touches, repeated), the
+// dependency audit (bundle-audit + npm audit), gitleaks over the full history and the host-side tests on the oldest host
+// Ruby (scripts/ci/test.sh host) — and reports ONE GitHub commit status, context `jenkins/ci`, whose link is this build.
+// A PR shows its head branch's status. The test stages run on the public runner's CPU quota (docker --cpus, scripts/ci/runner.env).
+//
+// Daily: the default branch's job (the one branch job: the filter builds only it and PRs) also builds once a
+// day, so an advisory published since the last push is found by that build, not by the next feature PR. A red DAILY
+// build opens (or comments on) the issue "Daily CI red on <branch>" on this repo (scripts/ci/github alert): GitHub
+// notifies the repo's watchers — the maintainer — of it.
 //
 // Jenkins side: a multibranch job reading this file from SCM (this repository's own branches and pull requests; a
 // fork's pull request is GitHub Actions', never here), an agent with a Docker CLI on a daemon it may start containers
@@ -39,6 +45,9 @@ pipeline {
 
   // No `triggers { githubPush() }`: the multibranch job's branch source already builds on the repo webhook's push
   // event, and a githubPush() trigger on the branch job built the same push a second time.
+  // The daily build: branch jobs only (no CHANGE_ID) — the job's filter leaves the default branch as the one branch job.
+  // A PR job gets cron('') = a TimerTrigger with an empty spec, which never fires.
+  triggers { cron(env.CHANGE_ID ? '' : 'H 5 * * *') }
 
   environment {
     BADGE_GIST_ID = 'f4d62c00382e99d2952e6185510eeb75'
@@ -67,10 +76,20 @@ pipeline {
             printf '%s' "$repo"
           ''').trim()
           env.DEFAULT_BRANCH = defaultBranch()
+          // the flake gate's base (scripts/ci/test.sh flake): a PR's target branch, fetched (a PR build checks out the
+          // PR head only); a branch build's previous commit
+          if (env.CHANGE_ID) {
+            withCredentials([string(credentialsId: 'github-pat', variable: 'GH_TOKEN')]) {
+              sh 'scripts/ci/github fetch-base "$CHANGE_TARGET"'
+            }
+            env.CI_BASE_REF = "refs/remotes/origin/${env.CHANGE_TARGET}"
+          } else {
+            env.CI_BASE_REF = 'HEAD~1'
+          }
           echo "Building ${env.GH_REPO}@${env.GIT_SHA} (${env.BRANCH_NAME}; default branch ${env.DEFAULT_BRANCH})"
           sh 'rm -rf "$WORKSPACE_TMP/ci-logs" "$WORKSPACE_TMP/badges"'
         }
-        notifyGitHub('pending', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + audit + secrets + host Ruby running')
+        notifyGitHub('pending', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + flake + audit + secrets + host Ruby running')
       }
     }
 
@@ -80,6 +99,7 @@ pipeline {
         stage('Ruby suite') { steps { gate('ruby') } }
         stage('Ruby suite (PostgreSQL)') { steps { gate('ruby-pg') } }
         stage('Frontend')   { steps { gate('frontend') } }
+        stage('Flake')      { steps { gate('flake') } }
         // the libgit2 audit reads GitHub authenticated: github-pat as CI_GITHUB_READ_TOKEN, by name
         stage('Audit')      { steps { withCredentials([string(credentialsId: 'github-pat', variable: 'CI_GITHUB_READ_TOKEN')]) { gate('audit') } } }
         stage('Secrets')    { steps { gate('secrets') } }
@@ -103,8 +123,11 @@ pipeline {
   }
 
   post {
-    success  { notifyGitHub('success', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + audit + secrets passed') }
-    failure  { notifyGitHub('failure', env.GATES_PASSED ? 'Gates passed; README badge update failed — see the build log' : 'CI failed — see the build log') }
+    success  { notifyGitHub('success', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + flake + audit + secrets passed') }
+    failure  {
+      notifyGitHub('failure', env.GATES_PASSED ? 'Gates passed; README badge update failed — see the build log' : 'CI failed — see the build log')
+      script { if (dailyBuild()) { alertGitHub("Daily CI red on ${env.BRANCH_NAME}", 'The daily build of this branch failed; the build log says which stage and why.') } }
+    }
     unstable { notifyGitHub('failure', 'CI unstable') }
     aborted  { notifyGitHub('error', 'Build aborted') }
     cleanup  { cleanWs() }
@@ -125,9 +148,25 @@ String requiredAgentLabel() {
 void gate(String suite) {
   sh """#!/usr/bin/env bash
     set -euo pipefail
+    export CI_GITHUB_CACHE_DIR="\$HOME/.cache/busyyaks-ci/github-etags"   # the agent user's, kept across builds
     mkdir -p "\$WORKSPACE_TMP/ci-logs"
     scripts/ci/test.sh ${suite} 2>&1 | tee "\$WORKSPACE_TMP/ci-logs/${suite}.log"
   """
+}
+
+// A build the cron trigger started (the daily build), not a push or a PR
+boolean dailyBuild() {
+  return !currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause').isEmpty()
+}
+
+// scripts/ci/github alert: the open issue with this title gets a comment, or a new issue is opened. Title and text reach
+// the script as env, so nothing Groovy-interpolates into the shell.
+void alertGitHub(String title, String text) {
+  withCredentials([string(credentialsId: 'github-pat', variable: 'GH_TOKEN')]) {
+    withEnv(["ALERT_TITLE=${title}", "ALERT_TEXT=${text}"]) {
+      sh 'scripts/ci/github alert "$ALERT_TITLE" "$ALERT_TEXT"'
+    }
+  }
 }
 
 // GitHub's default branch for this repo (scripts/ci/github default-branch). Unreadable fails the build.

@@ -8,7 +8,8 @@
 
 <!-- The tests added or changed, and anything run by hand. -->
 
-- [ ] `scripts/ci/test.sh all` is green (lint · ruby · frontend · audit · secrets)
+- [ ] `scripts/ci/test.sh all` is green (lint · ruby · ruby-pg · frontend · flake · audit · secrets · host; the env it
+      needs: CONTRIBUTING.md § Tests)
 - [ ] a test that fails without this change (fix) or covers what it does and refuses (feature)
 - [ ] no check excluded, skipped, disabled or loosened to pass
 - [ ] no edit under `vendor/agents_kanban/` or `frontend/src/vendor/agents_kanban/` (module changes go to

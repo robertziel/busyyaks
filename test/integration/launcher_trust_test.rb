@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require_relative "../support/wait"
+require_relative "../../lib/busyyaks/clock"
 require "tmpdir"
 require "fileutils"
 require "open3"
@@ -66,10 +68,12 @@ class LauncherTrustTest < Minitest::Test
       case "$1" in
         new-session)
           while [ "$1" != -s ]; do shift; done
-          if [ -e #{@pane} ]; then sh #{@pane} "$2" >/dev/null 2>&1 &
-          elif [ -e #{@refuse} ]; then sleep 300 >/dev/null 2>&1 &
-          elif [ -e #{@hermes} ]; then #{@bin}/hermes -c 'sleep 300; :' >/dev/null 2>&1 &
-          else #{@bin}/claude -c 'sleep 300; :' --remote-control "$2" >/dev/null 2>&1 & fi
+          # each pane its own process group (setsid): teardown ends the whole group, its `sleep`s too — a TERM to the
+          # pane's shell alone left them running 300 s (the flake gate's repeats ran out of tasks)
+          if [ -e #{@pane} ]; then setsid sh #{@pane} "$2" >/dev/null 2>&1 &
+          elif [ -e #{@refuse} ]; then setsid sleep 300 >/dev/null 2>&1 &
+          elif [ -e #{@hermes} ]; then setsid #{@bin}/hermes -c 'sleep 300; :' >/dev/null 2>&1 &
+          else setsid #{@bin}/claude -c 'sleep 300; :' --remote-control "$2" >/dev/null 2>&1 & fi
           echo $! >> #{@pids}; echo $! > #{@base}/pane.pid; date +%s.%N > #{@base}/started_at; exit 0 ;;
         list-panes) [ -e #{@base}/pane.pid ] && cat #{@base}/pane.pid && exit 0; exit 1 ;;
         kill-session) [ -e #{@base}/nokill ] && echo "server busy" >&2 && exit 1; exit 0 ;;
@@ -101,7 +105,7 @@ class LauncherTrustTest < Minitest::Test
   end
 
   def teardown
-    File.readlines(@pids).each { |p| Process.kill("TERM", p.to_i) rescue nil } if File.exist?(@pids)
+    File.readlines(@pids).each { |p| Process.kill("TERM", -p.to_i) rescue nil } if File.exist?(@pids) # each pane's group
     Process.kill("TERM", @pid) if @pid
     Process.wait(@pid) if @pid
     FileUtils.rm_rf(@base)
@@ -141,14 +145,10 @@ class LauncherTrustTest < Minitest::Test
     # its boot (ruby + the engine) took > 10 s on the CI host under load (66 test workers, load 60 on 20 CPUs): wait
     # for the socket to accept a connection, or the process's exit, up to BOOT_SECONDS. The file alone is not enough:
     # UNIXServer.new binds (the file appears) before it listens, and a connect in between is refused
-    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + BOOT_SECONDS
-    until Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
-      return if accepting?(sock)
+    Wait.for(-> { "the launcher's socket: #{File.read(@log)}" }, seconds: BOOT_SECONDS, every: 0.1) do
       flunk "the launcher exited: #{File.read(@log)}" if Process.waitpid(@pid, Process::WNOHANG)
-
-      sleep 0.1
+      accepting?(sock)
     end
-    flunk "no socket after #{BOOT_SECONDS}s: #{File.read(@log)}"
   end
 
   def accepting?(sock)
@@ -199,11 +199,12 @@ class LauncherTrustTest < Minitest::Test
       name = "race#{i}"
       clone = { "op" => "create", "root" => "/projects", "name" => name, "url" => "https://github.com/you/#{name}" }
       init = { "op" => "create", "root" => "/projects", "name" => name, "url" => "" }
-      threads = [Thread.new { ask(clone) }, Thread.new { sleep 0.001; ask(init) }]
+      threads = [Thread.new { ask(clone) }, Thread.new { Thread.pass; ask(init) }]
       results = threads.map(&:value)
       assert_operator results.count { |x| x["ok"] }, :<=, 1, "#{name}: #{results.inspect}"
     end
-    100.times { break if ask("op" => "jobs")["jobs"].all? { |j| j["status"] != "running" }; sleep 0.1 }
+    Wait.for("the clone jobs to end", seconds: 10, every: 0.1) { ask("op" => "jobs")["jobs"].all? { |j|
+ j["status"] != "running" } }
     trusted = created.map { |e| e["path"] }
     cloned = trusted.select { |p| File.exist?(File.join(p, "CLONED")) || Dir.exist?(File.join(p, ".git/objects/ab")) }
     assert_empty cloned, "a cloned repo was trusted"
@@ -220,7 +221,8 @@ class LauncherTrustTest < Minitest::Test
   def test_a_clone_is_never_trusted_and_inherits_nothing
     r = ask("op" => "create", "root" => "/projects", "name" => "", "url" => "https://github.com/you/app")
     assert_equal [true, false], r.values_at("ok", "trusted"), r.inspect
-    50.times { break if ask("op" => "jobs")["jobs"].all? { |j| j["status"] != "running" }; sleep 0.1 }
+    Wait.for("the clone job to end", seconds: 5, every: 0.1) { ask("op" => "jobs")["jobs"].all? { |j|
+ j["status"] != "running" } }
     assert File.directory?(File.join(@projects, "app/.git")), "the (stub) clone ran"
     assert_empty created, "a clone of an owner_remotes URL is not recorded"
     env = File.read(@clone_env).lines.to_h { |l| l.chomp.split("=", 2) }
@@ -328,25 +330,23 @@ class LauncherTrustTest < Minitest::Test
     Open3.capture3("git", "init", "-q", File.join(@projects, name))
   end
 
-  def timed
-    t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    r = yield
-    [r, Process.clock_gettime(Process::CLOCK_MONOTONIC) - t]
-  end
+  # bin/launcher refuses a bare pane after BARE_CHECKS looks 1 s apart: the seconds it reports are at least that many
+  # sleeps (its start clock floors)
+  BARE_SLEEPS = File.read(File.expand_path("../../bin/launcher", __dir__))[/^BARE_CHECKS = (\d+)$/, 1].to_i - 1
 
-  # seconds since the stub's `tmux new-session` started the pane (where the launcher's start clock starts)
-  def since_new_session = Time.now.to_f - File.read(File.join(@base, "started_at")).to_f
-
-  # a refusal "at once": the command-exited reason, its seconds = the launch's own clock (within the rounding, the
-  # kill and the answer's trip), and far below launch.start_seconds — whatever the machine's speed
-  def assert_refused_at_once(r, session)
-    since = since_new_session
+  # a refusal "at once": the command-exited reason (never the start_seconds one), and the seconds it names are the
+  # launch's own clock, bounded from below on both sides — at least the launcher's own sleeps, and the call took at
+  # least that long (no upper bound on real time, which a loaded runner breaks: 3.02 s against a 3 s bound
+  # in one run)
+  def assert_refused_at_once(session, &launch)
+    reported = ->(r) { r["error"][/the command exited after (\d+)s/, 1].to_i }
+    r = Elapsed.at_least(reported, "the error's seconds are the launch's clock", &launch)
     assert_equal [false, 422], r.values_at("ok", "status"), r.inspect
     m = r["error"].match(/\A#{session} did not start: the command exited after (\d+)s, no claude --remote-control #{session}: /)
     assert m, r["error"]
-    assert_in_delta since, m[1].to_i, 3, "the error's clock is the launch's: #{r['error']}"
-    assert_operator m[1].to_i, :<, START_SECONDS / 2
-    m[1].to_i
+    assert_operator m[1].to_i, :>=, BARE_SLEEPS, "the reported seconds are the launch's clock, not a constant: #{r['error']}"
+    refute_match(/launch\.start_seconds/, r["error"], "refused on the exit, not after the start wait")
+    r
   end
 
   # a wrapper (a shell function starting a gateway, an ssh forward) that works longer than the old fixed 12 s, then
@@ -354,9 +354,8 @@ class LauncherTrustTest < Minitest::Test
   def test_a_slow_wrapper_that_then_starts_claude_is_ok
     planted("slow")
     File.write(@pane, "sleep 13; exec #{@bin}/claude -c 'sleep 300; :' --remote-control \"$1\"\n")
-    r, took = timed { launch("slow") }
+    r = Elapsed.at_least(12, "the wrapper's 13 s were waited out") { launch("slow") }
     assert_equal [true, "on", "slow_s"], r.values_at("ok", "remote_control", "remote_control_name"), r.inspect
-    assert_operator took, :>, 12
     refute_includes tmux_calls, "kill-session"
   end
 
@@ -364,8 +363,7 @@ class LauncherTrustTest < Minitest::Test
   def test_a_command_that_exits_at_once_is_refused_fast_with_the_pane_tail
     planted("gone")
     File.write(@refuse, "")
-    r = launch("gone")
-    assert_refused_at_once(r, "gone_s")
+    r = assert_refused_at_once("gone_s") { launch("gone") }
     assert_match(/: Temp directory/, r["error"])
     assert_match(/kill-session -t =gone_s/, tmux_calls)
   end
@@ -375,12 +373,11 @@ class LauncherTrustTest < Minitest::Test
     restart(4)
     planted("stuck")
     File.write(@pane, "sleep 30; :\n")
-    r, took = timed { launch("stuck") }
+    r = Elapsed.at_least(4, "launch.start_seconds 4 waited out") { launch("stuck") }
     assert_equal [false, 422], r.values_at("ok", "status"), r.inspect
     m = r["error"].match(/\Astuck_s did not start: no claude --remote-control stuck_s after (\d+)s \(launch.start_seconds 4\)/)
     assert m, r["error"]
     assert_operator m[1].to_i, :>=, 4
-    assert_operator took, :>=, 4
     assert_match(/kill-session -t =stuck_s/, tmux_calls)
   end
 
@@ -415,8 +412,9 @@ class LauncherTrustTest < Minitest::Test
   def test_a_trusted_repo_whose_command_exits_at_once_is_refused_fast_with_the_true_elapsed
     ask("op" => "create", "root" => "/projects", "name" => "tgone", "url" => "")
     File.write(@refuse, "")
-    # the trust wait (15 s) ended on the bare shell: refused before it would have run out
-    assert_operator assert_refused_at_once(launch("tgone"), "tgone_s"), :<, 15
+    # the trust wait (15 s) ended on the bare shell: refused on the exit, never on the trust wait's end
+    r = assert_refused_at_once("tgone_s") { launch("tgone") }
+    refute_match(/trust/i, r["error"])
     refute_includes tmux_calls, "Enter", "nothing answered on a pane that is a bare shell"
   end
 
@@ -424,10 +422,9 @@ class LauncherTrustTest < Minitest::Test
   def test_a_trusted_repo_with_a_slow_wrapper_is_ok
     ask("op" => "create", "root" => "/projects", "name" => "tslow", "url" => "")
     File.write(@pane, "sleep 13; exec #{@bin}/claude -c 'sleep 300; :' --remote-control \"$1\"\n")
-    r, took = timed { launch("tslow") }
+    r = Elapsed.at_least(12, "the wrapper's 13 s were waited out") { launch("tslow") }
     assert_equal [true, "accepted", "on", "tslow_s"], r.values_at("ok", "trust", "remote_control", "remote_control_name"),
                  r.inspect
-    assert_operator took, :>, 12
     refute_includes tmux_calls, "kill-session"
   end
 end

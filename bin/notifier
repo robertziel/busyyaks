@@ -5,6 +5,7 @@
 # watchdog every NOTIFIER_WATCH_SECONDS (cards whose session is gone for WATCHDOG_GRACE_SECONDS are released).
 require "hanami/prepare"
 require "busyyaks/kanban"
+require "busyyaks/clock"
 
 interval = Integer(ENV.fetch("NOTIFIER_INTERVAL_SECONDS"))
 watch_every = Integer(ENV.fetch("NOTIFIER_WATCH_SECONDS"))
@@ -25,7 +26,7 @@ loop do
     puts "notifier: agent settings revision #{rev}"
   end
   n.deliver
-  if Time.now.to_i - last_watch >= watch_every
+  if Busyyaks::Clock.epoch - last_watch >= watch_every
     # Re-read config/kanban.yml with the vendored engine every watch pass (the file part is memoized at boot), with the
     # current agent settings revision: a config the engine refuses stops the notifier loudly instead of leaving pings
     # and the watchdog silently dead.
@@ -37,7 +38,7 @@ loop do
       exit 1
     end
     n.watch
-    last_watch = Time.now.to_i
+    last_watch = Busyyaks::Clock.epoch
   end
   sleep interval
 end

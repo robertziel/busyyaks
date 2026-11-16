@@ -13,7 +13,8 @@ require "tmpdir"
 class YaksTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
   FILES = ["bin/yaks", "cli/yaks.rb", *Dir.glob("cli/yaks/*.rb", base: ROOT),
-           "lib/busyyaks/env_file.rb", "lib/busyyaks/dashboard_url.rb", "lib/busyyaks/deploy_template.rb",].freeze
+           "lib/busyyaks/clock.rb", "lib/busyyaks/env_file.rb", "lib/busyyaks/dashboard_url.rb",
+           "lib/busyyaks/deploy_template.rb",].freeze
 
   def setup
     @root = File.realpath(Dir.mktmpdir("yaks"))

@@ -3,6 +3,7 @@
 require "json"
 require "yaml"
 require_relative "../../vendor/agents_kanban/ruby/lib/agents_kanban/host_config"
+require_relative "clock"
 
 module Busyyaks
   # The agent settings: the engine host config's `launchers` (the commands that start an agent session) and
@@ -141,7 +142,7 @@ module Busyyaks
 
     # Write a new revision from `doc`, based on revision `base` (the one the editor loaded): validated by the engine
     # against the file's settings, every command on `commands`, `base` still the newest → the new revision's id.
-    def save!(db, file:, doc:, base:, author:, commands:, clock: -> { Time.now.to_i })
+    def save!(db, file:, doc:, base:, author:, commands:, clock: -> { Busyyaks::Clock.epoch })
       begin
         allowed!(host(file, doc), commands)
       rescue AgentsKanban::ConfigError, AgentsKanban::Invalid => e

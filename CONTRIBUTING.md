@@ -25,10 +25,21 @@ To run the app itself, follow the [Quickstart](README.md#quickstart).
 ## Tests
 
 ```bash
-scripts/ci/test.sh all       # lint · ruby · frontend · audit · secrets — what CI runs; needs only Docker
-scripts/ci/test.sh ruby      # one stage: lint | ruby | frontend | audit | secrets
+# what CI runs: lint · ruby · ruby-pg · frontend · flake · audit · secrets · host, at once
+CI_BASE_REF=origin/main CI_GITHUB_READ_TOKEN=$(gh auth token) CI_GITHUB_CACHE_DIR=~/.cache/busyyaks-ci scripts/ci/test.sh all
+scripts/ci/test.sh ruby      # one stage: lint | ruby | ruby-pg | frontend | flake | audit | secrets | host
 scripts/lint/rubocop -a      # RuboCop autocorrect
 ```
+
+What a local run needs (the same as CI; `.env.example` § CI):
+
+- Docker. The stages `ruby`, `ruby-pg`, `frontend` and `flake` run on the public runner's CPU count
+  (`scripts/ci/runner.env` `CI_RUNNER_CPUS`, 4) as a Docker CPU quota: the Docker host needs at least that many CPUs
+  and a daemon that applies `--cpus` (a rootless dockerd needs the cpu controller delegated to its user manager);
+  either missing → that stage is refused. `lint`, `audit`, `secrets` and `host` run on any host.
+- `CI_BASE_REF` for `flake` (and so `all`): the commit your change is measured against, e.g. `origin/main`.
+- `CI_GITHUB_READ_TOKEN` (a read-only GitHub token, e.g. `$(gh auth token)`) and `CI_GITHUB_CACHE_DIR` (any dir you
+  own) for `audit`.
 
 A pull request is reviewed once `scripts/ci/test.sh all` is green. Stages, parallelism and coverage floors:
 [`docs/TESTING.md`](docs/TESTING.md).

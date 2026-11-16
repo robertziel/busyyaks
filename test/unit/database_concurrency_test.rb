@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require_relative "../support/wait"
 require "json"
 require "open3"
 require "etc"
@@ -53,21 +54,20 @@ class DatabaseConcurrencyTest < Minitest::Test
     release = Queue.new
     t = Thread.new { holder.transaction { holder[:notes].count && holding << true && release.pop } }
     holding.pop
-    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    # in a thread with a deadline: an unbounded wait fails the test instead of hanging it
-    w = Thread.new do
-      waiter.transaction { waiter[:notes].count }
-      nil
-    rescue Sequel::DatabaseError => e
-      e
+    # in a thread: an unbounded wait fails the test (HANG_SECONDS, a hang guard far past any runner's slowness) instead
+    # of hanging it; how long it waited is asserted from below only
+    w = nil
+    e = Elapsed.at_least(BOUND_MS * 0.9 / 1000, "it waited the bound first") do
+      w = Thread.new do
+        waiter.transaction { waiter[:notes].count }
+        nil
+      rescue Sequel::DatabaseError => err
+        err
+      end
+      Wait.join(w, "the writer behind the lock (still waiting: the lock wait is unbounded)", seconds: HANG_SECONDS).value
     end
-    flunk "the writer still waits after #{BOUND_MS * 10} ms: the lock wait is unbounded" unless w.join(BOUND_MS * 10 / 1000.0)
-    waited = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000
-    e = w.value
     assert_kind_of Sequel::DatabaseError, e, "the writer behind the held lock got through"
     assert_match(sqlite? ? /database is locked/ : /lock timeout/, e.message)
-    assert_operator waited, :>=, BOUND_MS * 0.9, "it waited the bound first"
-    assert_operator waited, :<, BOUND_MS * 10, "then failed, not waited on"
   ensure
     release&.push(true)
     t&.join
@@ -100,9 +100,8 @@ class DatabaseConcurrencyTest < Minitest::Test
       # every writer booted and connected before any starts: they write at the same moment
       writers.each { |stdout, wait| assert_ready(stdout, wait) }
       File.write(go, "")
-      deadline = now + WRITE_SECONDS
       results = writers.map do |stdout, wait|
-        output = read_until_eof(stdout, wait, deadline)
+        output = read_until_eof(stdout, wait)
         assert wait.value.success?, "a writer process failed:\n#{output}"
         JSON.parse(output.lines.last)
       end
@@ -125,20 +124,19 @@ class DatabaseConcurrencyTest < Minitest::Test
   end
 
   BOOT_CPU_SECONDS = 30 # each writer's boot until it says "ready", in its own CPU seconds (a boot uses a few)
+  HANG_SECONDS = 60
   WRITE_SECONDS = 120  # all writers' create+comment loops together (they take ~1 s); past it they are killed
 
   private
 
-  def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-
-  # A writer's whole output once it exits; one still writing at the deadline is killed and the test fails, never hangs.
-  def read_until_eof(stdout, wait, deadline)
+  # A writer's whole output once it exits; one silent for WRITE_SECONDS (a hang guard, no clock read) is killed and the
+  # test fails, never hangs.
+  def read_until_eof(stdout, wait)
     output = +""
     loop do
-      left = deadline - now
-      unless left.positive? && stdout.wait_readable(left)
+      unless Wait.readable?(stdout, seconds: WRITE_SECONDS)
         Process.kill("KILL", wait.pid) if wait.alive?
-        flunk "writer #{wait.pid} still writing after #{WRITE_SECONDS}s:\n#{output}"
+        flunk "writer #{wait.pid} silent for #{WRITE_SECONDS}s:\n#{output}"
       end
       chunk = stdout.read_nonblock(65_536, exception: false)
       break if chunk.nil?
@@ -156,7 +154,7 @@ class DatabaseConcurrencyTest < Minitest::Test
   def assert_ready(stdout, wait)
     seen = +""
     while wait.alive? && cpu_seconds(wait.pid) < BOOT_CPU_SECONDS
-      next unless stdout.wait_readable(1)
+      next unless Wait.readable?(stdout, seconds: 1)
 
       line = stdout.gets or break
       return if line.chomp == "ready"

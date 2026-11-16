@@ -8,7 +8,7 @@ require "busyyaks/db_copy"
 
 # bin/db-copy-sqlite-to-postgres (lib/busyyaks/db_copy.rb): a SQLite file migrated by the app's migrations, rows in
 # EVERY table, copied into an empty PostgreSQL database and verified. The target is a scratch database
-# <POSTGRES_DB>_<name> on the test service's PostgreSQL (compose test-postgres, POSTGRES_*), whichever adapter the
+# <POSTGRES_DB>_<name>_<pid> on the test service's PostgreSQL (compose test-postgres, POSTGRES_*), whichever adapter the
 # suite itself runs on.
 class DBCopyTest < Minitest::Test
   ROWS = 3
@@ -165,7 +165,9 @@ class DBCopyTest < Minitest::Test
   end
 
   def scratch_target(suffix)
-    @scratch = "#{@env.fetch('POSTGRES_DB')}_#{suffix}"
+    # this process's own: two runs of this file at once (the flake gate) shared one name and dropped each
+    # other's target ("database busyyaks_copy does not exist")
+    @scratch = "#{@env.fetch('POSTGRES_DB')}_#{suffix}_#{Process.pid}"
     drop(@scratch)
     admin { |a| a.run("CREATE DATABASE #{a.literal(Sequel.identifier(@scratch))}") }
     Busyyaks::Database.from_env(@env.merge("POSTGRES_DB" => @scratch))

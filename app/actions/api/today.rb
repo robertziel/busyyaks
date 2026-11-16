@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "busyyaks/clock"
+
 module Busyyaks
   module Actions
     module API
@@ -8,7 +10,7 @@ module Busyyaks
       # (DailyStats, GithubPrs), the repos active in 7 days as a tree, launch state.
       class Today < Busyyaks::APIAction
         def handle(_req, res)
-          now = Time.now
+          now = Busyyaks::Clock.now
           today = now.to_date.iso8601
           midnight = Time.new(now.year, now.month, now.day).to_i
           week = now.to_i - (7 * 86_400)

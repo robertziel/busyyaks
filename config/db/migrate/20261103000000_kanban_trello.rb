@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "busyyaks/clock"
 
 # Trello parity for the kanban (lib/busyyaks/kanban.rb):
 # - board_labels: each board's label set (name + colour key from Kanban::LABEL_COLORS). cards.labels keeps the names.
@@ -50,7 +51,7 @@ ROM::SQL.migration do
       index :checklist_id
     end
 
-    now = Time.now.to_i
+    now = Busyyaks::Clock.epoch
     seen = {}
     self[:cards].select(:project_slug, :labels).each do |r|
       JSON.parse(r[:labels]).each do |name|

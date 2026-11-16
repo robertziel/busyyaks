@@ -9,6 +9,7 @@ require "socket"
 require "stringio"
 require "tmpdir"
 require_relative "../../cli/yaks"
+require_relative "../support/wait"
 
 # `yaks remote …` and `yaks env --ports` (the desktop chooser: cli_chooser_test.rb): the exact ssh argv,
 # every refusal, the --stdio bridge against a fake launcher socket, the attach client's frames.
@@ -227,7 +228,7 @@ class CliRemoteTest < Minitest::Test
     w.write(%({"op":"attach","session":"s1","socket":"default"}\n{"control":true}\n))
     w.close
     code, out, = yaks("remote", "--stdio", stdin: r)
-    thread.join(5)
+    Wait.join(thread, "the fake launcher's thread", seconds: 5)
     assert_equal 0, code
     assert_equal [%({"op":"attach","session":"s1","socket":"default"}\n), %({"control":true}\n)], got
     lines = out.lines.map { JSON.parse(_1) }

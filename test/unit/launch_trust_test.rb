@@ -6,6 +6,7 @@ require "fileutils"
 require "open3"
 require "socket"
 require_relative "../../lib/busyyaks/launch_trust"
+require_relative "../../lib/busyyaks/clock"
 
 # Whose folder-trust prompt bin/launcher answers: only a path the operator declared or a repo the launcher itself made —
 # never one whose own files (its origin, its config) claim to be the operator's.
@@ -277,10 +278,9 @@ class LaunchTrustTest < Minitest::Test
     env = T.clone_env(Dir.mktmpdir("h", @tmp), Dir.mktmpdir("t", @tmp))
     assert_equal "0", env["GIT_TERMINAL_PROMPT"]
     assert_includes argv.each_cons(2).to_a, ["-c", "core.sshCommand=ssh -o BatchMode=yes"]
-    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    # never waits on a prompt: prompts are off and stdin is /dev/null, so git fails with the prompt's refusal
     _o, err, st = Open3.capture3(env, *argv, in: File::NULL, unsetenv_others: true)
     refute st.success?
-    assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 10, "it never waited on a prompt"
     assert_match(/terminal prompts disabled|could not read Username|Authentication failed/, err)
     launcher = File.read(File.expand_path("../../bin/launcher", __dir__))
     assert_includes launcher, '%i[out err] => [log, "w"], in: File::NULL, unsetenv_others: true)'

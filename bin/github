@@ -11,6 +11,7 @@ require "busyyaks/ci_checks"
 require "busyyaks/pr_states"
 require "busyyaks/github_prs"
 require "busyyaks/config"
+require "busyyaks/clock"
 
 interval = Integer(ENV.fetch("GITHUB_INTERVAL_SECONDS"))
 login = ENV.fetch("GITHUB_LOGIN")
@@ -49,15 +50,15 @@ Thread.new do
   end
 end
 loop do
-  t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  t = Busyyaks::Clock.monotonic
   client = Busyyaks::GithubNetwork::Client.new(token: token)
   r = Busyyaks::GithubNetwork::Collector.new(login: login, client: client, data: data).run
-  secs = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t).round(1)
+  secs = (Busyyaks::Clock.monotonic - t).round(1)
   stats = "followees=#{r[:followees]} stars_added=#{r[:stars_added]} follows_added=#{r[:follows_added]} calls=#{r[:calls]} " \
           "304=#{r[:not_modified]} rate=#{r[:rate_remaining]}/#{r[:rate_limit]} baseline=#{r[:baseline]} seconds=#{secs} " \
           "feed=#{r[:feed_ok] ? 'ok' : "FAILED(#{r[:feed_error]})"} feed_added=#{r[:feed_added]} feed_calls=#{r[:feed_calls]} feed_304=#{r[:feed_not_modified]} feed_gap=#{r[:feed_gap]}"
   puts r[:ok] ? "github ok #{stats}" : "github FAILED #{r[:error]} #{stats}"
-  since = Date.today - window_days
+  since = Busyyaks::Clock.today - window_days
   pr = Busyyaks::GithubPrs.collect(db: data.db, client: client, login: login, since: since)
   puts pr[:ok] ? "merged prs ok since=#{since} found=#{pr[:found]} added=#{pr[:added]} calls=#{pr[:calls]}" : "merged prs FAILED #{pr[:error]}"
   break if ENV["GITHUB_ONCE"] == "1"
