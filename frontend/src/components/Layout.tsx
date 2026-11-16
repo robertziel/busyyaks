@@ -5,6 +5,7 @@ import { Link, NavigationType, NavLink, Outlet, useLocation, useNavigationType }
 import { CardPeek, type CardData } from "../vendor/agents_kanban";
 import { apiGet } from "../api";
 import { Agents, type AgentTotals } from "./Agents";
+import { ConnectionBadge, ConnectionBanner, useHealth } from "./Connection";
 import { FlashView, useFlash } from "./Flash";
 import { Search } from "./Search";
 import { Settings } from "./Settings";
@@ -22,6 +23,7 @@ export function Layout() {
   const [totals, setTotals] = useState<AgentTotals | null>(null);
   const top = useRef<HTMLElement>(null);
   const asideRef = useRef<HTMLElement>(null);
+  const health = useHealth();
 
   // the sticky toolbar / thead / rail offsets (CSS var --top-h) follow the header's real height
   useLayoutEffect(() => {
@@ -82,6 +84,7 @@ export function Layout() {
           </nav>
           <Search />
           <span className="spacer" />
+          <ConnectionBadge health={health} />
           <button
             type="button"
             className="btn small agents-toggle"
@@ -105,6 +108,7 @@ export function Layout() {
           <Settings />
         </div>
       </header>
+      <ConnectionBanner health={health} />
       <div className="shell">
         <main className="wrap">
           {flash && <FlashView flash={flash} onClose={() => setFlash(null)} />}

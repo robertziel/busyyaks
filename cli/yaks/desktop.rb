@@ -2,13 +2,17 @@
 
 require "fileutils"
 require "optparse"
+require "rbconfig"
 require_relative "../../lib/busyyaks/dashboard_url"
 
 module Busyyaks
   module CLI
-    # `yaks desktop install --browser NAME` / `yaks desktop uninstall`: the dashboard as a desktop app on the
-    # machine the operator works at — an app-menu entry that opens DashboardUrl.origin in a window of its own (the
-    # browser's `--app=<url>`: no tabs, no address bar; the window takes the web app manifest's name and icon).
+    # `yaks desktop install --browser NAME` / `yaks desktop uninstall`: the dashboard as a desktop app on the machine the
+    # operator works at — an app-menu entry that opens a window of its own (the browser's `--app=<url>`: no tabs, no
+    # address bar; the window takes the web app manifest's name and icon). The entry starts `yaks desktop open`
+    # (Chooser) — Local (DashboardUrl.origin, the default) and the saved remote servers; each is opened in its own window
+    # from there. The entry runs this checkout's bin/yaks with the Ruby that installed it (RbConfig.ruby: a desktop
+    # session's PATH may hold another, or none).
     #
     # Unlike the rest of `yaks` (Linux only: Host.stack!), this runs on every Unix with a desktop, one family each:
     #   XDG (Linux, FreeBSD, OpenBSD, NetBSD, DragonFly) → ~/.local/share/applications/busyyaks.desktop (Desktop Entry
@@ -46,7 +50,8 @@ module Busyyaks
         case (sub = args.shift)
         when "install" then install(ctx, args, family)
         when "uninstall" then uninstall(ctx, args, family)
-        else raise Usage, "desktop needs install or uninstall#{" (got #{sub.inspect})" if sub}"
+        when "open" then open(ctx, args, family)
+        else raise Usage, "desktop needs install, uninstall or open#{" (got #{sub.inspect})" if sub}"
         end
       end
 
@@ -57,31 +62,65 @@ module Busyyaks
         raise Refused, "yaks desktop runs on #{(XDG_OSES + ['Darwin (macOS)']).join(', ')}; this is #{os}"
       end
 
+      SLUG = "busyyaks"
+
+      # the entry's command: this checkout's yaks, run by the Ruby that installed it, opening the chooser
+      def command(ctx, exe) = [RbConfig.ruby, File.join(ctx.home, "bin/yaks"), "desktop", "open", "--browser", exe]
+
       def install(ctx, args, family)
         browser = nil
         CLI.parse!(OptionParser.new { |o| o.on("--browser NAME") { browser = _1 } }, args)
         CLI.no_more!(args)
-        names = family == :mac ? MAC_APPS.keys : CHROMIUM
-        raise Usage, "desktop install needs --browser NAME (one of: #{names.join(', ')})" unless browser
-        unless names.include?(browser)
-          raise Refused, "--browser #{browser}: not a Chromium-family browser here (#{names.join(', ')}); only those " \
-                         "open a window of its own with --app"
-        end
-        exe = family == :mac ? mac_browser!(ctx, browser) : ctx.runner.which(browser)
-        raise Refused, "#{browser} not on PATH" unless exe
+        raise Usage, "desktop install needs --browser NAME (one of: #{names(family).join(', ')})" unless browser
 
+        exe = browser!(ctx, browser, family)
         icon = File.join(ctx.home, ICON)
         raise Refused, "#{ICON} missing in #{ctx.home}" unless File.file?(icon)
 
-        origin = url(ctx)
-        path = family == :mac ? install_mac(ctx, exe, origin, icon) : install_xdg(ctx, exe, origin, icon)
-        ctx.out.puts "installed #{path}: busyyaks in the applications (#{browser} --app=#{origin})"
+        argv = command(ctx, exe)
+        path = family == :mac ? install_mac(ctx, argv, icon) : install_xdg(ctx, argv, icon)
+        ctx.out.puts "installed #{path}: busyyaks in the applications — it opens the server chooser (Local, the " \
+                     "default, and the saved servers: yaks remote add) in #{browser}"
         0
       end
 
-      def uninstall(ctx, args, family)
+      def names(family) = family == :mac ? MAC_APPS.keys : CHROMIUM
+
+      # NAME → that browser's binary (XDG: on PATH; macOS: in its app bundle); `open` also takes the absolute path an
+      # entry recorded, only when it is one of those browsers' binaries
+      def browser!(ctx, browser, family)
+        if browser.start_with?("/")
+          return browser if known_binary?(browser, family) && File.file?(browser) && File.executable?(browser)
+
+          raise Refused, "--browser #{browser}: not an executable Chromium-family browser (#{names(family).join(', ')})"
+        end
+        unless names(family).include?(browser)
+          raise Refused, "--browser #{browser}: not a Chromium-family browser here (#{names(family).join(', ')}); " \
+                         "only those open a window of its own with --app"
+        end
+        exe = family == :mac ? mac_browser!(ctx, browser) : ctx.runner.which(browser)
+        exe || raise(Refused, "#{browser} not on PATH")
+      end
+
+      def known_binary?(path, family)
+        return CHROMIUM.include?(File.basename(path)) if family == :xdg
+
+        MAC_APPS.values.any? { |app| path.end_with?("/#{app}.app/Contents/MacOS/#{app}") }
+      end
+
+      def open(ctx, args, family)
+        browser = nil
+        CLI.parse!(OptionParser.new { |o| o.on("--browser NAME") { browser = _1 } }, args)
         CLI.no_more!(args)
-        path = family == :mac ? bundle_path(ctx) : entry_path(ctx)
+        raise Usage, "desktop open needs --browser NAME (one of: #{names(family).join(', ')})" unless browser
+
+        Chooser.open(ctx, browser!(ctx, browser, family))
+      end
+
+      def uninstall(ctx, args, family)
+        CLI.parse!(OptionParser.new, args)
+        CLI.no_more!(args)
+        path = family == :mac ? bundle_path(ctx, SLUG) : entry_path(ctx, SLUG)
         raise Refused, "not installed: no #{path}" unless present?(path)
 
         mine!(ctx, path, family)
@@ -97,8 +136,8 @@ module Busyyaks
         home
       end
 
-      def entry_path(ctx) = File.join(home!(ctx), ".local/share/applications/busyyaks.desktop")
-      def bundle_path(ctx) = File.join(home!(ctx), "Applications/busyyaks.app")
+      def entry_path(ctx, slug) = File.join(home!(ctx), ".local/share/applications/#{slug}.desktop")
+      def bundle_path(ctx, slug) = File.join(home!(ctx), "Applications/#{slug}.app")
 
       # something at path (lstat: a dangling link counts); a symlink there → refused: install would write, and
       # uninstall delete, through it to wherever it points
@@ -120,12 +159,6 @@ module Busyyaks
         raise Refused, "#{path} is not this checkout's entry (#{owner ? "#{key}=#{owner}" : "no #{key}"}): left as is"
       end
 
-      def url(ctx)
-        DashboardUrl.origin(ctx.dotenv)
-      rescue DashboardUrl::Invalid => e
-        raise Refused, ".env: #{e.message}"
-      end
-
       def no_control!(value)
         return value unless value.match?(/[[:cntrl:]]/)
 
@@ -134,13 +167,13 @@ module Busyyaks
 
       # --- XDG: a Desktop Entry ---------------------------------------------------------------------------------------
 
-      def install_xdg(ctx, exe, origin, icon)
-        path = entry_path(ctx)
+      def install_xdg(ctx, argv, icon)
+        path = entry_path(ctx, SLUG)
         mine!(ctx, path, :xdg) if present?(path)
         FileUtils.mkdir_p(File.dirname(path))
         tmp = "#{path}.new-#{Process.pid}"
         begin
-          File.write(tmp, entry(exe, origin, icon, ctx.home))
+          File.write(tmp, entry(argv, icon, ctx.home))
           File.rename(tmp, path) # atomic: the old entry stays whole until the new one replaces it
         ensure
           FileUtils.rm_f(tmp)
@@ -152,13 +185,13 @@ module Busyyaks
         File.directory?(path) ? nil : File.read(path)[/^#{MARK}=(.*)$/, 1]&.then { unescape(_1) }
       end
 
-      def entry(exe, url, icon, home)
+      def entry(argv, icon, home)
         <<~DESKTOP
           [Desktop Entry]
           Type=Application
           Name=busyyaks
-          Comment=busyyaks dashboard
-          Exec=#{string([exe, "--app=#{url}"].map { exec_arg(_1) }.join(' ').gsub('%', '%%'))}
+          Comment=busyyaks dashboard: this machine or a remote server
+          Exec=#{string(argv.map { exec_arg(_1) }.join(' ').gsub('%', '%%'))}
           Icon=#{string(icon)}
           Terminal=false
           Categories=Development;
@@ -180,14 +213,14 @@ module Busyyaks
 
       # --- macOS: an app bundle ---------------------------------------------------------------------------------------
 
-      def install_mac(ctx, exe, origin, icon)
-        path = bundle_path(ctx)
+      def install_mac(ctx, argv, icon)
+        path = bundle_path(ctx, SLUG)
         old = present?(path)
         mine!(ctx, path, :mac) if old
         # built beside it, then swapped in: a failure part way leaves the old bundle as it was
-        tmp = File.join(File.dirname(path), ".busyyaks.app.new-#{Process.pid}")
+        tmp = File.join(File.dirname(path), ".#{SLUG}.app.new-#{Process.pid}")
         FileUtils.rm_rf(tmp)
-        build_bundle(tmp, ctx.home, exe, origin, icon)
+        build_bundle(tmp, ctx.home, argv, icon)
         swap!(tmp, path, old)
         path
       rescue StandardError
@@ -195,12 +228,12 @@ module Busyyaks
         raise
       end
 
-      def build_bundle(dir, home, exe, origin, icon)
+      def build_bundle(dir, home, argv, icon)
         FileUtils.mkdir_p([File.join(dir, "Contents/MacOS"), File.join(dir, "Contents/Resources")])
         File.write(File.join(dir, "Contents/Info.plist"), info_plist(home))
         File.binwrite(File.join(dir, "Contents/Resources/busyyaks.icns"), icns(File.binread(icon)))
         launcher = File.join(dir, "Contents/MacOS/busyyaks")
-        File.write(launcher, launcher_script(exe, origin))
+        File.write(launcher, launcher_script(argv))
         File.chmod(0o755, launcher)
       end
 
@@ -209,7 +242,7 @@ module Busyyaks
       def swap!(tmp, path, old)
         return File.rename(tmp, path) unless old
 
-        aside = "#{File.dirname(path)}/.busyyaks.app.old-#{Process.pid}"
+        aside = "#{File.dirname(path)}/.#{File.basename(path)}.old-#{Process.pid}"
         File.rename(path, aside)
         begin
           File.rename(tmp, path)
@@ -256,8 +289,8 @@ module Busyyaks
       def xml(value) = no_control!(value).gsub(/[&<>"']/, XML)
       def xml_unescape(value) = value.gsub(/&(?:amp|lt|gt|quot|apos);/) { XML.key(_1) }
 
-      # the bundle's executable: hands the URL to the browser's own binary (a running browser takes it over)
-      def launcher_script(exe, url) = "#!/bin/sh\nexec #{sh(exe)} #{sh("--app=#{url}")}\n"
+      # the bundle's executable: runs the chooser; exec, so the app is the chooser's process while it runs
+      def launcher_script(argv) = "#!/bin/sh\nexec #{argv.map { sh(_1) }.join(' ')}\n"
 
       def sh(value) = "'#{no_control!(value).gsub("'", %q('\\\\''))}'"
 

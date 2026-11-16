@@ -194,8 +194,10 @@ Commands:
 | `yaks server status` | each service running, `/up`, MCP `tools/list`, the launcher unit and its socket; exit 1 if any is down |
 | `yaks server logs [SERVICE] [-f]` | `docker compose logs` of the stack or one service |
 | `yaks panel [--print]` | opens the dashboard with `xdg-open` from a desktop session (`https://PUBLIC_HOST`, or `http://127.0.0.1:WEB_HOST_PORT`); over ssh / tmux it is refused — `--print` prints the URL |
-| `yaks desktop install --browser NAME` · `yaks desktop uninstall` | the [desktop app](#desktop-app) (Linux, the BSDs: a `.desktop` entry; macOS: `~/Applications/busyyaks.app`): the dashboard in its own window, `NAME --app=<URL>`; uninstall removes only this checkout's entry |
+| `yaks desktop install --browser NAME` · `yaks desktop open` · `yaks desktop uninstall` | the [desktop app](#desktop-app) (Linux, the BSDs: a `.desktop` entry; macOS: `~/Applications/busyyaks.app`): the server chooser in its own window, then each server in a window of its own (`NAME --app=<URL>`); uninstall removes only this checkout's entry |
 | `yaks env KEY...` | `export KEY='value'` lines from `.env` (as `bin/env`) |
+| `yaks env --ports` | this server's host name and its loopback web / MCP ports as JSON — what [`yaks remote connect`](#remote) asks over ssh; no secret |
+| `yaks remote add\|list\|remove\|connect\|attach` · `yaks remote --stdio` | a busyyaks server on another machine, over your own ssh: [Remote](#remote) |
 | `yaks doctor` | every host tool the stack needs, per feature; exit 1 if one is missing |
 
 **How it works from the terminal.** `yaks` finds its checkout from the symlink's real path, reads that checkout's
@@ -212,9 +214,16 @@ usage: yaks <command>
   yaks server status                   every service, /up, MCP tools/list, the launcher unit and its socket; exit 1 if any is down
   yaks server logs [SERVICE] [-f]      docker compose logs of the stack (or of one service); -f follows
   yaks panel [--print]                 open the dashboard in the browser (xdg-open); --print prints its URL instead
-  yaks desktop install --browser NAME  busyyaks in the app menu: the dashboard in its own window (Linux, BSD, macOS)
+  yaks desktop install --browser NAME  busyyaks in the app menu: the server chooser in its own window (Linux, BSD, macOS)
+  yaks desktop open --browser NAME     the chooser now: Local (the default) and the saved servers, each in its own window
   yaks desktop uninstall               remove that entry
   yaks env KEY...                      `export KEY='value'` lines from .env, for eval (bin/env)
+  yaks env --ports                     this server's host name and ports as JSON (what `yaks remote connect` asks over ssh)
+  yaks remote add|remove TARGET        save / forget a busyyaks server reached over ssh (a Host alias or user@host)
+  yaks remote list                     the saved servers (connects to nothing)
+  yaks remote connect TARGET [--mcp]   forward its dashboard (and MCP) to this machine over ssh, until ssh ends
+  yaks remote attach TARGET SESSION    an agent's terminal on that server, here, over ssh
+  yaks remote --stdio                  server side of attach: ssh's stdin/stdout ↔ the launcher socket
   yaks doctor                          every host tool the stack needs, per feature; exit 1 if one is missing
   yaks help                            this list
 
@@ -304,7 +313,7 @@ Two ways, both on the machine you work at:
 
 | | How | Gives |
 |---|---|---|
-| **`yaks`** (Linux · FreeBSD · OpenBSD · NetBSD · DragonFly · macOS) | `yaks desktop install --browser google-chrome` | an app **busyyaks** that opens the dashboard with the browser's `--app=<URL>`. Linux and the BSDs: a menu entry `~/.local/share/applications/busyyaks.desktop` (the browser found on `PATH`). macOS: `~/Applications/busyyaks.app` (Launchpad, Spotlight), starting the browser app from `/Applications` or `~/Applications`. The window belongs to the browser, so the Dock / taskbar shows it under the browser's icon. Remove it with `yaks desktop uninstall` |
+| **`yaks`** (Linux · FreeBSD · OpenBSD · NetBSD · DragonFly · macOS) | `yaks desktop install --browser google-chrome` | an app **busyyaks** that opens the [server chooser](#server-chooser), then each dashboard with the browser's `--app=<URL>`. Linux and the BSDs: a menu entry `~/.local/share/applications/busyyaks.desktop` (the browser found on `PATH`). macOS: `~/Applications/busyyaks.app` (Launchpad, Spotlight), starting the browser app from `/Applications` or `~/Applications`. The window belongs to the browser, so the Dock / taskbar shows it under the browser's icon. Remove it with `yaks desktop uninstall` |
 | **From the browser** (Linux · macOS · Windows) | open the dashboard in Chrome or Edge → the install icon at the right of the address bar (or ⋮ menu → *Cast, save, and share* → *Install busyyaks…*) | the installed app: its own window and its own Dock / taskbar icon, with a badge counting the cards waiting for you (a dot when the count could not be read) |
 
 `--browser` is required, a Chromium-family browser (only those open a window of its own): `google-chrome`,
@@ -330,6 +339,48 @@ open ~/Applications/busyyaks.app                     # macOS; Linux / BSD: the a
 The rest of `yaks` (the stack's commands) runs on Linux only. A new app can take a moment to show in Launchpad or
 Spotlight; `open ~/Applications/busyyaks.app` starts it at once. Firefox on the desktop does not install web apps.
 Changed `public/static/icon.svg`? Re-render the app icons with `scripts/icons/render-png` (Docker).
+
+## Remote
+
+A busyyaks server on another machine, from the one you work at, over **your own ssh**: keys, ssh-agent,
+`~/.ssh/config` aliases and bastions are ssh's. busyyaks opens no TCP listener and has no TLS of its own for this; the
+server keeps its sessions, and closing the window or the tunnel ends nothing there.
+
+```sh
+yaks remote add myserver                  # a ~/.ssh/config Host alias or user@host; saved, nothing connected
+yaks remote list                         # the saved servers; connects to nothing
+yaks remote connect myserver              # forwards the dashboard until Ctrl-C; prints its URL
+yaks remote connect myserver --mcp        # + the MCP port, and the `claude mcp add` line for this machine
+yaks remote attach myserver <tmux session>                  # an agent's terminal here (read-only first)
+yaks remote remove myserver
+```
+
+| | |
+|---|---|
+| Saved servers | `$XDG_CONFIG_HOME/busyyaks/remotes.yml` (else `~/.config/…`), mode 0600, per user — never in a checkout. Only `yaks remote add` writes one |
+| `connect` | asks the server `ssh TARGET yaks env --ports`, then `ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:P:127.0.0.1:P TARGET`. **P is the server's own `WEB_HOST_PORT`**: the server answers only `Host: 127.0.0.1:WEB_HOST_PORT` (DNS-rebinding guard), so the local end is that same port and the server needs no change. That port already taken here (a local busyyaks on it, another connect) → refused, nothing forwarded; a forward ssh cannot open → ssh's own reason, exit non-zero |
+| `--mcp` | also forwards `MCP_HOST:MCP_HOST_PORT` and prints `claude mcp add … --header "Authorization: Bearer $MCP_TOKEN"`. The bearer stays on the server: copy it from there yourself — yaks never reads, prints or sends it |
+| Page state | the header shows the server's host name, accented, on a forwarded window, and the connection: `reconnecting…` after one failed `/up` (every 3 s), `down` after two — the page dims under "Connection down — this page is not live" |
+| `attach` | `ssh TARGET yaks remote --stdio` carries the agent terminal stream: the screen first, then live; read-only until `Ctrl-]` `t` (the server confirms control), `Ctrl-]` `q` detaches |
+| `--stdio` (server side) | what ssh runs: one request line, only the `attach` op, bridged to the launcher socket — refused unless that socket is the ssh user's own |
+| Needs | the server: `yaks` on the PATH ssh commands get (non-interactive: `~/.profile` may not run — a symlink in `/usr/local/bin` does); this machine: Ruby 3.2+, a clone, `ssh` |
+
+Refusals: an unknown name (`not a saved server`), a target that is not one (`-o…`, spaces), a server without
+busyyaks (`has no busyyaks: yaks is not on its PATH`), the forward port taken, an op other than `attach` over `--stdio`.
+
+### Server chooser
+
+The desktop app (`yaks desktop install`) opens a chooser first: **Local** (this checkout's dashboard, the default:
+selected, Enter opens it) and every saved server, each with its state. The dashboard itself is unchanged.
+
+| | |
+|---|---|
+| Open | Local → a window on this checkout's dashboard. A server → its forward (as `connect`, ssh with `BatchMode=yes`: a key from ssh-agent or without a passphrase), held by the chooser; once its `/up` answers 200 through it, a window on it (with its host name in the header). Open again → another window, no second forward |
+| States | Local: running · not answering · no local busyyaks (why: no `.env`, …). A server: not connected · connecting… · connected (host, port) · failed with ssh's or the server's own words (port taken here, no busyyaks there, `/up` not 200 within 15 s) |
+| Add · Remove · Disconnect | the saved servers file, the same as `yaks remote add` / `remove`; Remove asks once more and disconnects first |
+| Several servers | each its own window at once, while their ports differ (each forward uses its server's own port) |
+| Lifetime | one chooser per user: opening the app again opens another chooser window on it. **Closing the last chooser window disconnects every server** (10 s later); the server windows show `down` |
+| Guards | its own page on `127.0.0.1:<free port>`: only `Host: 127.0.0.1:<port>`; a one-time launch code (60 s) → an HttpOnly, SameSite=Strict cookie; every change also needs its own `Origin`. State in `$XDG_STATE_HOME/busyyaks` (else `~/.local/state/…`), 0700 |
 
 ---
 

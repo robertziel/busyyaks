@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>busyyaks · servers</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/skin.css">
+<link rel="stylesheet" href="/chooser.css">
+<script src="/chooser.js" defer></script>
+</head>
+<body>
+<main class="ch">
+  <header class="ch-head">
+    <picture>
+      <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+      <img src="/logo-light.svg" alt="busyyaks" class="ch-logo">
+    </picture>
+    <span class="ch-title">Servers</span>
+  </header>
+
+  <ul class="ch-list" id="servers" role="listbox" aria-label="busyyaks servers" aria-busy="true"></ul>
+
+  <form class="ch-add" id="add" autocomplete="off">
+    <label for="target">Add server</label>
+    <div class="ch-add-row">
+      <input id="target" name="target" placeholder="ssh alias or user@host" spellcheck="false" required>
+      <button type="submit" class="ch-btn">Add</button>
+    </div>
+  </form>
+
+  <p class="ch-error" id="error" role="alert" hidden></p>
+  <footer class="ch-foot" id="foot">Enter opens the selected server · closing the last chooser window disconnects every server</footer>
+</main>
+</body>
+</html>

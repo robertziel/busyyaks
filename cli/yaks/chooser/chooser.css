@@ -1,0 +1,221 @@
+/* The desktop app's server chooser (cli/yaks/chooser.rb). Colours: /skin.css = the checkout's
+   skins/light.yml + dark.yml tokens, picked by the system's scheme (this page is not the dashboard: it cannot read
+   the dashboard's skin choice, which lives in that origin's storage). */
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-400.woff2") format("woff2");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-600.woff2") format("woff2");
+  font-weight: 600;
+}
+@font-face {
+  font-family: "Fragment Mono";
+  src: url("/fonts/FragmentMono-Regular.woff2") format("woff2");
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font:
+    14px/1.45 "Inter",
+    system-ui,
+    sans-serif;
+}
+.ch {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+.ch-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.ch-logo {
+  height: 26px;
+  display: block;
+}
+.ch-title {
+  color: var(--ink-faint);
+  font-weight: 600;
+}
+.ch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.ch-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--row-rule);
+  cursor: pointer;
+}
+.ch-row:first-child {
+  border-top: 0;
+}
+.ch-row:hover {
+  background: var(--row-hover);
+}
+.ch-row[aria-selected="true"] {
+  background: var(--panel-2);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.ch-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ch-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+.ch-dot.ok {
+  background: var(--ok);
+}
+.ch-dot.wait {
+  background: var(--warn);
+  animation: ch-pulse 1.2s ease-in-out infinite;
+}
+.ch-dot.bad {
+  background: var(--bad);
+}
+@keyframes ch-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ch-dot.wait {
+    animation: none;
+  }
+}
+.ch-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.ch-tag {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--mat-fill);
+  color: var(--ink-dim);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ch-state {
+  color: var(--ink-faint);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.ch-state code {
+  font:
+    12px "Fragment Mono",
+    ui-monospace,
+    monospace;
+}
+.ch-state.bad {
+  color: var(--bad);
+}
+.ch-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.ch-btn {
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ch-btn:hover {
+  background: var(--panel-2);
+}
+.ch-btn.primary {
+  background: var(--button-fill);
+  border-color: var(--button-fill);
+  color: #fff;
+  font-weight: 600;
+}
+.ch-btn.danger {
+  color: var(--bad);
+}
+.ch-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ch-add {
+  margin-top: 16px;
+}
+.ch-add label {
+  display: block;
+  color: var(--ink-faint);
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.ch-add-row {
+  display: flex;
+  gap: 8px;
+}
+.ch-add input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 7px 10px;
+  font:
+    13px "Fragment Mono",
+    ui-monospace,
+    monospace;
+}
+.ch-add input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.ch-error {
+  margin: 12px 0 0;
+  color: var(--bad);
+  overflow-wrap: anywhere;
+}
+.ch-foot {
+  margin-top: 16px;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+.ch-gone .ch-list,
+.ch-gone .ch-add {
+  opacity: 0.45;
+  pointer-events: none;
+}
+@media (max-width: 420px) {
+  .ch-row {
+    grid-template-columns: 10px 1fr;
+  }
+  .ch-acts {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+}
