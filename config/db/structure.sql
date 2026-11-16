@@ -448,6 +448,17 @@ CREATE TABLE `setup_completions`(
   `author` varchar(255) NOT NULL,
   `created_at` integer NOT NULL
 );
+CREATE TABLE `gh_pollers`(
+  `name` varchar(255) NOT NULL PRIMARY KEY,
+  `ran_at` integer NOT NULL,
+  `calls` integer NOT NULL,
+  `not_modified` integer NOT NULL,
+  `rate_limit` integer,
+  `rate_remaining` integer,
+  `rate_reset` integer,
+  `paused_until` integer,
+  `error` text
+);
 INSERT INTO schema_migrations (filename) VALUES
 ('20261101000000_create_core.rb'),
 ('20261101230000_create_daily.rb'),
@@ -485,4 +496,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261204000000_daily_report_settings.rb'),
 ('20261205000000_setup_completions.rb'),
 ('20261206000000_agents_kanban_session_boards.rb'),
-('20261207470000_gh_pr_checks_builds.rb');
+('20261207470000_gh_pr_checks_builds.rb'),
+('20261208000000_gh_pollers.rb');

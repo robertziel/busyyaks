@@ -278,7 +278,8 @@ module Busyyaks
     # unchanged PR or check list answers 304, which GitHub does not count against the token's rate limit — a card
     # waiting days in a gate, its checks asked every minute (the engine's approval prefetch, card #247), costs nothing
     # while its PR stands still. A cached URL nobody read for wanted_for (a pushed-over sha, a card out of the gate)
-    # is deleted at the end of each run.
+    # is deleted at the end of each run. While `gate` (GithubPollers) is paused — the token's rate limit used up —
+    # nothing is sent and every wanted row says why and until when.
     class Poller
       KEEP = %w[number state merged_at merge_commit_sha head base sha ref statuses updated_at check_runs status
                 conclusion completed_at commit total_count context name created_at started_at target_url
@@ -287,32 +288,45 @@ module Busyyaks
       PER_PAGE = 100 # GitHub's maximum for both commit status and check-run lists
 
       # ci: CiSettings::Settings (config/busyyaks.yml ci) — the contexts that gate per repo + the stuck limit
-      def initialize(db:, client:, wanted_for:, ci:, clock: -> { Busyyaks::Clock.epoch })
+      def initialize(db:, client:, gate:, wanted_for:, ci:, clock: -> { Busyyaks::Clock.epoch })
         @db = db
         @client = client
+        @gate = gate
         @pages = GithubNetwork::Data.new(db)
         @wanted_for = wanted_for # seconds a request stays interesting after the notifier last asked
         @ci = ci
         @clock = clock
       end
 
-      # → number of rows answered. One row's failure — GitHub's, or any other (a body of an unexpected shape, a bug) —
-      # is stored on that row and said by the Port; the rest of the batch still runs (as PrStates::Poller).
+      # → number of rows answered (0 while paused). One row's failure — GitHub's, or any other (a body of an unexpected
+      # shape, a bug) — is stored on that row and said by the Port; the rest of the batch still runs (as
+      # PrStates::Poller). A rate-limited answer is the token's: it pauses the gate and fails the rest of the batch.
       def run
         now = @clock.call
         rows = @db[:gh_pr_checks].where(Sequel.lit("requested_at >= ?", now - @wanted_for)).all
-        rows.each do |row|
+        paused = @gate.paused
+        if paused
+          rows.each { |row| fail_row(row, paused) }
+          return 0
+        end
+
+        rows.each_with_index do |row, i|
           answer = { detail: nil, head: nil, builds: nil }.merge(poll(row)).merge(checked_at: now, error: nil)
           @db[:gh_pr_checks].where(id: row[:id]).update(answer)
+        rescue GithubNetwork::RateLimited => e # the token's limit: the rest of the batch would fail the same way
+          why = @gate.rate_limited!(e)
+          rows[i..].each { |r| fail_row(r, why) }
+          break
         rescue StandardError => e
-          error = [GithubNetwork::Error, Unconfigured].any? { |k| e.is_a?(k) } ? e.message : "#{e.class}: #{e.message}"
-          @db[:gh_pr_checks].where(id: row[:id]).update(error: error[0, 500], checked_at: nil)
+          fail_row(row, [GithubNetwork::Error, Unconfigured].any? { |k| e.is_a?(k) } ? e.message : "#{e.class}: #{e.message}")
         end
         @db[:gh_pages].where(Sequel.like(:url, "#{PAGE}%")).where(Sequel.lit("at < ?", now - @wanted_for)).delete
         rows.size
       end
 
       private
+
+      def fail_row(row, error) = @db[:gh_pr_checks].where(id: row[:id]).update(error: error[0, 500], checked_at: nil)
 
       # One conditional GET → the body's KEEP fields (a 304 = the stored ones, its row marked read now); a 404 with
       # missing_ok → nil.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GithubFeedStatus, GithubStatus } from "../types";
-import { eventWord, feedLine, parseWindow, repoSummary, statusLine } from "./github";
+import { eventWord, feedLine, parseWindow, pollersLine, repoSummary, statusLine } from "./github";
 
 const base: GithubStatus = {
   ok: true,
@@ -118,5 +118,33 @@ describe("eventWord / repoSummary", () => {
       ],
     };
     expect(repoSummary(r)).toEqual({ types: "3 pushes · 2 issues", actors: "a, b, c +1" });
+  });
+});
+
+describe("pollersLine", () => {
+  const p = {
+    ran_at: 1000,
+    calls: 4,
+    not_modified: 12,
+    rate_limit: 5000,
+    rate_remaining: 4800,
+    rate_reset: 4600,
+    paused_until: null,
+    error: null,
+  };
+  it("ok: last tick, its cost, rate left", () => {
+    expect(pollersLine(p, 1030)).toEqual({
+      tone: "ok",
+      parts: ["PR pollers ran 30s ago", "4 calls · 12 × 304", "4,800/5,000 API left"],
+    });
+  });
+  it("paused: until when, why, nothing left", () => {
+    const l = pollersLine({ ...p, rate_remaining: 0, paused_until: 1000 + 720, error: "GitHub rate limited" }, 1000);
+    expect(l.tone).toBe("bad");
+    expect(l.parts[0]).toMatch(/^PR pollers paused until \S+ \S+ \(12m\)$/);
+    expect(l.parts.slice(1)).toEqual(["GitHub rate limited", "0/5,000 API left"]);
+  });
+  it("never ran", () => {
+    expect(pollersLine(null, 1000)).toEqual({ tone: "warn", parts: ["PR pollers: no tick yet"] });
   });
 });

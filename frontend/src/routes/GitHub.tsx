@@ -8,7 +8,7 @@ import { useResource } from "../api";
 import { Html } from "../components/Html";
 import { ErrorState, Loading } from "../components/States";
 import { at, now } from "../lib/format";
-import { feedLine, parseWindow, repoSummary, statusLine, WINDOWS } from "../lib/github";
+import { feedLine, parseWindow, pollersLine, repoSummary, statusLine, WINDOWS } from "../lib/github";
 import { useTitle } from "../lib/title";
 import type { GithubData } from "../types";
 
@@ -79,6 +79,7 @@ export function GitHub() {
 
   const st = statusLine(data.status, now());
   const fl = feedLine(data.feed.status, now(), data.window.from);
+  const pl = pollersLine(data.pollers, now());
   const label = "error" in w ? "" : w.key;
   const hasData = data.status.last_ok_at != null;
   return (
@@ -87,6 +88,12 @@ export function GitHub() {
       <p className={`ghp-status t-${st.tone}`} role={st.tone === "ok" ? undefined : "alert"}>
         <i className="tl-dot" />
         {st.parts.map((p, i) => (
+          <span key={i}>{p}</span>
+        ))}
+      </p>
+      <p className={`ghp-status t-${pl.tone}`} role={pl.tone === "ok" ? undefined : "alert"}>
+        <i className="tl-dot" />
+        {pl.parts.map((p, i) => (
           <span key={i}>{p}</span>
         ))}
       </p>

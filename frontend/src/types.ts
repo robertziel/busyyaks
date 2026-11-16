@@ -357,9 +357,21 @@ export type GithubData = {
   repos: GithubRepo[];
   people: GithubNewPerson[];
   feed: GithubFeed;
+  pollers: GithubPollers | null;
   html: { repos: string; people: string; feed: string };
   // enrolled projects' repos config ci.required does not list: their cards' CI gate is refused (card #470)
   ci_unconfigured: string[];
+};
+// the PR pollers' last tick (CI checks + PR states, one token): cost, rate limit left, a pause until GitHub's reset
+export type GithubPollers = {
+  ran_at: number;
+  calls: number;
+  not_modified: number;
+  rate_limit: number | null;
+  rate_remaining: number | null;
+  rate_reset: number | null;
+  paused_until: number | null;
+  error: string | null;
 };
 // the dashboard feed part (github.com/feed = received_events)
 export type GithubFeedStatus = {
