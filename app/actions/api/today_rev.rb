@@ -3,6 +3,7 @@
 require "digest"
 require "busyyaks/github_network"
 require "busyyaks/github_prs"
+require "busyyaks/clock"
 
 module Busyyaks
   module Actions
@@ -17,7 +18,7 @@ module Busyyaks
           login = ENV.fetch("GITHUB_LOGIN")
           pr_run = gh[:gh_pr_runs].where(login: login).exclude(finished_at: nil).order(Sequel.desc(:id)).get(:id)
           prs = gh[:gh_merged_prs].where(login: login).count
-          rev = Digest::SHA256.hexdigest(JSON.dump([Date.today.iso8601, store.today_rev_parts, pr_run, prs]))[0, 16]
+          rev = Digest::SHA256.hexdigest(JSON.dump([Busyyaks::Clock.today.iso8601, store.today_rev_parts, pr_run, prs]))[0, 16]
           scan = store.last_scan
           json(res, { rev: rev, scan: scan && { finished_at: scan[:finished_at], error: scan[:error] } })
         end

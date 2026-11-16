@@ -20,19 +20,22 @@ class CiGithubTest < Minitest::Test
     FileUtils.mkdir_p(File.join(@dir, "bin"))
     File.write(File.join(@dir, "bin", "curl"), <<~SH)
       #!/usr/bin/env bash
+      n=$(( $(cat "#{@dir}/calls" 2>/dev/null || echo 0) + 1 )); echo "$n" > "#{@dir}/calls"
       printf '%s\\n' "$@" > "#{@dir}/curl-argv"
+      printf '%s\\n' "$@" > "#{@dir}/curl-argv.$n"
       out=/dev/null
       while [ "$#" -gt 0 ]; do
         case "$1" in
           -o) out=$2; shift ;;
+          -D) if [ -f "#{@dir}/headers.$n" ]; then cp "#{@dir}/headers.$n" "$2"; else : > "$2"; fi; shift ;;
           @/dev/fd/*) cat "${1#@}" > "#{@dir}/curl-header" ;;
-          --data-binary) [ "$2" = @- ] && cat > "#{@dir}/curl-data"; shift ;;
+          --data-binary) [ "$2" = @- ] && tee "#{@dir}/curl-data.$n" > "#{@dir}/curl-data"; shift ;;
         esac
         shift
       done
       [ "${FAKE_RC:-0}" = 0 ] || { echo "curl: (${FAKE_RC}) Failed to connect" >&2; printf '000'; exit "$FAKE_RC"; }
-      cat "#{@dir}/body" > "$out"
-      printf '%s' "$FAKE_CODE"
+      if [ -f "#{@dir}/body.$n" ]; then cat "#{@dir}/body.$n" > "$out"; else cat "#{@dir}/body" > "$out"; fi
+      if [ -f "#{@dir}/code.$n" ]; then cat "#{@dir}/code.$n"; else printf '%s' "$FAKE_CODE"; fi
     SH
     File.chmod(0o755, File.join(@dir, "bin", "curl"))
   end
@@ -190,6 +193,92 @@ class CiGithubTest < Minitest::Test
     end
   end
 
+  # ── alert (the daily build's red reaches the maintainer as a GitHub issue notification) ──
+
+  def answers(*list)
+    list.each_with_index do |(body, code), i|
+      File.write(File.join(@dir, "body.#{i + 1}"), body)
+      File.write(File.join(@dir, "code.#{i + 1}"), code.to_s)
+    end
+  end
+
+  def data(n) = JSON.parse(File.read(File.join(@dir, "curl-data.#{n}")))
+
+  def test_alert_opens_an_issue_when_none_with_its_title_is_open
+    answers([[{ "number" => 3, "title" => "Daily CI red on local", "pull_request" => {} },
+              { "number" => 4, "title" => "other" },].to_json, 200,], ["{}", 201])
+    out, err, status = run_github("alert", "Daily CI red on local", "audit exit 1")
+
+    assert_predicate status, :success?, err
+    assert_equal "github: alert opened as a new issue\n", out
+    assert_match %r{repos/owner/repo/issues\?state=open}, File.read(File.join(@dir, "curl-argv.1"))
+    assert_match %r{repos/owner/repo/issues$}, File.read(File.join(@dir, "curl-argv.2")).lines.last.strip
+    assert_equal({ "title" => "Daily CI red on local", "body" => "audit exit 1\n\nBuild: https://ci/job/1/" }, data(2))
+  end
+
+  # GitHub pages the issue list (Link: rel="next"); an issue on page 2 is still found
+  def test_alert_reads_every_page_of_open_issues
+    page2 = "https://api.github.com/repositories/1/issues?state=open&per_page=100&page=2"
+    answers([[{ "number" => 1, "title" => "a" }].to_json, 200],
+            [[{ "number" => 9, "title" => "Daily CI red on local" }].to_json, 200], ["{}", 201])
+    File.write(File.join(@dir, "headers.1"), "HTTP/2 200\r\nlink: <#{page2}>; rel=\"next\", <#{page2}>; rel=\"last\"\r\n\r\n")
+    out, err, status = run_github("alert", "Daily CI red on local", "audit exit 1")
+
+    assert_predicate status, :success?, err
+    assert_equal "github: alert added to issue 9\n", out
+    assert_equal page2, File.read(File.join(@dir, "curl-argv.2")).lines.last.strip
+    assert_match %r{repos/owner/repo/issues/9/comments$}, File.read(File.join(@dir, "curl-argv.3")).lines.last.strip
+  end
+
+  def test_alert_comments_on_the_open_issue_with_its_title
+    answers([[{ "number" => 7, "title" => "Daily CI red on local" }].to_json, 200], ["{}", 201])
+    out, err, status = run_github("alert", "Daily CI red on local", "secrets exit 1")
+
+    assert_predicate status, :success?, err
+    assert_equal "github: alert added to issue 7\n", out
+    assert_match %r{repos/owner/repo/issues/7/comments$}, File.read(File.join(@dir, "curl-argv.2")).lines.last.strip
+    assert_equal({ "body" => "secrets exit 1\n\nBuild: https://ci/job/1/" }, data(2))
+  end
+
+  def test_alert_refused_or_unreadable_says_so
+    answers(["{}", 200])
+    _o, err, status = run_github("alert", "t", "x")
+    assert_equal 1, status.exitstatus
+    assert_match "github: GitHub's issue list for owner/repo is not a JSON array", err
+
+    FileUtils.rm_f(Dir.glob(File.join(@dir, "{calls,body.*,code.*}")))
+    answers(["[]", 200], [{ "message" => "Resource not accessible" }.to_json, 403])
+    _o, err, status = run_github("alert", "t", "x")
+    assert_equal 1, status.exitstatus
+    assert_match "github: GitHub refused the alert on owner/repo (HTTP 403: Resource not accessible)", err
+  end
+
+  # ── fetch-base (the flake gate's base on a PR build, which checks out the PR head only) ──
+
+  def test_fetch_base_fetches_the_branch_into_origin_s_remote_ref
+    origin = File.join(@dir, "origin.git")
+    git = ->(*a, chdir: @dir) {
+ o, st = Open3.capture2e({ "GIT_CONFIG_GLOBAL" => "/dev/null" }, "git", *a, chdir: chdir); assert st.success?, o; o }
+    git.("init", "-q", "--bare", "-b", "local", origin)
+    work = File.join(@dir, "work")
+    git.("clone", "-q", origin, work)
+    git.("-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "base", chdir: work)
+    git.("push", "-q", "origin", "HEAD:local", chdir: work)
+    sha = git.("rev-parse", "HEAD", chdir: work).strip
+    pr = File.join(@dir, "pr")
+    git.("init", "-q", pr)
+    git.("remote", "add", "origin", origin, chdir: pr)
+
+    env = { "GH_TOKEN" => TOKEN, "PATH" => ENV.fetch("PATH"), "GIT_CONFIG_GLOBAL" => "/dev/null" }
+    out, status = Open3.capture2e(env, SCRIPT, "fetch-base", "local", chdir: pr)
+    assert_predicate status, :success?, out
+    assert_equal "github: base local at #{sha[0, 7]}\n", out
+    assert_equal sha, git.("rev-parse", "refs/remotes/origin/local", chdir: pr).strip
+
+    out, status = Open3.capture2e(env, SCRIPT, "fetch-base", "--upload-pack=x", chdir: pr)
+    assert_equal 1, status.exitstatus
+    assert_match "github: fetch-base: '--upload-pack=x' is not a branch name", out
+  end
   def test_a_ruby_ci_script_sends_its_token_in_process_and_spawns_nothing
     Dir[File.join(ROOT, "scripts/ci/**/*.rb")].each do |f|
       code = File.readlines(f).grep_v(/^\s*#/).join

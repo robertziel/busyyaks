@@ -38,6 +38,7 @@ require "tmpdir"
 require "pty"
 require "io/console"
 require "base64"
+require_relative "../lib/busyyaks/clock"
 # the engine files the host side loads: the dialog parser (the same the container runs, so both compute the same
 # dialog hash) and the host config + Launch (how a session is started — config/kanban.yml's launchers and agent types)
 require_relative "../vendor/agents_kanban/ruby/lib/agents_kanban/session_dialog"
@@ -176,8 +177,8 @@ def trust_prompt?(text) = text.include?(TRUST_YES) && text.match?(/trust this fo
 def accept_trust(name, refusal, clock, wait: 15)
   return { trust: "left", trust_reason: refusal } if refusal
 
-  deadline = Time.now + wait
-  until Time.now > deadline
+  deadline = Busyyaks::Clock.now + wait
+  until Busyyaks::Clock.now > deadline
     text = pane_text(name)
     break if trust_prompt?(text)
     return nil if text.match?(/bypass permissions on|for shortcuts|Try "/) # at its prompt already: nothing to answer
@@ -228,11 +229,11 @@ BARE_CHECKS = 3
 # A launch's start clock, started at `tmux new-session`: the trust wait and the start check share it, so every
 # refusal names the true elapsed seconds and launch.start_seconds bounds the whole start. Monotonic; the elapsed seconds
 # and the refusal are LauncherRules.start_elapsed / start_overdue? (a start is refused only once start_seconds passed).
-def start_clock = { started: Process.clock_gettime(Process::CLOCK_MONOTONIC), bare: 0 }
+def start_clock = { started: Busyyaks::Clock.monotonic, bare: 0 }
 
 # One look at the pane: :up (`up`, when given, holds for the pane's process), the failure reason, or nil (wait on)
 def start_probe(name, clock, what, up)
-  now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  now = Busyyaks::Clock.monotonic
   elapsed = Busyyaks::LauncherRules.start_elapsed(clock[:started], now)
   out, _e, ok = tmux("list-panes", "-t", "=#{name}", "-F", "\#{pane_pid}")
   return "tmux session is gone after #{elapsed}s" unless ok
@@ -398,7 +399,7 @@ def launch(req)
   # reported to the operator as the result's verdict + reason (information only: it never decides the keep)
   waiting = up ? dialog_on_screen(name) : nil
   rc = rc.merge(remote_control: "failed", reason: "waiting on a dialog: #{waiting}") if waiting && rc[:remote_control] == "on"
-  puts "#{Time.now.iso8601} launched #{name} (#{t.key}/#{launcher.key}, #{launcher.kind}) in #{dir} · trust #{trust[:trust] || 'not asked'} · #{rc.except(:reason).map { |k, v| "#{k} #{v}" }.join(' · ')}#{rc[:reason] ? " (#{rc[:reason]})" : ''}"
+  puts "#{Busyyaks::Clock.now.iso8601} launched #{name} (#{t.key}/#{launcher.key}, #{launcher.kind}) in #{dir} · trust #{trust[:trust] || 'not asked'} · #{rc.except(:reason).map { |k, v| "#{k} #{v}" }.join(' · ')}#{rc[:reason] ? " (#{rc[:reason]})" : ''}"
   # the kind's start check failed (claude: no `claude --remote-control <name>` came up — it refused to start, exited,
   # the pane is a bare shell; hermes: no hermes process): the launch FAILED — the session is killed and refused, so
   # the engine ends the registration and releases what it adopted (never a registered owner nobody runs). Only a
@@ -457,7 +458,7 @@ def create(req)
   raise "git init failed: #{err.strip}" unless st.success?
 
   trusted, trust_error = record_created(dir)
-  puts "#{Time.now.iso8601} created #{dir}"
+  puts "#{Busyyaks::Clock.now.iso8601} created #{dir}"
   { ok: true, path: File.join(root, name), cloning: false, trusted: trusted, trust_error: trust_error }
 end
 
@@ -467,7 +468,7 @@ def record_created(dir)
   CREATED.record(dir)
   [true, nil]
 rescue StandardError => e
-  puts "#{Time.now.iso8601} git init #{dir}: NOT recorded as created (#{e.class}: #{e.message}); its trust prompt is left"
+  puts "#{Busyyaks::Clock.now.iso8601} git init #{dir}: NOT recorded as created (#{e.class}: #{e.message}); its trust prompt is left"
   [false, "#{e.class}: #{e.message}"]
 end
 
@@ -475,8 +476,8 @@ end
 # trust prompt for the operator. It runs with nothing inherited (LaunchTrust.clone_env, unsetenv_others).
 def clone(parsed, dir, container_path)
   url = parsed[:url]
-  log = File.join(RUN_DIR, "clone-#{File.basename(dir)}-#{Time.now.to_i}.log")
-  job = { url: url, path: container_path, log: File.basename(log), started: Time.now.to_i, status: "running", exit: nil }
+  log = File.join(RUN_DIR, "clone-#{File.basename(dir)}-#{Busyyaks::Clock.epoch}.log")
+  job = { url: url, path: container_path, log: File.basename(log), started: Busyyaks::Clock.epoch, status: "running", exit: nil }
   JOBS_LOCK.synchronize { JOBS << job; JOBS.shift while JOBS.size > 20 }
   home = Dir.mktmpdir("busyyaks-clone-home") # empty: no gitconfig but the command line's
   template = Dir.mktmpdir("busyyaks-clone-template") # empty: no hooks or config copied into the new .git
@@ -486,9 +487,9 @@ def clone(parsed, dir, container_path)
     _, st = Process.wait2(pid)
     FileUtils.rm_rf([home, template])
     JOBS_LOCK.synchronize { job[:status] = st.success? ? "done" : "failed"; job[:exit] = st.exitstatus }
-    puts "#{Time.now.iso8601} clone #{url} → #{dir}: exit #{st.exitstatus}"
+    puts "#{Busyyaks::Clock.now.iso8601} clone #{url} → #{dir}: exit #{st.exitstatus}"
   end
-  puts "#{Time.now.iso8601} cloning #{url} → #{dir}"
+  puts "#{Busyyaks::Clock.now.iso8601} cloning #{url} → #{dir}"
   { ok: true, path: container_path, cloning: true, trusted: false }
 end
 
@@ -525,7 +526,7 @@ def agents
   raw = File.read(COLLECTOR.snapshot)
   snap = JSON.parse(raw)
   links = claude_links
-  age = Time.now.to_f - snap.fetch("generated_at").to_f
+  age = Busyyaks::Clock.now.to_f - snap.fetch("generated_at").to_f
   sessions = snap.fetch("sessions").map do |s|
     panes = s.fetch("panes").map do |p|
       pane = p.slice(*PANE_KEYS)
@@ -572,7 +573,7 @@ ACTIVITY_LOCK = Mutex.new
 
 def settled_activity(key, activity)
   ACTIVITY_LOCK.synchronize do
-    now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    now = Busyyaks::Clock.monotonic
     ACTIVITY_MEMO.delete_if { |_, m| now - m[:at] > Busyyaks::AgentActivity::STREAM_WINDOW_S } # panes gone or quiet
     act, memo = Busyyaks::AgentActivity.settle(activity, ACTIVITY_MEMO[key], now)
     memo ? ACTIVITY_MEMO[key] = memo : ACTIVITY_MEMO.delete(key)
@@ -587,7 +588,7 @@ end
 # means nobody can tell who is working: refused outright.
 REAP_QUIET_S = 30 * 60
 
-def reap_candidates(now = Time.now.to_f)
+def reap_candidates(now = Busyyaks::Clock.now.to_f)
   snap = agents
   return snap unless snap[:ok]
   raise ReapRefused, "collector snapshot is #{snap[:age_s]}s old — cannot tell who is working" if snap[:age_s].to_f > 3 * snap[:interval_s].to_f
@@ -643,7 +644,7 @@ def reap(req)
     next { name: name, stopped: false, reason: "socket #{sock} is not the default tmux server" } unless sock == "default"
 
     _o, err, ok = tmux("kill-session", "-t", "=#{name}")
-    puts "#{Time.now.iso8601} reap #{name} (#{c[:reason]}): #{ok ? 'stopped' : err.strip}"
+    puts "#{Busyyaks::Clock.now.iso8601} reap #{name} (#{c[:reason]}): #{ok ? 'stopped' : err.strip}"
     { name: name, stopped: ok, reason: ok ? c[:reason] : "tmux: #{err.strip}" }
   end
   { ok: true, results: results }
@@ -670,7 +671,7 @@ def stop_op(req)
     next { name: name, stopped: false, reason: "protected by reap_protect" } if protect.any? { |pat| File.fnmatch?(pat, name) }
 
     _o, err, ok = tmux("kill-session", "-t", "=#{name}")
-    puts "#{Time.now.iso8601} stop #{name} (operator, #{path}): #{ok ? 'stopped' : err.strip}"
+    puts "#{Busyyaks::Clock.now.iso8601} stop #{name} (operator, #{path}): #{ok ? 'stopped' : err.strip}"
     { name: name, stopped: ok, reason: ok ? "stopped" : "tmux: #{err.strip}" }
   end
   { ok: true, results: results }
@@ -708,7 +709,7 @@ def notify(req)
   return { ok: false, retry: true, error: "a dialog is on its screen" } if screen["text"].to_s.match?(/Enter to confirm|Do you trust|Yes, I trust this folder/i)
 
   res = collector(op: "send", session: name, socket: sock, text: text)
-  puts "#{Time.now.iso8601} notify #{name}: #{res['ok'] ? 'sent' : res.dig('error', 'message')}"
+  puts "#{Busyyaks::Clock.now.iso8601} notify #{name}: #{res['ok'] ? 'sent' : res.dig('error', 'message')}"
   res["ok"] ? { ok: true } : { ok: false, retry: res.dig("error", "type") == "tmux", error: res.dig("error", "message") || "collector refused" }
 rescue Errno::ENOENT, Errno::ECONNREFUSED, Errno::EACCES => e
   { ok: false, retry: true, error: "collector read socket unavailable: #{e.class}" }
@@ -769,7 +770,7 @@ def answer_op(req)
   return { ok: false, error: "#{name}: #{refusal} — nothing typed", status: 409 } if refusal
 
   _o, err, ok = tmux("send-keys", "-t", "=#{name}:", key == "esc" ? "Escape" : key)
-  puts "#{Time.now.iso8601} answer #{name}: #{key} #{ok ? 'pressed' : err.strip}"
+  puts "#{Busyyaks::Clock.now.iso8601} answer #{name}: #{key} #{ok ? 'pressed' : err.strip}"
   ok ? { ok: true, pressed: key } : { ok: false, error: "tmux: #{err.strip}", status: 500 }
 end
 
@@ -840,7 +841,7 @@ def attach_op(io, req)
   slave.close
   io.puts(JSON.generate(ok: true, session: name, cols: cols, rows: rows,
                         screen: Base64.strict_encode64(screen.to_s.gsub(/\r?\n/, "\r\n"))))
-  puts "#{Time.now.iso8601} attach #{name}: opened (read-only)"
+  puts "#{Busyyaks::Clock.now.iso8601} attach #{name}: opened (read-only)"
   out = Thread.new { attach_output(io, master, base, name, [cols, rows], tty) }
   attach_input(io, base, name)
 ensure
@@ -848,10 +849,10 @@ ensure
   Process.wait(pid) rescue nil if pid
   out&.join(5)
   master&.close unless master&.closed?
-  puts "#{Time.now.iso8601} attach #{name}: closed" if pid
+  puts "#{Busyyaks::Clock.now.iso8601} attach #{name}: closed" if pid
 end
 
-def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+def monotonic = Busyyaks::Clock.monotonic
 
 # our client still shows this session, or the stream ends here: detached, logged, EOFError (nothing more is sent)
 def attach_on_session!(base, name, tty)
@@ -859,7 +860,7 @@ def attach_on_session!(base, name, tty)
   return if shown == name
 
   tmux(*base, "detach-client", "-t", tty) if shown
-  puts "#{Time.now.iso8601} attach #{name}: the client showed #{(shown || 'no session').inspect}, detached"
+  puts "#{Busyyaks::Clock.now.iso8601} attach #{name}: the client showed #{(shown || 'no session').inspect}, detached"
   raise EOFError
 end
 
@@ -955,7 +956,7 @@ def attach_control(io, base, name, control, want)
       return false
     end
   end
-  puts "#{Time.now.iso8601} attach #{name}: control #{want ? 'taken' : 'released'}" if want != control
+  puts "#{Busyyaks::Clock.now.iso8601} attach #{name}: control #{want ? 'taken' : 'released'}" if want != control
   io.write(Busyyaks::Terminal.line(control: want))
   want
 end

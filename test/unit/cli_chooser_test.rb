@@ -3,12 +3,14 @@
 # Standalone (no test_helper, no app), like cli_test.rb: runs on the oldest host Ruby too (scripts/ci/test.sh host).
 require "minitest/autorun"
 require "fileutils"
+require "io/wait"
 require "json"
 require "net/http"
 require "socket"
 require "stringio"
 require "tmpdir"
 require_relative "../../cli/yaks"
+require_relative "../support/wait"
 
 # `yaks desktop open`: the desktop app's server chooser — its guards (Host, the one-time launch code, the
 # cookie, Origin), Local first, the saved servers' forwards (a fake ssh: a real child + a listener answering /up),
@@ -89,7 +91,7 @@ class CliChooserTest < Minitest::Test
 
   def teardown
     @server&.stop!
-    @thread&.join(5)
+    Wait.join(@thread, "the chooser to end", seconds: 5) if @thread
     @runner.close
     FileUtils.rm_rf(@home)
   end
@@ -112,8 +114,8 @@ class CliChooserTest < Minitest::Test
   def start(**opts)
     ready = Queue.new
     @thread = Thread.new { @code = CLI::Chooser.open(ctx, "/usr/bin/chromium", tick: 0.1, **opts) { ready << _1 } }
-    @server = ready.pop(timeout: 5)
-    argv = @runner.windows.pop(timeout: 5)
+    @server = Wait.pop(ready, "the chooser's server", seconds: 5)
+    argv = Wait.pop(@runner.windows, "the first window", seconds: 5)
     assert_equal "/usr/bin/chromium", argv.first
     argv.last.delete_prefix("--app=")
   end
@@ -148,17 +150,20 @@ class CliChooserTest < Minitest::Test
     [s, JSON.parse(data.delete_prefix("data: "))]
   end
 
-  # the stream's states until one passes the block (5 s at most) → that state
+  # the stream's states until one passes the block → that state. Bounded by a COUNT, never the clock: at
+  # most 50 states (5 s of the chooser's 0.1 s tick), and each line within 5 s of the one before
   def event_until(sock)
-    deadline = Time.now + 5
+    states = 0
     loop do
-      raise "no such state within 5 s" if Time.now > deadline
+      Wait.readable(sock, "the stream's next line", seconds: 5)
 
       line = sock.gets
-      next unless line&.start_with?("data: ")
+      raise "the stream ended before such a state" if line.nil?
+      next unless line.start_with?("data: ")
 
       state = JSON.parse(line.delete_prefix("data: "))
       return state if yield(state)
+      raise "no such state in 50 states" if (states += 1) >= 50
     end
   end
 
@@ -232,7 +237,7 @@ class CliChooserTest < Minitest::Test
     assert_equal({ "url" => "http://127.0.0.1:#{@local}", "state" => "up", "detail" => nil }, state["local"])
     assert_equal [], state["servers"]
     assert_equal "200", api(cookie, "/api/open", "local").first
-    assert_equal ["/usr/bin/chromium", "--app=http://127.0.0.1:#{@local}"], @runner.windows.pop(timeout: 5)
+    assert_equal ["/usr/bin/chromium", "--app=http://127.0.0.1:#{@local}"], Wait.pop(@runner.windows, "a window", seconds: 5)
   ensure
     s&.close
     up&.close
@@ -274,7 +279,8 @@ class CliChooserTest < Minitest::Test
     CLI::Remote.add!(ctx, "box")
     cookie = sign_in(start)
     assert_equal "200", api(cookie, "/api/open", "box").first
-    assert_equal ["/usr/bin/chromium", "--app=http://127.0.0.1:#{web}/?remote=srv"], @runner.windows.pop(timeout: 5)
+    assert_equal ["/usr/bin/chromium", "--app=http://127.0.0.1:#{web}/?remote=srv"],
+                 Wait.pop(@runner.windows, "a window", seconds: 5)
     spawn = @runner.ssh.find { _1.first == :spawn }.last
     assert_equal ["ssh", "-N", "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                   "-o", "ServerAliveInterval=5",
@@ -328,11 +334,13 @@ class CliChooserTest < Minitest::Test
     assert_equal "200", api(cookie, "/api/open", "box").first
     code, body = api(cookie, "/api/disconnect", "box")
     assert_equal %w[200 idle], [code, body["servers"].first["state"]]
-    sleep 1
-    # the Disconnect may land before the probe starts (then none) or while it runs (then it is stopped)
+    # the Disconnect took the forward away under the chooser's lock, and every later step (the probe's spawn, the ssh
+    # forward's spawn, the connected state, its window) is decided under that lock for the current forward only: none
+    # can happen after it, so the absence is asserted now — never by waiting a while to see nothing
     assert_empty @runner.ssh.map(&:first) - [:probe], "no ssh forward spawned"
-    assert_nil @runner.windows.pop(timeout: 0.2), "no window"
-    assert(@runner.probes.all? { process_gone?(_1) }, "the ports probe was stopped with it")
+    assert_empty @runner.windows, "no window"
+    # the Disconnect may land before the probe starts (then none) or while it runs (then it is stopped)
+    Wait.for("the ports probe to stop", seconds: 5) { @runner.probes.all? { process_gone?(_1) } }
   end
 
   # the chooser's end stops a probe still waiting on an unreachable server
@@ -343,9 +351,8 @@ class CliChooserTest < Minitest::Test
     s, = first_event(cookie)
     api(cookie, "/api/open", "box")
     s.close
-    assert @thread.join(5), "the chooser ended"
-    deadline = Time.now + 5
-    sleep 0.05 until process_gone?(@runner.probes.first) || Time.now > deadline
+    Wait.join(@thread, "the chooser to end", seconds: 5)
+    Wait.for("the ports probe to stop", seconds: 5) { process_gone?(@runner.probes.first) }
     assert process_gone?(@runner.probes.first), "no probe outlives the chooser"
   end
 
@@ -366,9 +373,10 @@ class CliChooserTest < Minitest::Test
   def test_two_opens_at_once_make_one_chooser
     out = StringIO.new
     threads = Array.new(2) { Thread.new { CLI::Chooser.open(ctx(out), "/usr/bin/chromium", tick: 0.1, first_window: 1) } }
-    ports = Array.new(2) { @runner.windows.pop(timeout: 5).last[%r{127\.0\.0\.1:(\d+)/}, 1] }
+    ports = Array.new(2) { Wait.pop(@runner.windows, "a window", seconds: 5).last[%r{127\.0\.0\.1:(\d+)/}, 1] }
     assert_equal 1, ports.uniq.size, "both windows on the one chooser"
-    threads.each { assert _1.join(5) } # each prints its line after its window: count once both are done
+    # each prints its line after its window: count once both are done
+    threads.each { Wait.join(_1, "each open to return", seconds: 5) }
     assert_equal 1, out.string.scan("chooser on http").size
     assert_equal 1, out.string.scan("the chooser runs already").size
   end
@@ -388,7 +396,7 @@ class CliChooserTest < Minitest::Test
     out = StringIO.new
     assert_equal 0, CLI::Chooser.open(ctx(out), "/usr/bin/chromium")
     assert_includes out.string, "the chooser runs already (pid #{Process.pid})"
-    second = @runner.windows.pop(timeout: 5).last.delete_prefix("--app=")
+    second = Wait.pop(@runner.windows, "a window", seconds: 5).last.delete_prefix("--app=")
     assert_match %r{\Ahttp://127\.0\.0\.1:#{@server.port}/\?code=}, second
     sign_in(second)
   end
@@ -400,15 +408,14 @@ class CliChooserTest < Minitest::Test
     cookie = sign_in(start(grace: 0.3))
     s, = first_event(cookie)
     api(cookie, "/api/open", "box")
-    @runner.windows.pop(timeout: 5)
+    Wait.pop(@runner.windows, "a window", seconds: 5)
     assert File.exist?(File.join(state_dir, "desktop.json"))
     s.close
-    assert @thread.join(5), "the chooser ended"
+    Wait.join(@thread, "the chooser to end", seconds: 5)
     assert_equal 0, @code
     refute File.exist?(File.join(state_dir, "desktop.json")), "its state file is gone"
     pid = @runner.pids.first
-    deadline = Time.now + 5
-    sleep 0.05 until process_gone?(pid) || Time.now > deadline
+    Wait.for("the forward's ssh to stop", seconds: 5) { process_gone?(pid) }
     assert process_gone?(pid), "the forward's ssh was stopped"
   end
 
@@ -418,12 +425,12 @@ class CliChooserTest < Minitest::Test
     cookie = sign_in(start(grace: 0.3))
     s, = first_event(cookie)
     s.close
-    assert @thread.join(5), "ended after the grace (first_window is #{CLI::Chooser::FIRST_WINDOW} s)"
+    Wait.join(@thread, "the end after the grace (first_window is #{CLI::Chooser::FIRST_WINDOW} s)", seconds: 5)
   end
 
   def test_no_window_ever_arriving_ends_it_too
     start(first_window: 0.3)
-    assert @thread.join(5)
+    Wait.join(@thread, "the end with no window", seconds: 5)
   end
 
   def test_skin_css_reads_the_base_skins_and_refuses_a_value_that_is_not_a_colour

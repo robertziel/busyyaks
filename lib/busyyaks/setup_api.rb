@@ -3,6 +3,7 @@
 require_relative "agent_settings_api"
 require_relative "config"
 require_relative "launcher_client"
+require_relative "clock"
 
 module Busyyaks
   # The first-run hello screen (/hello): the boot checks, where the projects come from, and the agent
@@ -42,7 +43,7 @@ module Busyyaks
     def complete(by:, db:, **)
       raise ArgumentError, "who finished the setup is required" if by.to_s.empty?
 
-      db[TABLE].insert(author: by.to_s, created_at: Time.now.to_i)
+      db[TABLE].insert(author: by.to_s, created_at: Busyyaks::Clock.epoch)
       show(db: db, **)
     end
 

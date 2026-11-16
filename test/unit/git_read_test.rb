@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require_relative "../support/wait"
 require "tmpdir"
 require "fileutils"
 require "open3"
@@ -60,14 +61,13 @@ class GitReadTest < Minitest::Test
   end
 
   # refused by the child, loudly and at once — and by the library itself with the same reason
+  # "at once" = the refusal's own reason, never the timeout's (no upper bound on real time)
   def refused(op, dir, pattern, **args)
-    t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     e = assert_raises(GR::Failed) { read(op, dir, **args) }
     assert_match pattern, e.message
-    took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t
+    refute_match(/timed out/, e.message, "refused at once, not on the timeout")
     inproc = in_process(op, dir, **args.except(:limits))
     assert_equal [false, e.message.delete_prefix("#{dir}: ")], [inproc["ok"], inproc["error"]]
-    took
   end
 
   def touch(name) = "touch #{File.join(@sentinels, name)}"
@@ -136,7 +136,7 @@ touch(v)) }
     commit(d, "a", "a\n")
     File.mkfifo(File.join(d, ".git", "fifo"))
     File.open(File.join(d, ".git", "config"), "a") { |f| f.puts("[include]\n\tpath = fifo") }
-    assert_operator refused("head", d, /includes another file/), :<, 5, "refused at once, not on the timeout"
+    refused("head", d, /includes another file/)
 
     e = repo("fan")
     commit(e, "a", "a\n")
@@ -144,7 +144,7 @@ touch(v)) }
       File.write(File.join(e, ".git", "inc#{i}"), Array.new(12) { "[include]\n\tpath = inc#{i + 1}\n" }.join)
     end
     File.open(File.join(e, ".git", "config"), "a") { |f| f.puts("  [ IncludeIf \"gitdir:/\" ]\n\tpath = inc0") }
-    assert_operator refused("scan", e, /includes another file/, **SCAN), :<, 5
+    refused("scan", e, /includes another file/, **SCAN)
   end
 
   def test_a_fifo_where_libgit2_reads_a_file_is_refused
@@ -155,7 +155,7 @@ touch(v)) }
       FileUtils.rm_f(path)
       FileUtils.mkdir_p(File.dirname(path))
       File.mkfifo(path)
-      assert_operator refused("scan", d, /#{Regexp.escape(f)} is not a regular file/, **SCAN), :<, 5, f
+      refused("scan", d, /#{Regexp.escape(f)} is not a regular file/, **SCAN)
     end
   end
 
@@ -374,10 +374,10 @@ touch(v)) }
     fifo = File.join(d, "excludes")
     File.mkfifo(fifo)
     git(d, "config", "core.excludesFile", fifo)
-    t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    e = assert_raises(GR::Failed) { read("scan", d, limits: GR.limits.merge(timeout: 2), **SCAN) }
+    e = Elapsed.at_least(2, "killed on the 2 s timeout, not before") do
+      assert_raises(GR::Failed) { read("scan", d, limits: GR.limits.merge(timeout: 2), **SCAN) }
+    end
     assert_match(/timed out after 2 s \(killed\)/, e.message)
-    assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - t, :<, 5
     assert_equal "main", read("head", d)["branch"]
   end
 

@@ -14,6 +14,11 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 - **Breaking:** required `config/busyyaks.yml` `ci` (`max_pending_minutes: 1..1440`, `required: {owner/name: [contexts]}`); see `docs/DEPLOY.md` § CI checks.
 - **Breaking:** required `config/busyyaks.yml` `terminal` (`public_host: allow | deny`, `max_open: 1..64`); see `docs/DEPLOY.md` § Terminals.
+- CI runs `ruby`, `ruby-pg`, `frontend` and the new `flake` stage on the public runner's CPU count (`scripts/ci/runner.env`) as a Docker CPU quota. `flake` runs each test file a change touches `CI_FLAKE_REPEATS` times, in batches of `CI_RUNNER_CPUS` runs: a changed test file, and the tests that name a changed `lib/`, `bin/` or `cli/` file. Any other changed path (e.g. `CHANGELOG.md`, docs, config) or a deleted one repeats the whole suite; an integration test that reaches a lib file only through the app is repeated only then.
+- Code reads the time only through `Busyyaks::Clock`; a test stubs it, and never sleeps or waits with a timeout itself (`test/support/wait.rb`, `test/unit/no_real_clock_test.rb`).
+- CI audits `main` daily; a red run opens the issue "Daily CI red on main".
+- **Breaking:** `.env` requires `TEST_WORKERS` (every `docker compose` command reads it); `scripts/ci/test.sh audit` requires `CI_GITHUB_CACHE_DIR`.
+- **Breaking:** `scripts/ci/test.sh flake` (and so `all`) requires `CI_BASE_REF`; `ruby`, `ruby-pg`, `frontend` and `flake` require a Docker host with at least `CI_RUNNER_CPUS` (4) CPUs whose daemon applies `--cpus` (a rootless dockerd needs the cpu controller delegated); see `CONTRIBUTING.md` § Tests.
 
 ## [1.0.0-beta.2] - 2026-11-15
 

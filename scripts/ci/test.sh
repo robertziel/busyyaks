@@ -23,8 +23,14 @@
 #                                 installers)
 #                                 on the OLDEST host Ruby they support (HOST_RUBY_IMAGE = Busyyaks::CLI::MIN_RUBY):
 #                                 a construct newer than that passes the suite's Ruby 3.4 and breaks on the host
-#   scripts/ci/test.sh all        lint, ruby, frontend, audit, secrets and host at once, each into its own log,
-#                                 printed one after the other once all have finished; fails if any fails
+#   scripts/ci/test.sh flake      the flake gate: every test file the change touches (vs CI_BASE_REF), plus
+#                                 the tests that name a lib/bin/cli file it touches, each run CI_FLAKE_REPEATS times,
+#                                 CI_RUNNER_CPUS runs at a time (rake test:repeat); any other changed or deleted path
+#                                 repeats the whole suite; one red run of a file fails it:
+#                                 "flaky: <file> failed k/N". CI_BASE_REF (env, required: a commit this checkout has) =
+#                                 what the change is measured against — the PR's base, or the previous commit of a push
+#   scripts/ci/test.sh all        lint, ruby, ruby-pg, frontend, flake, audit, secrets and host at once, each into its own
+#                                 log, printed one after the other once all have finished; fails if any fails
 #
 # Where it runs: Jenkins (the maintainer's runner, Jenkinsfile) and GitHub Actions (.github/workflows/ci.yml, every
 # pull request on the public repo, forks included) run this same script; so does any machine with Docker.
@@ -37,8 +43,12 @@
 # maintainer's Jenkins). On a ROOTLESS daemon (DOCKER_HOST = that user's socket) container root is that unprivileged
 # user, and the script hands it the rootless socket, never /var/run/docker.sock — the maintainer's Jenkins runs it so.
 #
-# Every CPU is used: the Ruby suite runs one worker process per CPU (Rakefile test:parallel), vitest
-# --maxWorkers = the container's `nproc`; both read the count at run time, nothing is pinned here.
+# The runner's shape: the ruby, ruby-pg, frontend and flake containers each get the public runner's CPU
+# time (scripts/ci/runner.env CI_RUNNER_CPUS → docker --cpus N, a CFS quota on no fixed cores: concurrent Jenkins builds
+# spread over the host, never all on the same N), and every CPU-sized count is N (vitest --maxWorkers, the flake waves),
+# never the host's `nproc`. That matches CONTENTION, not the runner's slower cores or a shared VM's stalls; the guard
+# against those is the clock rule (test/unit/no_real_clock_test.rb). The Ruby suite runs one worker process per test file
+# (Rakefile test:parallel: I/O-bound), inside that quota.
 #
 # Nothing here writes to the checkout except the Ruby suite's own bind mount (the compose file mounts `.:/app`);
 # whatever it leaves root-owned is handed back to the caller's uid afterwards, so a Jenkins workspace stays deletable.
@@ -46,6 +56,23 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 SRC=$PWD
+
+# scripts/ci/runner.env: the public runner's shape, the one place it is written. Only its two keys, each a positive
+# integer; a missing file, key or value fails here — never a default.
+RUNNER_ENV=scripts/ci/runner.env
+[ -f "$RUNNER_ENV" ] || { echo "ci: $RUNNER_ENV is missing — the runner's shape (CI_RUNNER_CPUS, CI_FLAKE_REPEATS)" >&2; exit 1; }
+CI_RUNNER_CPUS='' CI_FLAKE_REPEATS=''
+while IFS= read -r line; do
+  case "$line" in
+    '' | '#'*) ;;
+    CI_RUNNER_CPUS=* | CI_FLAKE_REPEATS=*) printf -v "${line%%=*}" '%s' "${line#*=}" ;;
+    *) echo "ci: $RUNNER_ENV: unknown line: $line" >&2; exit 1 ;;
+  esac
+done < "$RUNNER_ENV"
+for key in CI_RUNNER_CPUS CI_FLAKE_REPEATS; do
+  [[ "${!key}" =~ ^[1-9][0-9]*$ ]] || { echo "ci: $RUNNER_ENV: $key must be a positive integer (is '${!key}')" >&2; exit 1; }
+done
+CPU_QUOTA="$((CI_RUNNER_CPUS * 100000)) 100000"   # what cgroup v2 cpu.max reads in a container given --cpus N
 COMPOSE_IMAGE=docker:28.5.2-cli      # carries the compose plugin (the Jenkins controller's docker CLI has none)
 NODE_IMAGE=node:22-bookworm-slim     # the Dockerfile's frontend stage
 GITLEAKS_IMAGE=zricethezav/gitleaks:v8.30.1
@@ -103,6 +130,41 @@ chown_back() {
   docker run --rm -v "$HOST_SRC:/w" "$COMPOSE_IMAGE" chown -R "$(id -u):$(id -g)" /w
 }
 
+# The stages that run on the runner's CPU quota (ruby, ruby-pg, frontend, flake) ask this before they start anything;
+# the others (lint, audit, secrets, host) use no quota and run on any host. The runner's CPUs must exist on the daemon's
+# host: fewer → refused, never a smaller pin. And the daemon must APPLY the quota: a rootless dockerd whose user manager was not delegated the cpu controller drops
+# --cpus with only a warning and runs unlimited. Asked once per stage that limits, before it starts anything. The probe's
+# image is pulled first (a fresh image cache printed its pull progress where cpu.max was read), and
+# only the run's STDOUT is the measurement: exactly `<quota> <period>` (or `max <period>`), else "could not read".
+require_pin() {
+  local got err cpus
+  cpus=$(docker info --format '{{.NCPU}}')
+  if [ "$cpus" -lt "$CI_RUNNER_CPUS" ]; then
+    echo "ci: the Docker host has $cpus CPUs, the runner's shape needs $CI_RUNNER_CPUS ($RUNNER_ENV)" >&2
+    return 1
+  fi
+  err=$(mktemp)
+  if ! docker pull -q "$COMPOSE_IMAGE" > /dev/null 2> "$err"; then
+    echo "ci: could not pull $COMPOSE_IMAGE for the CPU-quota probe: $(cat "$err")" >&2
+    rm -f "$err"; return 1
+  fi
+  if ! got=$(docker run --rm --cpus "$CI_RUNNER_CPUS" "$COMPOSE_IMAGE" cat /sys/fs/cgroup/cpu.max 2> "$err"); then
+    echo "ci: the CPU-quota probe did not run: $(cat "$err")" >&2
+    rm -f "$err"; return 1
+  fi
+  if ! [[ "$got" =~ ^(max|[0-9]+)\ [0-9]+$ ]]; then
+    echo "ci: could not read cpu.max from the CPU-quota probe: '$got'" >&2
+    rm -f "$err"; return 1
+  fi
+  if [ "$got" != "$CPU_QUOTA" ]; then
+    echo "ci: the Docker daemon did not limit a container to $CI_RUNNER_CPUS CPUs (cpu.max in it: '$got', want" \
+      "'$CPU_QUOTA'; docker said: '$(tr '\n' ' ' < "$err")') — a rootless dockerd needs the cpu controller delegated to" \
+      "its user manager" >&2
+    rm -f "$err"; return 1
+  fi
+  rm -f "$err"
+}
+
 # One name per run: concurrent builds of different branches must not share a compose project or an image tag.
 RUN_ID=$(printf '%s' "${BUILD_TAG:-local-$$}" | tr -c 'a-zA-Z0-9_-' '-' | tr '[:upper:]' '[:lower:]')
 PROJECT="busyyaks-ci-${RUN_ID}"
@@ -116,10 +178,13 @@ compose() {
     -f docker-compose.yml -f "tmp/ci/$name/compose.ci.yml" "$@"
 }
 
-# The compose `test` service (with its test-postgres) on SQLite (no argument) or on PostgreSQL (`pg`).
+# The compose `test` service (with its test-postgres) on SQLite (no argument), on PostgreSQL (`pg`), or running the
+# flake gate's repeats (`flake <files>`), both containers given the runner's CPUs (a quota).
 ruby_compose() {
-  local pg=${1:-} name
-  name="$PROJECT-$([ -n "$pg" ] && echo pg || echo sqlite)"
+  local mode=${1:-sqlite} name
+  [ "$#" -eq 0 ] || shift
+  require_pin || return 1
+  name="$PROJECT-$mode"
   # Compose interpolates the whole file, and the live services' `${VAR:?}` refuse an empty value. The test service
   # sets its own environment, so the live wiring only has to be present: .env.example's keys (every one must be
   # listed there), the empty secrets filled with a marker no service run here reads.
@@ -127,8 +192,18 @@ ruby_compose() {
   sed -E 's/^([A-Z0-9_]+)=$/\1=ci-unused/' .env.example > "tmp/ci/$name/compose.env"
   # This run's own image tag instead of busyyaks:test (two branches building at once would swap each other's image).
   {
-    printf 'services:\n  test:\n    image: busyyaks:%s\n' "$name"
-    [ -z "$pg" ] || printf '    environment:\n      DATABASE_ADAPTER: postgresql\n'
+    # MT_CPU: minitest's thread pool per test process is the runner's CPUs, never the host's nproc (a quota leaves nproc
+    # at the host's 32: 83 workers × 32 threads ran out of the Jenkins agent's tasks)
+    # TEST_WORKERS: test:parallel's test processes at a time = the runner's CPUs
+    printf 'services:\n  test:\n    image: busyyaks:%s\n    cpus: %s\n    environment:\n      MT_CPU: "%s"\n      TEST_WORKERS: "%s"\n' \
+      "$name" "$CI_RUNNER_CPUS" "$CI_RUNNER_CPUS" "$CI_RUNNER_CPUS"
+    case "$mode" in
+      pg) printf '      DATABASE_ADAPTER: postgresql\n' ;;
+      flake) printf '      TEST_REPEAT_TIMES: "%s"\n      TEST_REPEAT_WORKERS: "%s"\n      TEST_REPEAT_FILES: "%s"\n' \
+               "$CI_FLAKE_REPEATS" "$CI_RUNNER_CPUS" "$*"   # at most one test process per runner CPU
+             printf '    command: ["bundle", "exec", "rake", "test:repeat"]\n' ;;
+    esac
+    printf '  test-postgres:\n    cpus: %s\n' "$CI_RUNNER_CPUS"
   } > "tmp/ci/$name/compose.ci.yml"
 
   local status=0
@@ -214,18 +289,71 @@ YML
 }
 
 frontend_suite() {
+  require_pin || return 1
   # read-only source, frontend/ copied in without node_modules: npm ci never touches the checkout. public/static beside
   # it, as in the checkout: a test runs public/static/skin.js (the skin choice, outside the bundle). Prettier reads the
   # whole repo in place (read-only; it never writes with --check) with the copy's node_modules: the same files and glob
   # as `npm run format:check`, .gitignore + .prettierignore applied (Prettier's default ignore files, read from /repo)
-  docker run --rm -v "$HOST_SRC:/repo:ro" "$NODE_IMAGE" sh -euc '
+  docker run --rm --cpus "$CI_RUNNER_CPUS" -e "CI_RUNNER_CPUS=$CI_RUNNER_CPUS" -v "$HOST_SRC:/repo:ro" "$NODE_IMAGE" sh -euc '
     mkdir -p /w/frontend /w/public && cd /repo/frontend && tar cf - --exclude=./node_modules . | tar xf - -C /w/frontend
     cp -r /repo/public/static /w/public/static && cd /w/frontend
     npm ci --no-audit --no-fund
     npx tsc --noEmit
     npm run lint
     (cd /repo && /w/frontend/node_modules/.bin/prettier --check "**/*.{ts,tsx,js,css,json}")
-    npx vitest run --maxWorkers="$(nproc)"'
+    npx vitest run --maxWorkers="$CI_RUNNER_CPUS"'
+}
+
+# The flake gate: what the change touches, run CI_FLAKE_REPEATS times, CI_RUNNER_CPUS runs at a time. Fails
+# CLOSED: every changed path must be one this maps — a changed test file (test/**/*_test.rb) selects itself; a lib/**/*.rb,
+# bin/<x> or cli/**/<x>.rb selects the test files that name it (its path `busyyaks/<x>` or its constant; "bin/<x>";
+# "<x>.rb"), and naming none selects the whole suite. Any other path (app/, config/, test/support/, docs, the SPA,
+# Rakefile, Gemfile, Dockerfile …) selects the whole suite: Ruby tests read docs, fixtures and the SPA's files too, so no
+# path is assumed test-free. A DELETED path other than a test file selects the whole suite too (no test names it any
+# more: the tests that used it are the ones to repeat, and nothing says which). Only an empty diff repeats nothing.
+# A heuristic, not coverage: a lib file exercised only through the app (an integration test that never names it) does
+# not select that test — the ruby / ruby-pg stages still run every test once.
+flake_suite() {
+  [ -n "${CI_BASE_REF:-}" ] || { echo "flake: CI_BASE_REF is not set — the commit the change is measured against" >&2; return 1; }
+  local base changed=() deleted=() picked=() named=() f stem const all=
+  base=$(git rev-parse --verify --quiet "$CI_BASE_REF^{commit}") || {
+    echo "flake: CI_BASE_REF=$CI_BASE_REF is not a commit this checkout has" >&2; return 1
+  }
+  base=$(git merge-base "$base" HEAD)
+  mapfile -t changed < <(git diff --name-only --diff-filter=d "$base" HEAD)
+  mapfile -t deleted < <(git diff --name-only --diff-filter=D "$base" HEAD)
+  for f in "${deleted[@]}"; do
+    case "$f" in
+      test/*_test.rb) ;;
+      *) echo "flake: $f was deleted — the whole suite is repeated"; all=1 ;;
+    esac
+  done
+  for f in "${changed[@]}"; do
+    named=()
+    case "$f" in
+      test/*_test.rb) picked+=("$f"); continue ;;
+      lib/*.rb)
+        stem=${f#lib/}; stem=${stem%.rb}
+        const=$(basename "$stem" | sed -E 's/(^|_)([a-z0-9])/\U\2/g')
+        mapfile -t named < <(git grep -l -E "(^|[^A-Za-z0-9_])($const([^A-Za-z0-9_]|$)|$stem([^A-Za-z0-9_]|$))" HEAD -- 'test/*_test.rb' | sed 's/^HEAD://') ;;
+      bin/*)
+        mapfile -t named < <(git grep -l -F "$f" HEAD -- 'test/*_test.rb' | sed 's/^HEAD://') ;;
+      cli/*.rb)
+        mapfile -t named < <(git grep -l -F "$(basename "$f")" HEAD -- 'test/*_test.rb' | sed 's/^HEAD://') ;;
+      *)
+        echo "flake: $f maps to no test file — the whole suite is repeated"; all=1; continue ;;
+    esac
+    if [ "${#named[@]}" -eq 0 ]; then echo "flake: no test file names $f — the whole suite is repeated"; all=1; fi
+    picked+=("${named[@]}")
+  done
+  [ -z "$all" ] || mapfile -t picked < <(git ls-files 'test/*_test.rb' 'auth/*/test/*_test.rb')
+  mapfile -t picked < <(printf '%s\n' "${picked[@]}" | sed '/^$/d' | sort -u)
+  echo "flake: $((${#changed[@]} + ${#deleted[@]})) files changed since $(git rev-parse --short "$base") ($CI_BASE_REF); ${#picked[@]} test files × $CI_FLAKE_REPEATS, $CI_RUNNER_CPUS at a time on $CI_RUNNER_CPUS CPUs"
+  if [ $((${#changed[@]} + ${#deleted[@]})) -eq 0 ]; then echo "flake: nothing changed — nothing to repeat"; return 0; fi
+  if [ "${#changed[@]}" -eq 0 ] && [ -z "$all" ]; then echo "flake: only test files were deleted — nothing to repeat"; return 0; fi
+  [ "${#picked[@]}" -gt 0 ] || { echo "flake: $((${#changed[@]} + ${#deleted[@]})) files changed and no test file was found to repeat" >&2; return 1; }
+  printf '  %s\n' "${picked[@]}"
+  ruby_compose flake "${picked[@]}"
 }
 
 lint_suite() {
@@ -240,14 +368,24 @@ audit_suite() {
   tag=$(scripts/lint/image)
   docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$HOST_SRC:/src:ro" --entrypoint bundle "$tag" \
     exec bundle-audit check --update /src || status=1
-  # the image's libgit2 (Dockerfile ARG) against libgit2's security releases: not in any advisory db. Authenticated
-  # only: CI_GITHUB_READ_TOKEN reaches the container by NAME (-e VAR), never on a command line.
+  # the image's libgit2 (Dockerfile ARG) against libgit2's security releases: not in any advisory db. GitHub's API with
+  # CI_GITHUB_READ_TOKEN (required: never anonymous — one IP's 60/h is shared by every build on the host), handed in by
+  # NAME (`-e VAR`: the value never on a command line), pages asked with their kept ETag (a 304 costs nothing) from
+  # CI_GITHUB_CACHE_DIR (required, the caller's: Jenkins the agent user's home, GitHub the job's temp dir — wiped per
+  # job, so a full read each run —, a local run its own; .env.example). The container writes it: as the caller (rootful) or as container root = the caller (rootless)
   if [ -z "${CI_GITHUB_READ_TOKEN:-}" ]; then
-    echo "audit: CI_GITHUB_READ_TOKEN is not set — the libgit2 audit never asks GitHub anonymously" >&2
+    echo "audit: CI_GITHUB_READ_TOKEN is not set — a read-only GitHub token for the libgit2 release list (.env.example)" >&2
+    status=1
+  elif [ -z "${CI_GITHUB_CACHE_DIR:-}" ]; then
+    echo "audit: CI_GITHUB_CACHE_DIR is not set — the dir that keeps the release list's ETags (.env.example)" >&2
     status=1
   else
-    docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e CI_GITHUB_READ_TOKEN -v "$HOST_SRC:/src:ro" --entrypoint ruby "$tag" \
-      /src/scripts/ci/libgit2-audit.rb /src/Dockerfile || status=1
+    local user
+    mkdir -p "$CI_GITHUB_CACHE_DIR"
+    if [ -n "$ROOTLESS" ]; then user=0:0; else user="$(id -u):$(id -g)"; fi
+    docker run --rm -u "$user" -e HOME=/tmp -e CI_GITHUB_READ_TOKEN -v "$HOST_SRC:/src:ro" \
+      -v "$(host_path "$(cd "$CI_GITHUB_CACHE_DIR" && pwd)"):/cache" \
+      --entrypoint ruby "$tag" /src/scripts/ci/libgit2-audit.rb /src/Dockerfile /cache || status=1
   fi
   # the lockfile alone is audited: nothing installed, nothing written to the checkout
   docker run --rm -v "$HOST_SRC/frontend:/src:ro" "$NODE_IMAGE" sh -euc '
@@ -315,6 +453,7 @@ case "${1:-}" in
   audit) audit_suite ;;
   secrets) secrets_suite ;;
   host) host_suite ;;
-  all) all_suites lint ruby ruby-pg frontend audit secrets host ;;
-  *) echo "usage: $0 lint|ruby|ruby-pg|frontend|audit|secrets|host|all" >&2; exit 2 ;;
+  flake) flake_suite ;;
+  all) all_suites lint ruby ruby-pg frontend flake audit secrets host ;;
+  *) echo "usage: $0 lint|ruby|ruby-pg|frontend|flake|audit|secrets|host|all" >&2; exit 2 ;;
 esac

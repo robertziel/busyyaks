@@ -7,6 +7,7 @@ require_relative "../../vendor/agents_kanban/ruby/lib/agents_kanban/errors"
 require_relative "github_network"
 require_relative "github"
 require_relative "pr_states"
+require_relative "clock"
 
 module Busyyaks
   # PR check status for the kanban idle watch (config/kanban.yml idle_watch; the engine's CiChecks port).
@@ -46,7 +47,7 @@ module Busyyaks
     # {"ok"=>true, "branch"=>…, "last_commit_at"=>…}.
     class Port
       # approvals: ->(slug) { the board's approval steps, in order } (CiChecks.steps(Store#board_of(slug)))
-      def initialize(db:, projects:, approvals:, launcher:, stale_after:, wanted_for:, clock: -> { Time.now.to_i })
+      def initialize(db:, projects:, approvals:, launcher:, stale_after:, wanted_for:, clock: -> { Busyyaks::Clock.epoch })
         @db = db
         @approvals = approvals
         @wanted_for = wanted_for
@@ -286,7 +287,7 @@ module Busyyaks
       PER_PAGE = 100 # GitHub's maximum for both commit status and check-run lists
 
       # ci: CiSettings::Settings (config/busyyaks.yml ci) — the contexts that gate per repo + the stuck limit
-      def initialize(db:, client:, wanted_for:, ci:, clock: -> { Time.now.to_i })
+      def initialize(db:, client:, wanted_for:, ci:, clock: -> { Busyyaks::Clock.epoch })
         @db = db
         @client = client
         @pages = GithubNetwork::Data.new(db)

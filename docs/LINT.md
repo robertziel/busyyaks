@@ -63,6 +63,8 @@ overcommit hook, on the staged files.
 | ShellCheck v0.10.0 | shell scripts (by shebang), `-S style` | `lint` | `ShellCheck` |
 | Prettier 3.9.10 + `.editorconfig` | TS/TSX/JS/CSS/JSON formatting, the whole repo (vendored engine included) | `frontend` | `PrettierCheck` |
 | SimpleCov | Ruby line + branch coverage minimum | coming, inside `ruby` | — |
+| `test/unit/no_real_clock_test.rb` (Prism) | the code reads the time only through `Busyyaks::Clock` (`lib/busyyaks/clock.rb`); a test never reads the real clock (`Time.now`, `Time.new` with no or only keyword arguments, `Date.today`, `Process.clock_gettime`) and never waits on real time itself — no `sleep`, no `Clock.pause`, no blocking call given a timeout (`Queue#pop(timeout:)`, `Thread#join(n)`, `IO#wait_readable(n)`, `IO.select(…, n)`, `Timeout.timeout`, `ConditionVariable#wait(m, n)`; a literal `0` is a non-blocking check): it stubs the Clock, or waits through a `Wait` helper (`test/support/wait.rb`, polls up to a count); an absence is asserted after the event that decides it | `ruby`, `ruby-pg` | — |
+| flake gate (`scripts/ci/test.sh flake`) | each test file the change touches (and the tests naming a lib/bin/cli file it touches) `CI_FLAKE_REPEATS` times, in batches of `CI_RUNNER_CPUS` runs, on the public runner's CPU quota (`scripts/ci/runner.env`); any other changed or deleted path repeats the whole suite (docs/TESTING.md) | `flake` | — |
 
 ### Considered and not used
 

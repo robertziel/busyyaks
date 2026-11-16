@@ -3,6 +3,7 @@
 require "etc"
 require "json"
 require "optparse"
+require_relative "../lib/busyyaks/clock"
 require_relative "../lib/busyyaks/env_file"
 require_relative "../lib/busyyaks/deploy_template"
 

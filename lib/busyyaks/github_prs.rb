@@ -2,6 +2,7 @@
 
 require "time"
 require_relative "github_network"
+require_relative "clock"
 
 module Busyyaks
   # The operator's merged PRs, from GitHub itself: the search API, `is:pr is:merged author:<login>
@@ -14,7 +15,7 @@ module Busyyaks
     module_function
 
     # One read → the gh_pr_runs row. Never raises for a GitHub failure: the error is the run's result.
-    def collect(db:, client:, login:, since:, clock: -> { Time.now.to_i })
+    def collect(db:, client:, login:, since:, clock: -> { Busyyaks::Clock.epoch })
       raise GithubNetwork::Error, "GITHUB_LOGIN #{login.inspect} is not a GitHub login" unless login.to_s.match?(GithubNetwork::LOGIN)
 
       calls = client.calls

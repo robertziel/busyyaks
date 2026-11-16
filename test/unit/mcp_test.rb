@@ -148,7 +148,7 @@ out.dig("config", "runner"))
   end
 
   def test_daily_facts_counts_both_windows_human_check_and_previous_figures
-    t = Time.now.to_i
+    t = Busyyaks::Clock.epoch
     store.upsert_project(slug: "a", path: "/a", remote: nil, branch: "main", own: true, last_commit_at: t, commits_window: 3,
                          mine_window: 3, dirty: 4, unpushed: nil, scanned_at: t,
                          dirty_paths: JSON.generate([" M app/a.rb", "?? db/migrate/1_x.rb"]))
@@ -246,7 +246,7 @@ out.dig("config", "runner"))
     facts = lambda do
       JSON.parse(tool("daily_facts", { hours: 24, series: "Daily report" }).dig("content", 0, "text"))["last_scan"]
     end
-    now = Time.now.to_i
+    now = Busyyaks::Clock.epoch
     id = store.scan_started(now - 1000)
     store.scan_finished(id, now - 999, 3, nil)
     old = facts.call

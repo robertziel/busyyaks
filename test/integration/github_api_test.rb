@@ -24,7 +24,7 @@ class GithubApiTest < Minitest::Test
 
   def test_feed_with_rendered_lists
     sign_in
-    now = Time.now.to_i
+    now = Busyyaks::Clock.epoch
     login = ENV.fetch("GITHUB_LOGIN")
     db[:gh_runs].insert(login: login, started_at: now - 20, finished_at: now - 10, ok: true, baseline: true)
     db[:gh_follows].insert(follower: login, followee: "alice", first_seen_at: now, last_seen_at: now, baseline: true)

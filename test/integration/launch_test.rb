@@ -18,7 +18,7 @@ class LaunchTest < Minitest::Test
   def setup
     super
     store.upsert_project(slug: "group/repo", path: "/projects/group/repo", remote: nil, branch: "main", own: true,
-                         last_commit_at: Time.now.to_i, commits_window: 1, mine_window: 1, dirty: 0, unpushed: nil,
+                         last_commit_at: Busyyaks::Clock.epoch, commits_window: 1, mine_window: 1, dirty: 0, unpushed: nil,
                          scanned_at: 1)
     assert_equal 200, sign_in
     get "/"
@@ -79,7 +79,8 @@ class LaunchTest < Minitest::Test
     when "agents" then @agents_refused || agents_snapshot
     when "agent_tasks"
       { ok: true,
-        agents: [{ id: "a1", description: "Sweep exhibitor pages", type: "subagent", state: "running", mtime: Time.now.to_f }],
+        agents: [{ id: "a1", description: "Sweep exhibitor pages", type: "subagent", state: "running",
+mtime: Busyyaks::Clock.now.to_f, }],
         workflows: [{ id: "wf_1", name: "review-changes", status: "running", agents_n: 4 }], }
     when "reap_preview"
       { ok: true, quiet_min: 30, candidates: [{ name: "group_repo", socket: "default", reason: "idle", activity: 1,
@@ -111,7 +112,7 @@ class LaunchTest < Minitest::Test
 
   # the collector's snapshot: a busy session with subagents, one on an unconfigured engine, one blocked on a dialog
   def agents_snapshot
-    busy = { name: "group_repo", socket: "default", attached: 1, created: 1, activity: Time.now.to_i,
+    busy = { name: "group_repo", socket: "default", attached: 1, created: 1, activity: Busyyaks::Clock.epoch,
              claude_url: "https://claude.ai/code/session_x",
              panes: [{ target: "0.0", cwd: "/mnt/x/group/repo/sub", project_path: "/projects/group/repo/sub",
                        engine: "claudeapi", engine_label: "Claude", model: "opus", status: "busy", title: "kanban work",
@@ -129,7 +130,7 @@ class LaunchTest < Minitest::Test
     asker = { name: "asker", socket: "default", attached: 0, created: 1, activity: 2,
               panes: [{ target: "0.0", cwd: "/mnt/x/group/repo", project_path: "/projects/group/repo", engine: "claudeapi",
                         status: "idle", screen: { state: "blocked", rule: "bash_permission_prompt", dialog: dialog }, }], }
-    { ok: true, generated_at: Time.now.to_f, age_s: 1.0, interval_s: 5, collector_error: nil,
+    { ok: true, generated_at: Busyyaks::Clock.now.to_f, age_s: 1.0, interval_s: 5, collector_error: nil,
       sessions: [busy, unconfigured, asker], }
   end
 
@@ -219,7 +220,7 @@ class LaunchTest < Minitest::Test
     kb = Busyyaks::Kanban.default
     id = kb.create(slug: "group/repo", title: "ship it", by: "op", column: "doing")
     kb.set_owner(id, session: "elsewhere", by: "op")
-    now = Time.now.to_i # the github service read the PR's checks green: a gate is handed off on green CI only
+    now = Busyyaks::Clock.epoch # the github service read the PR's checks green: a gate is handed off on green CI only
     Hanami.app["db.gateway"].connection[:gh_pr_checks].insert(repo: "o/r", ref: "pr:5", requested_at: now, checked_at: now,
                                                              number: 5, state: "success", finished_at: now,
                                                              builds: '["https://ci/1"]') # the build handed off (card #470)
@@ -388,13 +389,13 @@ class LaunchTest < Minitest::Test
     asks = -> { @requests.count { |r| r["op"] == "agents" } }
     # the snapshot's clock stands still: four reads inside one window, however slow the machine (in the past, so the
     # real clock's reads below are all past that window)
-    t0 = Busyyaks::LauncherClient.clock - 100
-    Busyyaks::LauncherClient.stub(:clock, t0) do
+    t0 = -1_000_000.0
+    Busyyaks::Clock.stub(:monotonic, t0) do
       3.times { api(:get, "/api/cards/#{id}/live") }
       api(:get, "/api/agents")
     end
     assert_equal 1, asks.()
-    Busyyaks::LauncherClient.stub(:clock, t0 + Busyyaks::LauncherClient::SNAPSHOT_SECONDS) do
+    Busyyaks::Clock.stub(:monotonic, t0 + Busyyaks::LauncherClient::SNAPSHOT_SECONDS) do
       api(:get, "/api/agents")
     end
     assert_equal 2, asks.() # the window ended: asked again

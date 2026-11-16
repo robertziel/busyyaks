@@ -7,6 +7,7 @@
 # exit 0 even with errors (the test reports them).
 #   ruby test/support/database_writer.rb <go file> <slug> <iterations> <writer name>
 require "json"
+require_relative "wait"
 
 go, slug, iterations, name = ARGV
 ENV["HANAMI_ENV"] ||= "test"
@@ -16,7 +17,7 @@ store = Busyyaks::Kanban.store
 store.db.test_connection
 $stdout.sync = true
 puts "ready"
-sleep 0.01 until File.exist?(go)
+Wait.for("the go file", seconds: 60, every: 0.01) { File.exist?(go) }
 
 done = 0
 errors = []

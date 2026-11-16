@@ -1,6 +1,7 @@
 # Public CI: the same gates the maintainer's Jenkins runs (Jenkinsfile), for everyone's pull requests — forks
-# included — and every push to main. One job: scripts/ci/test.sh all (lint · ruby · ruby-pg · frontend · audit ·
-# secrets · host, at once), on a GitHub-hosted ubuntu-latest runner, which carries Docker; the script needs nothing else. A finding in any
+# included — and every push to main. One job: scripts/ci/test.sh all (lint · ruby · ruby-pg · frontend · flake · audit ·
+# secrets · host, at once), on a GitHub-hosted ubuntu-latest runner, which carries Docker and the 4 CPUs the quota
+# stages need (scripts/ci/runner.env); the steps below hand it its env. A finding in any
 # stage fails the job; nothing here skips, retries or allows a failure.
 #
 # Trigger decision: the job runs on PUBLIC repositories only. A private copy — the maintainer's private local repo, where
@@ -12,6 +13,13 @@
 # That is safe on GitHub's disposable VM: `pull_request` from a fork gets a read-only token and no secrets, and this
 # workflow asks for nothing more (permissions: contents read; no secrets used).
 #
+# Daily: the `audit` job runs scripts/ci/test.sh audit on main every day, so an advisory published since the
+# last push turns this workflow red there before any pull request runs into it. A red daily audit opens (or comments on)
+# the issue "Daily CI red on main" (scripts/ci/github alert in the `alert` job, the only one with `issues: write`) — the
+# same alert the maintainer's Jenkins raises for its daily build. GitHub DISABLES a scheduled workflow after 60 days
+# with no activity in the repository, silently: the maintainer's Jenkins daily build runs the same audit
+# every day regardless, so an advisory still raises an alert there while this one is off.
+#
 # Actions are pinned by commit SHA (a tag can be moved); the comment names the release.
 name: ci
 
@@ -20,18 +28,22 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  # a newer push to a PR replaces its run; every push to main is checked to the end
+  # the daily audit has its own group: a push to main queued behind it never replaces it (a group holds one pending
+  # run), and it never replaces a push's run
+  group: ${{ github.event_name == 'schedule' && 'ci-daily-audit' || format('ci-{0}', github.ref) }}
+  # a newer push to a PR replaces its run; every push to main and every daily audit is checked to the end
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gates:
-    if: ${{ !github.event.repository.private || vars.CI_ON_PRIVATE == 'true' }}
+    if: ${{ github.event_name != 'schedule' && (!github.event.repository.private || vars.CI_ON_PRIVATE == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -39,8 +51,57 @@ jobs:
         with:
           fetch-depth: 0 # the secrets stage scans the whole history and refuses a shallow clone
           persist-credentials: false
-      - name: scripts/ci/test.sh all
-        run: scripts/ci/test.sh all
+      # the flake gate's base (scripts/ci/test.sh flake): what this run's change is measured against, per event
+      - name: the change's base
         env:
-          # the libgit2 audit reads GitHub authenticated: the run's own read-only token, never anonymous
-          CI_GITHUB_READ_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.base_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT" in
+            pull_request) base="refs/remotes/origin/$PR_BASE" ;;
+            push) base=$PUSH_BEFORE ;;
+            workflow_dispatch) base=HEAD~1 ;;
+            *) echo "no base for event $EVENT" >&2; exit 1 ;;
+          esac
+          echo "CI_BASE_REF=$base" >> "$GITHUB_ENV"
+      - name: scripts/ci/test.sh all
+        env:
+          CI_GITHUB_CACHE_DIR: ${{ runner.temp }}/github-etags
+          CI_GITHUB_READ_TOKEN: ${{ github.token }} # the run's own read-only token (permissions: contents read)
+        run: scripts/ci/test.sh all
+
+  audit:
+    if: ${{ github.event_name == 'schedule' && (!github.event.repository.private || vars.CI_ON_PRIVATE == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: scripts/ci/test.sh audit
+        env:
+          # runner.temp is the job's own: on Actions every run reads the release list in full (authenticated, one page)
+          CI_GITHUB_CACHE_DIR: ${{ runner.temp }}/github-etags
+          CI_GITHUB_READ_TOKEN: ${{ github.token }} # the run's own read-only token (permissions: contents read)
+        run: scripts/ci/test.sh audit
+
+  # its own job, so the token that may write issues never reaches the audit's containers
+  alert:
+    needs: audit
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: alert on a red daily audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: scripts/ci/github alert "Daily CI red on main" "The daily audit of main (bundle-audit, the libgit2 audit, npm audit) failed; the run's log says which check and why."

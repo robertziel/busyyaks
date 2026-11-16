@@ -42,7 +42,7 @@ class SetupAPITest < Minitest::Test
   end
 
   def test_healthy_checks_carry_their_numbers
-    now = Time.now.to_i
+    now = Busyyaks::Clock.epoch
     db[:scans].insert(started_at: now - 5, finished_at: now - 1, repos: 7)
     db[:gh_runs].insert(login: ENV.fetch("GITHUB_LOGIN"), started_at: now - 9, finished_at: now - 2, ok: true,
                         baseline: false)
@@ -56,7 +56,7 @@ class SetupAPITest < Minitest::Test
   end
 
   def test_a_failed_scan_and_a_failed_github_run_are_shown_as_failed
-    now = Time.now.to_i
+    now = Busyyaks::Clock.epoch
     db[:scans].insert(started_at: now - 5, finished_at: now - 1, repos: 0, error: "root /projects missing")
     db[:gh_runs].insert(login: ENV.fetch("GITHUB_LOGIN"), started_at: now - 9, finished_at: now - 2, ok: false,
                         baseline: false, error: "401 bad credentials")

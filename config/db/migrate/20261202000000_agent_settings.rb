@@ -2,6 +2,7 @@
 
 require "json"
 require "yaml"
+require "busyyaks/clock"
 
 # agent_settings: the host config's launchers + agent types as revisions — the newest row is the current
 # one (Busyyaks::AgentSettings), edited on Settings → Agents & launchers. The first revision is the repo default,
@@ -18,7 +19,7 @@ ROM::SQL.migration do
     end
     template = YAML.safe_load_file(File.expand_path("../../agents.template.yml", __dir__))
     self[:agent_settings].insert(doc: JSON.generate(template), author: "migration 20261202000000",
-                                 created_at: Time.now.to_i)
+                                 created_at: Busyyaks::Clock.epoch)
   end
 
   down do

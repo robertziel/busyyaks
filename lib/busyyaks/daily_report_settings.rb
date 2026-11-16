@@ -2,6 +2,7 @@
 
 require "json"
 require_relative "daily_report_config"
+require_relative "clock"
 
 module Busyyaks
   # The daily report settings: what config/busyyaks.yml `daily_report` held — schedule, cutoff, timeouts,
@@ -107,7 +108,7 @@ module Busyyaks
 
     # Write a new revision from `doc`, based on revision `base` (the one the editor loaded; nil = none existed):
     # validated, the runner on `runners`, `base` still the newest → the new revision's id.
-    def save!(db, doc:, base:, author:, runners:, clock: -> { Time.now.to_i })
+    def save!(db, doc:, base:, author:, runners:, clock: -> { Busyyaks::Clock.epoch })
       config!(doc, runners)
       raise Refused, "author is required" if author.to_s.empty?
 

@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# The Jenkinsfile's two GitHub calls, with the token (GH_TOKEN, credential github-pat) never on a command line.
+# The Jenkinsfile's GitHub calls, with the token (GH_TOKEN, credential github-pat) never on a command line.
 #
 #   scripts/ci/github default-branch           GH_REPO → prints the repo's default branch (GET /repos/:repo)
 #   scripts/ci/github status <state> <text>    GH_REPO GIT_SHA BUILD_URL → commit status, context jenkins/ci
 #                                              (POST /repos/:repo/statuses/:sha; state pending|success|failure|error)
+#   scripts/ci/github fetch-base <branch>      a pull request's base branch → refs/remotes/origin/<branch>, the flake
+#                                              gate's CI_BASE_REF (a PR build checks out the PR head only);
+#                                              the token reaches git through GIT_ASKPASS, a script reading GH_TOKEN
+#   scripts/ci/github alert <title> <text>     GH_REPO BUILD_URL → the open issue titled <title> gets <text> + the build
+#                                              as a comment, or a new issue is opened (the daily build's red
+#                                              reaches the repo's watchers — the maintainer — as a GitHub notification)
 #
 # Every failure exits non-zero with the reason and what to check; GitHub's JSON is read with a JSON parser (perl
 # JSON::PP, core perl), never with sed. Nothing it prints holds the token.
@@ -59,8 +65,60 @@ status() {
   echo "github: status $state posted for ${GIT_SHA:0:8}"
 }
 
+fetch_base() {
+  local branch=$1
+  [[ "$branch" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ ]] || die "fetch-base: '$branch' is not a branch name"
+  gh_token_ok GH_TOKEN "check credential github-pat" || exit 1
+  # git asks GIT_ASKPASS for the credential: a throwaway script that prints GH_TOKEN from its env — argv never holds it
+  askpass=$(mktemp); trap 'rm -f "$askpass"' EXIT   # global: the EXIT trap reads it
+  cat > "$askpass" <<'SH'
+#!/bin/sh
+case "$1" in Username*) echo x-access-token ;; *) printf '%s\n' "$GH_TOKEN" ;; esac
+SH
+  chmod 700 "$askpass"
+  GIT_ASKPASS=$askpass GIT_TERMINAL_PROMPT=0 git -c credential.helper= \
+    fetch --no-tags --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
+    die "cannot fetch $branch from origin — check the network and credential github-pat"
+  echo "github: base $branch at $(git rev-parse --short "refs/remotes/origin/$branch")"
+}
+
+alert() {
+  local title=$1 text=$2 code number payload
+  [ -n "$title" ] || die "alert: the title is empty"
+  need GH_REPO BUILD_URL
+  need_json
+  gh_token_ok GH_TOKEN "check credential github-pat" || exit 1
+  resp=$(mktemp); hdrs=$(mktemp); trap 'rm -f "$resp" "$hdrs"' EXIT   # global: the EXIT trap reads them
+  # every page of the open issues (GitHub's Link header names the next one) until one holds the title
+  local page="https://api.github.com/repos/$GH_REPO/issues?state=open&per_page=100"
+  number=
+  while [ -n "$page" ] && [ -z "$number" ]; do
+    code=$(gh_curl GH_TOKEN -sSL -D "$hdrs" -o "$resp" -w '%{http_code}' "$page") ||
+      die "cannot reach GitHub to read $GH_REPO's issues — check the network"
+    [ "$code" = 200 ] || die "GitHub answered HTTP $code reading $GH_REPO's issues ($(gh_message "$resp"))"
+    # the open issue (never a pull request) with exactly this title
+    number=$(TITLE=$title perl -MJSON::PP -MEncode=decode -e 'local $/; my $j = eval { decode_json(<STDIN>) } or exit 3;
+      exit 4 unless ref $j eq "ARRAY"; my $t = decode("UTF-8", $ENV{TITLE});
+      for (@$j) { if (ref $_ eq "HASH" && !$_->{pull_request} && ($_->{title} // "") eq $t) { print $_->{number}; last } }' \
+      < "$resp") || die "GitHub's issue list for $GH_REPO is not a JSON array"
+    page=$(perl -ne 'print $1 if /^link:.*<([^>]+)>;\s*rel="next"/i' "$hdrs")
+  done
+  payload=$(TITLE=$title TEXT="$text"$'\n\n'"Build: $BUILD_URL" perl -MJSON::PP -MEncode=decode -e '
+    my %e = map { $_ => decode("UTF-8", $ENV{$_}) } qw(TITLE TEXT);
+    print JSON::PP->new->utf8->canonical->encode($ARGV[0] ? {body => $e{TEXT}} : {title => $e{TITLE}, body => $e{TEXT}})' \
+    "${number:-}")
+  local url="https://api.github.com/repos/$GH_REPO/issues"
+  [ -z "$number" ] || url="$url/$number/comments"
+  code=$(printf '%s' "$payload" | gh_curl GH_TOKEN -sS -o "$resp" -w '%{http_code}' -X POST --data-binary @- "$url") ||
+    die "cannot reach GitHub to post the alert on $GH_REPO — check the network"
+  [ "$code" = 201 ] || die "GitHub refused the alert on $GH_REPO (HTTP $code: $(gh_message "$resp"))"
+  if [ -n "$number" ]; then echo "github: alert added to issue $number"; else echo "github: alert opened as a new issue"; fi
+}
+
 case "${1:-}" in
   default-branch) [ "$#" -eq 1 ] || die "usage: $0 default-branch"; default_branch ;;
   status) [ "$#" -eq 3 ] || die "usage: $0 status <state> <description>"; status "$2" "$3" ;;
-  *) echo "usage: $0 default-branch | status <state> <description>" >&2; exit 2 ;;
+  fetch-base) [ "$#" -eq 2 ] || die "usage: $0 fetch-base <branch>"; fetch_base "$2" ;;
+  alert) [ "$#" -eq 3 ] || die "usage: $0 alert <title> <text>"; alert "$2" "$3" ;;
+  *) echo "usage: $0 default-branch | status <state> <description> | fetch-base <branch> | alert <title> <text>" >&2; exit 2 ;;
 esac

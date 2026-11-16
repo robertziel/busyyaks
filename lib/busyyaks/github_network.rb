@@ -7,6 +7,7 @@ require "time"
 require "yaml"
 require "set"
 require_relative "github_feed"
+require_relative "clock"
 
 module Busyyaks
   # The operator's GitHub network: who GITHUB_LOGIN follows (followees), what they star, whom they follow.
@@ -208,7 +209,7 @@ module Busyyaks
     class Collector
       include FeedSync
 
-      def initialize(login:, client:, data:, clock: -> { Time.now.to_i })
+      def initialize(login:, client:, data:, clock: -> { Busyyaks::Clock.epoch })
         raise Error, "GITHUB_LOGIN #{login.inspect} is not a GitHub login" unless login.to_s.match?(LOGIN)
 
         @login = login
@@ -348,7 +349,7 @@ module Busyyaks
     module Feed
       module_function
 
-      def call(data, login:, hours:, now: Time.now.to_i)
+      def call(data, login:, hours:, now: Busyyaks::Clock.epoch)
         raise ArgumentError, "hours must be 1..#{MAX_HOURS}, got #{hours}" unless (1..MAX_HOURS).cover?(hours)
 
         from = now - (hours * 3600)

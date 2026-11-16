@@ -41,7 +41,7 @@ if [ ! -e "$w/seeded" ]; then
   docker run --rm --network host -e WEB="$web" -e MCP="$mcp" -e MCP_TOKEN="$token" \
     -v "$here:/s:ro" "$NODE" node /s/seed.js > "$w/seeded.tmp"
   docker compose -p readme-demo --project-directory "$w" --env-file "$w/.env" -f "$repo/docker-compose.yml" \
-    -f "$w/override.yml" exec -T web bundle exec ruby - < "$here/seed-github.rb"
+    -f "$w/override.yml" exec -T web bundle exec ruby -I lib - < "$here/seed-github.rb"
   mv "$w/seeded.tmp" "$w/seeded"
 fi
 card=$(sed -nE 's/.*"card":([0-9]+).*/\1/p' "$w/seeded")

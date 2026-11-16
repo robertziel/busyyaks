@@ -25,8 +25,8 @@ class GithubHeatmapTest < Minitest::Test
   end
 
   def test_report_links_only_known_shas
-    store.replace_commits("r", [{ sha: "abcdef1234567", author: "a", email: "a@x", committed_at: Time.now.to_i, subject: "s",
-                                  mine: true, }], 0)
+    store.replace_commits("r", [{ sha: "abcdef1234567", author: "a", email: "a@x", committed_at: Busyyaks::Clock.epoch,
+                                  subject: "s", mine: true, }], 0)
     html = Busyyaks::Markdown.report("fix `abcdef12` and `deadbee`", store)
     assert_includes html, '<a class="gh-ref gh-commit" href="/commit/abcdef1234567"'
     assert_includes html, '<code class="gh-sha">abcdef1</code><span class="gh-subj">s</span>'

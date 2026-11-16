@@ -245,10 +245,9 @@ after.slice(:branches, :default_ref, :last_commit_at, :commits_window)
       File.mkfifo(File.join(refs, ".git", "packed-refs"))
       File.mkfifo(File.join(inc, ".git", "fifo"))
       File.open(File.join(inc, ".git", "config"), "a") { |f| f.puts("[include]\n\tpath = fifo") }
-      t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       assert_equal 4, Busyyaks::Scanner.new(scan_config([[root, ""]]), store).run
-      assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - t, :<, Busyyaks::GitRead.limits[:timeout]
       error = store.last_scan[:error]
+      refute_match(/timed out/, error, "each refused at once, none on the timeout")
       assert_match(/\A3 of 4 repos not read/, error)
       assert_match(/a-cfg: .*config is not a regular file/, error)
       assert_match(/b-refs: .*packed-refs is not a regular file/, error)

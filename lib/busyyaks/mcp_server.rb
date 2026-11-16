@@ -15,6 +15,7 @@ require_relative "kanban"
 require_relative "daily_report_settings"
 require_relative "github_network"
 require_relative "scan_freshness"
+require_relative "clock"
 
 module Busyyaks
   # MCP over Streamable HTTP (JSON responses, no SSE stream), at POST /mcp.
@@ -133,7 +134,8 @@ module Busyyaks
     # scan_interval: .env SCAN_INTERVAL_SECONDS (the scanner's value): last_scan is `stale` when it finished longer ago
     # than 3 × the interval + min(its duration, one interval), more than 60 s in the future, or a row with no start /
     # a negative duration (ScanFreshness)
-    def initialize(token:, report_token:, scan_interval:, store: nil, config: nil, clock: -> { Time.now }, sessions: nil)
+    def initialize(token:, report_token:, scan_interval:, store: nil, config: nil, clock: -> {
+ Busyyaks::Clock.now }, sessions: nil)
       raise KeyError, "MCP_TOKEN is empty" if token.to_s.length < 32
       raise KeyError, "MCP_REPORT_TOKEN must be at least 32 characters" if report_token.to_s.length < 32
       raise KeyError, "MCP_REPORT_TOKEN must differ from MCP_TOKEN" if report_token == token
@@ -243,9 +245,9 @@ module Busyyaks
         notes = store.notes(project_slug: a.key?("project") ? a["project"] : :any, limit: Integer(a["limit"] || 50))
         dump(notes.map { |n| note_row(n) })
       when "scan_now"
-        t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        t = Busyyaks::Clock.monotonic
         n = Scanner.new(config, store).run
-        dump(repos: n, seconds: (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t).round(1))
+        dump(repos: n, seconds: (Busyyaks::Clock.monotonic - t).round(1))
       when "daily_report_config"
         # read fresh on every call (unless injected): a saved revision or an allowlist edit applies at the next tick
         state, out = DailyReportSettings.resolve(store.db, (@config || Config.load).daily_report_runners)

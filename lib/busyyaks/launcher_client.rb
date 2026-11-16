@@ -4,6 +4,7 @@ require "socket"
 require "timeout"
 require "json"
 require_relative "../../vendor/agents_kanban/ruby/lib/agents_kanban/errors"
+require_relative "clock"
 
 module Busyyaks
   # Talks to the host's bin/launcher over the unix socket at LAUNCHER_SOCKET. No socket = Unavailable
@@ -33,7 +34,7 @@ module Busyyaks
     def agents_snapshot
       sock = ENV.fetch("LAUNCHER_SOCKET")
       SNAPSHOT_LOCK.synchronize do
-        now = clock
+        now = Clock.monotonic
         at, snap = @snapshot&.then { |path, t, a| path == sock ? [t, a] : nil }
         return snap if at && now - at < SNAPSHOT_SECONDS
 
@@ -44,7 +45,6 @@ module Busyyaks
       end
     end
 
-    def clock = Process.clock_gettime(Process::CLOCK_MONOTONIC) # the snapshot's clock (seconds)
     def forget_agents_snapshot! = SNAPSHOT_LOCK.synchronize { @snapshot = nil }
     def reap_preview = call(op: "reap_preview")
     def reap(sessions) = call(op: "reap", sessions: sessions)

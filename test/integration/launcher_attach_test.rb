@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require_relative "../support/wait"
 require "tmpdir"
 require "fileutils"
 require "open3"
@@ -9,7 +10,6 @@ require "json"
 require "etc"
 require "yaml"
 require "base64"
-require "timeout"
 
 # bin/launcher's `attach` op, the launcher itself run as a process in a sandbox checkout with a stub tmux:
 # the tmux CLIENT it spawns in a PTY is the stub's `attach-session`, which prints a screen and echoes each line typed
@@ -54,8 +54,9 @@ class LauncherAttachTest < Minitest::Test
     ENV
     # the agent: a copy of bash named claude (so /proc shows that argv); a plain sleep is a pane with no agent
     FileUtils.cp(Open3.capture2("sh", "-c", "command -v bash").first.strip, File.join(@bin, "claude"))
-    @agent = Process.spawn(File.join(@bin, "claude"), "-c", "sleep 300; :", %i[out err] => File::NULL)
-    @plain = Process.spawn("sleep", "300")
+    # each its own process group: teardown ends the agent's `sleep` too, not only its shell
+    @agent = Process.spawn(File.join(@bin, "claude"), "-c", "sleep 300; :", %i[out err] => File::NULL, pgroup: true)
+    @plain = Process.spawn("sleep", "300", pgroup: true)
     b = @base
     stub("tmux", <<~SH)
       echo "$*" >> #{b}/tmux.log
@@ -96,7 +97,12 @@ class LauncherAttachTest < Minitest::Test
   end
 
   def teardown
-    [@agent, @plain].each { |p| Process.kill("TERM", p) rescue nil }
+    [@agent, @plain].each do |p|
+      Process.kill("TERM", -p)
+      Process.wait(p)
+    rescue Errno::ESRCH, Errno::ECHILD
+      nil
+    end
     Process.kill("TERM", @pid) if @pid
     Process.wait(@pid) if @pid
     FileUtils.rm_rf(@base)
@@ -114,14 +120,10 @@ class LauncherAttachTest < Minitest::Test
     @pid = Process.spawn(env, RbConfig.ruby, File.join(@co, "bin/launcher"),
                          %i[out err] => [@log, "w"])
     sock = File.join(@base, "run/launcher.sock")
-    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + BOOT_SECONDS
-    until Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
-      return if File.socket?(sock) && (UNIXSocket.open(sock) { true } rescue false)
+    Wait.for(-> { "the launcher's socket: #{File.read(@log)}" }, seconds: BOOT_SECONDS, every: 0.1) do
       flunk "the launcher exited: #{File.read(@log)}" if Process.waitpid(@pid, Process::WNOHANG)
-
-      sleep 0.1
+      File.socket?(sock) && (UNIXSocket.open(sock) { true } rescue false)
     end
-    flunk "no socket after #{BOOT_SECONDS}s: #{File.read(@log)}"
   end
 
   def connect(req)
@@ -130,15 +132,14 @@ class LauncherAttachTest < Minitest::Test
     [s, JSON.parse(s.gets)]
   end
 
-  # the next frame (JSON) the stream sends that matches, within a few seconds; the ones before it are collected
+  # the next frame (JSON) the stream sends that matches, each frame within a few seconds; the ones before it are collected
   def await(s, seen = [])
-    Timeout.timeout(10) do
-      loop do
-        line = s.gets or flunk "the stream ended; frames: #{seen.inspect}"
-        f = JSON.parse(line)
-        seen << f
-        return f if yield(f)
-      end
+    loop do
+      Wait.readable(s, -> { "the stream's next frame; frames: #{seen.inspect}" }, seconds: 10)
+      line = s.gets or flunk "the stream ended; frames: #{seen.inspect}"
+      f = JSON.parse(line)
+      seen << f
+      return f if yield(f)
     end
   end
 
@@ -156,7 +157,7 @@ class LauncherAttachTest < Minitest::Test
   end
   def typed = File.read(File.join(@base, "typed"))
   def await_sent(n)
-    Timeout.timeout(10) { sleep 0.05 until sent.size >= n }
+    Wait.for("#{n} sends", seconds: 10) { sent.size >= n }
     sent
   end
   def output(seen) = seen.filter_map { |f| f["o"] && Base64.decode64(f["o"]) }.join
@@ -198,7 +199,7 @@ class LauncherAttachTest < Minitest::Test
     s.puts("not json")
     assert_match(/bad frame/, await(s) { |f| f["refused"] }["refused"])
     s.close
-    Timeout.timeout(10) { sleep 0.1 until File.read(@log).include?("attach agent_s: closed") }
+    Wait.for("the launcher's close line", seconds: 10, every: 0.1) { File.read(@log).include?("attach agent_s: closed") }
     assert_equal 2, sent.size, "nothing typed before control or after release"
     assert_equal "", typed, "the tmux client never got a byte"
     log = File.read(@log)
@@ -217,7 +218,7 @@ class LauncherAttachTest < Minitest::Test
     assert_equal ["\x02c\x02:run-shell id\r".b], await_sent(1)
     assert_equal ["cancel =agent_s:"], File.readlines(File.join(@base, "modes"), chomp: true), "the pane's mode cancelled first"
     s.close
-    Timeout.timeout(10) { sleep 0.1 until File.read(@log).include?("attach agent_s: closed") }
+    Wait.for("the launcher's close line", seconds: 10, every: 0.1) { File.read(@log).include?("attach agent_s: closed") }
     assert_equal "", typed, "the tmux client never got a byte"
     log = File.read(File.join(@base, "tmux.log"))
     refute_match(/^(switch-client|refresh-client|new-window|run-shell|command-prompt)/, log)
@@ -266,7 +267,7 @@ class LauncherAttachTest < Minitest::Test
     refute_includes output(seen), "OTHER-SESSION", "not one byte of the session tmux moved the client to"
     assert_nil s.gets, "the launcher's side of the stream ended (the web then closes it)"
     s.close
-    Timeout.timeout(10) { sleep 0.1 until File.read(@log).include?("attach agent_s: closed") }
+    Wait.for("the launcher's close line", seconds: 10, every: 0.1) { File.read(@log).include?("attach agent_s: closed") }
     assert_match(/attach agent_s: the client showed "lead_s", detached/, File.read(@log))
     assert_match(/detach-client -t \S+/, File.read(File.join(@base, "tmux.log")))
   end

@@ -64,7 +64,7 @@ class DailyReportTickTest < Minitest::Test
     File.chmod(0o755, path)
   end
 
-  def day = Time.now.utc.strftime("%F")
+  def day = Busyyaks::Clock.now.utc.strftime("%F")
   def reports(list) = File.write(File.join(@s, "reports.json"), JSON.generate(list))
   def titles = JSON.parse(File.read(File.join(@s, "reports.json"))).map { _1["title"] }
   def calls = File.exist?(File.join(@s, "calls")) ? File.read(File.join(@s, "calls")).split("\n") : []

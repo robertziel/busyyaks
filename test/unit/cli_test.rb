@@ -9,6 +9,7 @@ require "socket"
 require "stringio"
 require "tmpdir"
 require_relative "../../cli/yaks"
+require_relative "../support/wait"
 
 # cli/yaks.rb in-process: each command's exact argv, its output, its exit code and every refusal.
 class CliTest < Minitest::Test
@@ -581,7 +582,7 @@ class CliTest < Minitest::Test
     assert_equal [200, "ok"], CLI::Http.get("127.0.0.1", server.addr[1], "/up", {})
     assert_equal [200, "ok"], CLI::Http.post("127.0.0.1", server.addr[1], "/mcp", { "Content-Length" => "0" }, "")
   ensure
-    t&.join(5)
+    Wait.join(t, "the fake server's thread", seconds: 5) if t
     server&.close
   end
 

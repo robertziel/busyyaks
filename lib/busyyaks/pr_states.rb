@@ -2,6 +2,7 @@
 
 require_relative "github_network"
 require_relative "github"
+require_relative "clock"
 
 module Busyyaks
   # The flags on a card's PR links: which repo the PR is in (local · public, from the project's
@@ -59,7 +60,7 @@ module Busyyaks
     class Reader
       # stale_after: an answer older than this, while the row was wanted, means the github service stopped.
       # wanted_for: the Poller's — a row nobody asked for that long is not polled, so its old answer is not shown.
-      def initialize(db:, stale_after:, wanted_for:, clock: -> { Time.now.to_i })
+      def initialize(db:, stale_after:, wanted_for:, clock: -> { Busyyaks::Clock.epoch })
         @db = db
         @stale_after = stale_after
         @wanted_for = wanted_for
@@ -98,7 +99,7 @@ module Busyyaks
     end
 
     class Poller
-      def initialize(db:, client:, wanted_for:, clock: -> { Time.now.to_i })
+      def initialize(db:, client:, wanted_for:, clock: -> { Busyyaks::Clock.epoch })
         @db = db
         @client = client
         @wanted_for = wanted_for # seconds a row stays interesting after the web last asked

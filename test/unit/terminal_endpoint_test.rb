@@ -3,7 +3,7 @@
 require "test_helper"
 require "socket"
 require "base64"
-require "timeout"
+require_relative "../support/wait"
 require "busyyaks/terminal_endpoint"
 
 # GET /api/terminal: every refusal before the upgrade, then the relay both ways over a hijacked socket —
@@ -97,24 +97,20 @@ class TerminalEndpointTest < Minitest::Test
   end
 
   def recv
-    Timeout.timeout(5) do
-      b0, b1 = @browser.read(2).unpack("CC")
-      len = b1 & 0x7f
-      len = @browser.read(2).unpack1("n") if len == 126
-      data = @browser.read(len)
-      [b0 & 0x0f, data]
-    end
+    b0, b1 = Wait.read(@browser, 2, "a frame's head", seconds: 5).unpack("CC")
+    len = b1 & 0x7f
+    len = Wait.read(@browser, 2, "a frame's length", seconds: 5).unpack1("n") if len == 126
+    data = Wait.read(@browser, len, "a frame's #{len} bytes", seconds: 5)
+    [b0 & 0x0f, data]
   end
 
   def recv_json = JSON.parse(recv.last)
 
   # the 101 response exactly, up to its blank line: the first frame may already follow it in the socket
   def handshake
-    Timeout.timeout(5) do
-      head = +""
-      head << @browser.read(1) until head.end_with?("\r\n\r\n")
-      head
-    end
+    head = +""
+    head << Wait.read(@browser, 1, "the 101 response", seconds: 5) until head.end_with?("\r\n\r\n")
+    head
   end
 
   def open!(app = endpoint)
@@ -190,7 +186,7 @@ class TerminalEndpointTest < Minitest::Test
     far.close
     op, data = recv
     assert_equal [8, 1000], [op, data.unpack1("n")]
-    Timeout.timeout(5) { sleep 0.05 until app.open_count.zero? }
+    Wait.for("every terminal to close", seconds: 5) { app.open_count.zero? }
   end
 
   def test_the_browser_closing_ends_the_launcher_stream_and_the_cap_holds
@@ -202,8 +198,9 @@ class TerminalEndpointTest < Minitest::Test
     assert_equal [503, true], [st, why.include?("terminal.max_open")]
     @browser = first
     send_text([1000].pack("n"), op: 8)
-    Timeout.timeout(5) { assert_nil far.gets, "the launcher's connection closed" }
-    Timeout.timeout(5) { sleep 0.05 until app.open_count.zero? }
+    Wait.readable(far, "the launcher's connection to close", seconds: 5)
+    assert_nil far.gets, "the launcher's connection closed"
+    Wait.for("every terminal to close", seconds: 5) { app.open_count.zero? }
   end
 
   def test_ping_pong_and_protocol_refusals
@@ -290,8 +287,9 @@ class TerminalEndpointTest < Minitest::Test
     op, data = recv
     assert_equal [8, 1011], [op, data.unpack1("n")], "closed, never a {control: true} — got #{data.byteslice(2..).inspect}"
     assert_includes data, "control not logged, the terminal is closed: registration ended"
-    Timeout.timeout(5) { assert_nil far.gets, "the launcher's connection closed" }
-    Timeout.timeout(5) { sleep 0.05 until app.open_count.zero? }
+    Wait.readable(far, "the launcher's connection to close", seconds: 5)
+    assert_nil far.gets, "the launcher's connection closed"
+    Wait.for("every terminal to close", seconds: 5) { app.open_count.zero? }
     assert_equal ["opened the terminal (read-only)"], store.events
   end
 
@@ -305,11 +303,12 @@ class TerminalEndpointTest < Minitest::Test
       send_text("", op: 10) # pong
     end
     assert_equal 1, app.open_count, "answering pings keeps it open"
-    op, data = Timeout.timeout(5) { loop { f = recv; break f unless f.first == 9 } }
+    op, data = Wait.for("a frame other than a ping", seconds: 5) { f = recv; f unless f.first == 9 }
     assert_equal [8, 1001], [op, data.unpack1("n")]
     assert_includes data, "nothing heard from the browser for 2s"
-    Timeout.timeout(5) { assert_nil far.gets, "the launcher's connection closed" }
-    Timeout.timeout(5) { sleep 0.05 until app.open_count.zero? }
+    Wait.readable(far, "the launcher's connection to close", seconds: 5)
+    assert_nil far.gets, "the launcher's connection closed"
+    Wait.for("every terminal to close", seconds: 5) { app.open_count.zero? }
   end
 
   # the browser's JSON may span lines; the launcher reads one line per frame: the parsed frame is re-encoded
@@ -333,7 +332,7 @@ true}))
     @launcher.far.puts("1")
     op, data = recv
     assert_equal [8, 1011], [op, data.unpack1("n")]
-    Timeout.timeout(5) { sleep 0.05 until app.open_count.zero? }
+    Wait.for("every terminal to close", seconds: 5) { app.open_count.zero? }
   end
 
   # RFC 6455 § 5.2 / 5.5 / 8.1: what no extension was negotiated for, a control frame that is fragmented or too long,
