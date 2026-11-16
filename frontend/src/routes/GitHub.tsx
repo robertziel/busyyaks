@@ -90,6 +90,13 @@ export function GitHub() {
           <span key={i}>{p}</span>
         ))}
       </p>
+      {data.ci_unconfigured.length > 0 && (
+        <p className="ghp-status t-warn" role="alert">
+          <i className="tl-dot" />
+          <span>CI contexts not configured for {data.ci_unconfigured.join(", ")}</span>
+          <span>config ci.required</span>
+        </p>
+      )}
       <div className="ghp-grid">
         <div className="ghp-main">
           <section className="ghp-feed" aria-label="Feed">

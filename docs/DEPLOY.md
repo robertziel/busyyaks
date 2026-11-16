@@ -383,6 +383,22 @@ that only a verdict about the screen leaves the host: the screen and your keys n
 | proxy | mode 2 / 3 with `public_host: allow`: the nginx template's `location = /api/terminal` passes the WebSocket upgrade (`bin/render-deploy` again after an update) |
 | wire | the launcher's `attach` op on its socket: one JSON line `{ok, session, cols, rows, screen}`, then JSON lines both ways (`lib/busyyaks/terminal.rb`); the web relays it as WebSocket text messages |
 
+## CI checks (the approval gate)
+
+Card #470: the `github` service reads a card's assigned PR checks for the approval gate (`lib/busyyaks/ci_checks.rb`,
+table `gh_pr_checks`); `config/busyyaks.yml` `ci` (required, no default) says what counts.
+
+| | |
+|---|---|
+| config | `ci: { max_pending_minutes: 1..1440, required: { <owner/name>: [<context>, …] } }` — list every repo whose PRs are assigned to cards (the private local repo, the public one, the engine's): a repo not listed → its rows answer "no required CI contexts for <repo>" and the gate refuses with it. An edit needs a restart of `github` (it reads the file at start) |
+| coverage | at boot `ci` must be present and well-formed (else every service stops). A repo missing from `ci.required` stops nothing: the local or public repo of an ENROLLED project (`git mirror-init`'s guard remotes, as the scanner read them) that is not listed is shown on `/github` ("CI contexts not configured for <repo>") and in the `github` log at start; a card whose PR is on any unlisted repo has its handoff / Approve refused with "no required CI contexts for <repo>: config/busyyaks.yml ci.required does not list it". Every other project's PRs are still polled |
+| required vs informational | only the listed contexts (a commit status `context`, e.g. `jenkins/ci`, or a check run `name`) gate: all finished and none failed → green. Another check is informational: its failure is named in the refusal / gate line, never a refusal. A required context that has not reported → "required … not reported", not green |
+| stuck | a required check pending longer than `max_pending_minutes` (since its pending status was posted / its run started) → state `stuck`: the gate holds it and pings the owner once per stuck build ("CI stuck — jenkins/ci pending since …") |
+| pages | every page of the commit's statuses and check runs is read (GitHub's `total_count`); a list GitHub counts but does not hand over whole is refused, never taken for green |
+| ci_url | a handoff's `ci_url` must be a build URL (`target_url` / `details_url`) of a required check on the head it hands over; checked at the handoff only (an older build is refused there); the Approve and the watch passes take any green build of the required checks on the head, so a rebuild after the handoff never parks the card |
+| errors | one PR whose read fails (GitHub's error, or any other) keeps its error on its row; the rest of the batch is still read |
+| queued runs | a check run has no `created_at`, and a queued one may have no `started_at`: its pending time then counts from the later of its check suite's `created_at` and the first poll that saw that run (by id) pending (`gh_pages` `ci:seen:…`: a re-run reuses the old suite, so it is never stuck at once); a finished required check with no completion time is refused on its row |
+
 ## Reading the scanned repos
 
 Every service reads a repo under `PROJECTS_ROOT` only through `bin/git-read` (`lib/busyyaks/git_read.rb`): one

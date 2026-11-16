@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "json"
 require "time"
 require "uri"
 require_relative "../../vendor/agents_kanban/ruby/lib/agents_kanban/errors"
@@ -22,6 +23,8 @@ module Busyyaks
     BAD_RUN = %w[failure timed_out cancelled action_required startup_failure stale].freeze
 
     Unavailable = AgentsKanban::Delivery::Unavailable
+    # a row whose repo config/busyyaks.yml ci.required does not list (stored on the row as is, said by the Port)
+    class Unconfigured < StandardError; end
 
     # How long the github service keeps polling a request after it was last made (Poller wanted_for); a request older
     # than this is no longer polled, so the Port asks it afresh instead of reading its old answer as stale.
@@ -30,6 +33,14 @@ module Busyyaks
     # A board's approval steps as the Port reads them: the engine's step hashes, in order, each with the label of the
     # gate it leaves (`from_label`) — the label the engine writes into the handoff and approve entries of that gate.
     def self.steps(board) = board.approvals.map { |s| s.to_h.merge(from_label: board.label(s.from)) }
+
+    # → the repos (owner/name, sorted) an enrolled project's roles name — its local repo and its public repo — that
+    # config ci.required does not list: a card's PR there is never judged (its gate is refused with "no required CI
+    # contexts for <repo>"). Shown on /github ("CI contexts not configured for …"), never a reason to stop the poller.
+    def self.unlisted(db, ci)
+      repos = db[:projects].exclude(local_mode: nil).select_map(%i[local_repo public_repo]).flatten
+      repos.filter_map { |url| PrStates.slug(url) }.uniq { |r| r.downcase }.reject { |r| ci.required_for(r) }.sort
+    end
 
     # The notifier's side. launcher (SessionGit): answers git(session:, socket:) →
     # {"ok"=>true, "branch"=>…, "last_commit_at"=>…}.
@@ -60,7 +71,36 @@ module Busyyaks
       #   - the final step (the public merge) = the `public` PR, and only once the local PR is MERGED.
       # None assigned, one that is no PR of its repo, or an enrolment the scanner could not read → Unavailable with the
       # reason.
+      # Asked for a HANDOFF (the engine passes handoff_ci_url = its ci_url, a key only a handoff carries), a green
+      # answer is also checked against that ci_url: it must be the build of a required context on the commit the answer
+      # read (`builds`) — never an older build, nor a URL naming no build. An Approve or a watch pass asks only whether
+      # the head's required checks are green: a rebuild of the same head after the handoff never parks the card.
       def approval_checks(card, step)
+        built!(card, step_checks(card, step))
+      end
+
+      def last_commit_at(card)
+        return nil unless card[:owner_session]
+
+        git = @launcher.git(session: card[:owner_session], socket: card[:owner_socket] || "default")
+        git["last_commit_at"]
+      end
+
+      private
+
+      def built!(card, answer)
+        return answer unless card.key?(:handoff_ci_url)
+
+        url = card[:handoff_ci_url].to_s.strip
+        return answer if url.empty? || answer.nil? || answer[:state] != "success"
+        return answer if answer[:builds]&.include?(url)
+
+        builds = answer[:builds].to_a.empty? ? "no required check names a build" : answer[:builds].join(", ")
+        head = answer[:head] ? answer[:head][0, 7] : "the commit read"
+        blocked(answer[:number], "ci_url #{url} is not the build of #{head} (#{builds}) — hand off with the head's build")
+      end
+
+      def step_checks(card, step)
         project = @projects.call(card[:project_slug])
         return pr_checks(card) unless project && project[:local_mode]
 
@@ -104,15 +144,6 @@ module Busyyaks
       rescue PrStates::Invalid => e
         raise Unavailable, e.message
       end
-
-      def last_commit_at(card)
-        return nil unless card[:owner_session]
-
-        git = @launcher.git(session: card[:owner_session], socket: card[:owner_socket] || "default")
-        git["last_commit_at"]
-      end
-
-      private
 
       # → [owner/name, number] of the card's `local` PR on the project's local repo. None → Unavailable.
       def local_pr(card, project)
@@ -179,6 +210,7 @@ module Busyyaks
       def read(repo, ref)
         row = answer(repo, ref)
         return nil if %w[none closed merged].include?(row[:state])
+        return row.merge(reason: "PR ##{row[:number]}: CI stuck — #{row[:detail]}") if row[:state] == "stuck"
 
         row
       end
@@ -215,6 +247,7 @@ module Busyyaks
 
         out = { number: row[:number], state: row[:state], finished_at: row[:finished_at] }
         out[:head] = row[:head] if row[:head] # the PR head sha (a pr: row; a merge: row has none)
+        out[:builds] = JSON.parse(row[:builds]) if row[:builds] # the required checks' build URLs
         row[:detail] ? out.merge(detail: row[:detail]) : out
       end
 
@@ -247,26 +280,32 @@ module Busyyaks
     # is deleted at the end of each run.
     class Poller
       KEEP = %w[number state merged_at merge_commit_sha head base sha ref statuses updated_at check_runs status
-                conclusion completed_at commit].freeze
+                conclusion completed_at commit total_count context name created_at started_at target_url
+                details_url check_suite id].freeze
       PAGE = "ci:"
+      PER_PAGE = 100 # GitHub's maximum for both commit status and check-run lists
 
-      def initialize(db:, client:, wanted_for:, clock: -> { Time.now.to_i })
+      # ci: CiSettings::Settings (config/busyyaks.yml ci) — the contexts that gate per repo + the stuck limit
+      def initialize(db:, client:, wanted_for:, ci:, clock: -> { Time.now.to_i })
         @db = db
         @client = client
         @pages = GithubNetwork::Data.new(db)
         @wanted_for = wanted_for # seconds a request stays interesting after the notifier last asked
+        @ci = ci
         @clock = clock
       end
 
-      # → number of rows answered
+      # → number of rows answered. One row's failure — GitHub's, or any other (a body of an unexpected shape, a bug) —
+      # is stored on that row and said by the Port; the rest of the batch still runs (as PrStates::Poller).
       def run
         now = @clock.call
         rows = @db[:gh_pr_checks].where(Sequel.lit("requested_at >= ?", now - @wanted_for)).all
         rows.each do |row|
-          @db[:gh_pr_checks].where(id: row[:id]).update({ detail: nil, head: nil }.merge(poll(row)).merge(checked_at: now,
-error: nil))
-        rescue GithubNetwork::Error => e
-          @db[:gh_pr_checks].where(id: row[:id]).update(error: e.message[0, 500], checked_at: nil)
+          answer = { detail: nil, head: nil, builds: nil }.merge(poll(row)).merge(checked_at: now, error: nil)
+          @db[:gh_pr_checks].where(id: row[:id]).update(answer)
+        rescue StandardError => e
+          error = [GithubNetwork::Error, Unconfigured].any? { |k| e.is_a?(k) } ? e.message : "#{e.class}: #{e.message}"
+          @db[:gh_pr_checks].where(id: row[:id]).update(error: error[0, 500], checked_at: nil)
         end
         @db[:gh_pages].where(Sequel.like(:url, "#{PAGE}%")).where(Sequel.lit("at < ?", now - @wanted_for)).delete
         rows.size
@@ -330,7 +369,7 @@ error: nil))
 
         sha = pr["merge_commit_sha"]
         own = checks(repo, sha)
-        return base.merge(own).merge(detail: "merge commit #{sha[0, 7]}") unless own[:state] == "nochecks"
+        return base.merge(own).merge(detail: "merge commit #{sha[0, 7]}: #{own[:detail]}") unless own[:state] == "nochecks"
 
         branch = pr.dig("base", "ref")
         head = get("/repos/#{repo}/branches/#{URI.encode_www_form_component(branch)}").dig("commit", "sha")
@@ -344,25 +383,138 @@ error: nil))
                                                        "#{head[0, 7]} does not contain it (compare: #{status})")
         end
 
-        base.merge(checks(repo, head)).merge(detail: "merge commit #{sha[0, 7]} has no checks of its own; read " \
-                                                     "#{branch} head #{head[0, 7]}, which contains it")
+        read = checks(repo, head)
+        base.merge(read).merge(detail: "merge commit #{sha[0, 7]} has no checks of its own; read #{branch} head " \
+                                       "#{head[0, 7]}, which contains it: #{read[:detail]}")
       end
 
-      # statuses (Jenkins posts these) + check runs (Actions): finished = nothing pending; failure = any failed.
+      # One check on the commit, whatever posted it: a commit status (Jenkins) or a check run (Actions).
+      Check = Struct.new(:context, :state, :started, :at, :url)
+
+      # The commit's CI, judged on the repo's REQUIRED contexts only (config ci.required; every other check is
+      # informational, named in `detail` when it fails): a required one pending → pending, or `stuck` once it has been
+      # pending longer than ci.max_pending_minutes (finished_at = the moment it became stuck: one gate ping per stuck
+      # build); one not reported → nochecks; all finished → failure when any failed, else success. `builds` = the
+      # required checks' build URLs (a handoff's ci_url must be one of them). A repo with no required contexts → refused.
       def checks(repo, sha)
-        st = get("/repos/#{repo}/commits/#{sha}/status")
-        runs = get("/repos/#{repo}/commits/#{sha}/check-runs?per_page=100")["check_runs"]
-        statuses = st["statuses"]
-        return { state: "nochecks", finished_at: nil } if statuses.empty? && runs.empty?
+        required = @ci.required_for(repo)
+        unless required
+          raise Unconfigured, "no required CI contexts for #{repo}: config/busyyaks.yml ci.required does not list it"
+        end
 
-        pending = statuses.any? { |s| s["state"] == "pending" } || runs.any? { |r| r["status"] != "completed" }
-        return { state: "pending", finished_at: nil } if pending
+        all = statuses(repo, sha) + runs(repo, sha)
+        req = all.select { |c| required.include?(c.context) }
+        failing = (all - req).select { |c| c.state == "failure" }.map(&:context)
+        note = failing.any? ? "; informational, failing: #{failing.uniq.join(', ')}" : ""
+        out = { builds: JSON.generate(req.filter_map(&:url).uniq) }
+        running = req.select { |c| c.state == "pending" }
+        return out.merge(pending(running, note)) if running.any?
 
-        times = statuses.map { |s| Time.iso8601(s["updated_at"]).to_i } + runs.map { |r| Time.iso8601(r["completed_at"]).to_i }
-        bad = statuses.any? { |s| %w[failure error].include?(s["state"]) } ||
-              runs.any? { |r| BAD_RUN.include?(r["conclusion"]) }
-        { state: bad ? "failure" : "success", finished_at: times.max }
+        missing = required - req.map(&:context)
+        if missing.any?
+          return out.merge(state: "nochecks", finished_at: nil,
+                           detail: "required #{missing.join(', ')} not reported on #{sha[0, 7]}#{note}")
+        end
+
+        bad = req.select { |c| c.state == "failure" }.map(&:context)
+        undated = req.reject(&:at).map(&:context)
+        if undated.any? # a finished check GitHub gives no finish time: its completion is unknown, never assumed
+          raise GithubNetwork::Error, "#{repo} #{sha[0, 7]}: finished check #{undated.uniq.join(', ')} has no completion time"
+        end
+
+        out.merge(state: bad.any? ? "failure" : "success", finished_at: req.map(&:at).max,
+                  detail: "#{bad.any? ? "failed: #{bad.uniq.join(', ')}" : "passed: #{required.join(', ')}"}#{note}")
       end
+
+      def pending(checks, note)
+        max = @ci.max_pending_seconds
+        stuck = checks.select { |c| c.started && @clock.call - c.started > max }
+        if stuck.any?
+          since = stuck.map(&:started).min
+          return { state: "stuck", finished_at: since + max,
+                   detail: "#{stuck.map(&:context).uniq.join(', ')} pending since #{Time.at(since).utc.iso8601}, over " \
+                           "ci.max_pending_minutes #{@ci.max_pending_minutes}#{note}", }
+        end
+
+        { state: "pending", finished_at: nil, detail: "running: #{checks.map(&:context).uniq.join(', ')}#{note}" }
+      end
+
+      # The combined status (Jenkins posts these: the latest status per context; created_at = when that state was posted).
+      def statuses(repo, sha)
+        paged("/repos/#{repo}/commits/#{sha}/status", "statuses").map do |s|
+          state = case s["state"]
+                  when "success", "pending" then s["state"]
+                  when "failure", "error" then "failure"
+                  else raise GithubNetwork::Error, "#{repo} #{sha[0, 7]}: status #{s['context']} is #{s['state'].inspect}"
+                  end
+          Check.new(s["context"], state, time(s["created_at"]), time(s["updated_at"]), s["target_url"])
+        end
+      end
+
+      # Check runs (Actions; GitHub's default filter=latest: a re-run replaces the run it re-ran). A check run has no
+      # created_at; a queued one may have no started_at yet — then its pending time counts from the LATER of its check
+      # suite's created_at (one conditional read of that suite) and the first poll that saw THIS run (by its id)
+      # pending: a run queued forever still becomes stuck, and a re-run (which reuses the old suite) queued hours after
+      # the push starts its clock when it appeared, not at the suite's old created_at.
+      def runs(repo, sha)
+        paged("/repos/#{repo}/commits/#{sha}/check-runs", "check_runs").map do |r|
+          state = if r["status"] != "completed" then "pending"
+                  elsif BAD_RUN.include?(r["conclusion"]) then "failure"
+                  else "success"
+                  end
+          started = time(r["started_at"]) || (state == "pending" ? [queued_at(repo, r), first_seen(repo, r)].max : nil)
+          Check.new(r["name"], state, started, time(r["completed_at"]), r["details_url"])
+        end
+      end
+
+      # When a poll first saw this run pending (gh_pages `ci:seen:<repo>:<run id>`, items = that time). Every sighting
+      # touches the row's `at`, so the end-of-run prune drops it only once nobody has seen the run for wanted_for.
+      def first_seen(repo, run)
+        key = "#{PAGE}seen:#{repo}:#{Integer(run['id'])}"
+        now = @clock.call
+        row = @pages.page(key)
+        if row
+          @db[:gh_pages].where(url: key).update(at: now)
+          return JSON.parse(row[:items])
+        end
+
+        @pages.save_page(key, "seen", now, items: now)
+        now
+      end
+
+      def queued_at(repo, run)
+        suite = run.dig("check_suite", "id")
+        raise GithubNetwork::Error, "#{repo}: check run #{run['name']} has no started_at and no check suite" unless suite
+
+        at = time(get("/repos/#{repo}/check-suites/#{Integer(suite)}")["created_at"])
+        at || raise(GithubNetwork::Error, "#{repo}: check suite #{suite} of #{run['name']} has no created_at")
+      end
+
+      # Every page of a list GitHub counts (`total_count`): pages of PER_PAGE until all are read. A short page before
+      # the total, or a body with no count → refused: an unread check is never taken for a passed one.
+      def paged(path, key)
+        items = []
+        page = 1
+        loop do
+          body = get("#{path}?per_page=#{PER_PAGE}&page=#{page}")
+          total = body["total_count"]
+          got = body[key]
+          unless total.is_a?(Integer) && got.is_a?(Array)
+            raise GithubNetwork::Error, "#{path}: no total_count / #{key} in GitHub's answer"
+          end
+
+          items.concat(got)
+          return items if items.size >= total
+          if got.size < PER_PAGE
+            raise GithubNetwork::Error, "#{path}: GitHub counts #{total} #{key} but #{items.size} were read " \
+                                        "(page #{page} was short)"
+          end
+
+          page += 1
+        end
+      end
+
+      def time(iso) = iso && Time.iso8601(iso).to_i
     end
   end
 end

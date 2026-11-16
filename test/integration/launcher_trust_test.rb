@@ -114,6 +114,7 @@ class LauncherTrustTest < Minitest::Test
       "owner_remotes" => ["github.com/you/"], "author_emails" => ["you@example.com"], "window_days" => 7,
       "reap_protect" => [], "auth" => { "provider" => "none" }, "agents" => { "collector" => "none" }, "dictation" => "none",
       "terminal" => { "public_host" => "deny", "max_open" => 4 },
+      "ci" => { "max_pending_minutes" => 60, "required" => { "o/r" => ["jenkins/ci"] } },
       "launch" => launch
     ))
   end

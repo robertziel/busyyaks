@@ -13,6 +13,8 @@ LAUNCH_CLAUDE = {
 }.freeze
 # config/busyyaks.yml `terminal` for a test Config: not through PUBLIC_HOST, 4 open at once
 TERMINAL_DENY = { "public_host" => "deny", "max_open" => 4 }.freeze
+# config/busyyaks.yml `ci` for a test Config (card #470): o/r's jenkins/ci gates, pending over 60 min = stuck
+CI_SETTINGS = { "max_pending_minutes" => 60, "required" => { "o/r" => ["jenkins/ci"] } }.freeze
 
 # The agent settings the suite runs on (test/fixtures/agents.yml: two launchers) as the newest revision — written once
 # here and again before every DBReset test (a test may save revisions of its own).

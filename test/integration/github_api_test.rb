@@ -40,6 +40,17 @@ class GithubApiTest < Minitest::Test
     assert_equal ["alice"], out["followees"].map { |f| f["login"] }
   end
 
+  # card #470: an enrolled project's repo config ci.required does not list is said on /github (its cards' CI gate is
+  # refused) — the github service keeps polling every other project's PRs
+  def test_repos_missing_from_ci_required_are_listed
+    sign_in
+    assert_equal [], get_json("/api/github?hours=24")["ci_unconfigured"]
+    db[:projects].insert(slug: "x", path: "/projects/x", remote: "git@github.com:p/x.git", own: true, commits_window: 0,
+                         mine_window: 0, dirty: 0, scanned_at: 0, local_mode: "own",
+                         local_repo: "git@github.com:o/r.git", public_repo: "https://github.com/p/x.git")
+    assert_equal ["p/x"], get_json("/api/github?hours=24")["ci_unconfigured"], "o/r is in the fixture's ci.required"
+  end
+
   def test_bad_hours_is_400
     sign_in
     assert_match(/hours must be/, get_json("/api/github?hours=abc")["error"])

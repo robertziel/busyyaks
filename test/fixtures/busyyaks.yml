@@ -9,6 +9,7 @@ auth: { provider: test/fixtures/auth_stub, allowed_emails: [owner@example.com] }
 agents: { collector: none }
 dictation: none
 terminal: { public_host: deny, max_open: 4 }
+ci: { max_pending_minutes: 60, required: { o/r: [jenkins/ci] } }
 launch:
   trusted_paths: []
   start_seconds: 30

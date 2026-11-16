@@ -7,10 +7,12 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- CI checks for the approval gate: only each repo's required contexts gate (`ci.required`, the rest informational); a check pending past `ci.max_pending_minutes` turns red as stuck and pings the owner once; every page of checks is read; one bad PR no longer stops the others; a handoff's build URL must be the head's; `/github` names enrolled repos missing from `ci.required`.
 - An agent session's live terminal in the dashboard: **Open terminal** in the Agents sidebar and a **Terminals** section on a card (one tab per agent session working on it). Read-only until **Take control**; every open, take and release is logged on the session's cards. See `docs/DEPLOY.md` § Terminals.
 
 ### Changed
 
+- **Breaking:** required `config/busyyaks.yml` `ci` (`max_pending_minutes: 1..1440`, `required: {owner/name: [contexts]}`); see `docs/DEPLOY.md` § CI checks.
 - **Breaking:** required `config/busyyaks.yml` `terminal` (`public_host: allow | deny`, `max_open: 1..64`); see `docs/DEPLOY.md` § Terminals.
 
 ## [1.0.0-beta.2] - 2026-11-15

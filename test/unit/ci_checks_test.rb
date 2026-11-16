@@ -14,19 +14,45 @@ class CiChecksTest < Minitest::Test
   CK = Busyyaks::CiChecks
 
   class FakeHttp
-    attr_accessor :pulls, :statuses, :runs, :requests, :statuses_by_sha, :heads, :compare
-    def initialize = (@requests = []; @pulls = []; @statuses = []; @runs = []; @statuses_by_sha = {}; @heads = {})
+    attr_accessor :pulls, :statuses, :runs, :requests, :statuses_by_sha, :heads, :compare, :short_by, :suites
+    def initialize
+      @requests = []
+      @pulls = []
+      @statuses = []
+      @runs = []
+      @statuses_by_sha = {}
+      @heads = {}
+      @short_by = 0
+      @suites = {}
+    end
+
+    # a status / run without the fields a test does not care about: the gating jenkins/ci context, posted when it
+    # last changed, its build URL
+    def status(s) = { "context" => "jenkins/ci", "created_at" => s["updated_at"], "target_url" => CI_URL }.merge(s)
+    def run(r) = { "id" => 1, "name" => "jenkins/ci", "started_at" => r["completed_at"], "details_url" => CI_URL }.merge(r)
+
+    # one page of a list GitHub counts (`total_count`); short_by = how many more it counts than it hands over
+    def paged(url, key, all)
+      q = URI.decode_www_form(URI("https://x#{url}").query.to_s).to_h
+      per = Integer(q.fetch("per_page", 30))
+      page = all.each_slice(per).to_a[Integer(q.fetch("page", 1)) - 1] || []
+      { "total_count" => all.size + @short_by, key => page }
+    end
+
     def get(url, headers)
       raise "no token" unless headers["Authorization"]
       @requests << url
-      body = case url
+      path = url.sub(/\?.*/, "")
+      body = case path
              when %r{/pulls/(\d+)\z} then @pulls.find { |p| p["number"] == Regexp.last_match(1).to_i }
-             when %r{/commits/([^/]+)/status\z} then { "statuses" => @statuses_by_sha.fetch(Regexp.last_match(1), @statuses) }
+             when %r{/commits/([^/]+)/status\z}
+               paged(url, "statuses", @statuses_by_sha.fetch(Regexp.last_match(1), @statuses).map { |x| status(x) })
              when %r{/branches/([^/?]+)\z}
                sha = @heads[Regexp.last_match(1)]
                sha && { "commit" => { "sha" => sha } }
              when %r{/compare/} then @compare && { "status" => @compare }
-             when %r{/check-runs} then { "check_runs" => @runs }
+             when %r{/check-suites/(\d+)\z} then @suites[Regexp.last_match(1).to_i]
+             when %r{/check-runs\z} then paged(url, "check_runs", @runs.map { |x| run(x) })
              end
       return [404, {}, "{\"message\":\"Not Found\"}"] if body.nil?
 
@@ -48,6 +74,7 @@ class CiChecksTest < Minitest::Test
     def dialog(**) = { "ok" => true, "dialog" => nil }
   end
 
+  CI_URL = "https://ci.example.com/job/r/1/" # the build every fake check names (the handoffs below hand it over)
   PR = { "number" => 112, "state" => "open", "head" => { "sha" => "abc" } }.freeze
 
   def setup
@@ -60,7 +87,7 @@ class CiChecksTest < Minitest::Test
     @http = FakeHttp.new
     @launcher = FakeLauncher.new
     @client = client = Busyyaks::GithubNetwork::Client.new(token: "t", http: @http)
-    @poller = CK::Poller.new(db: @conn, client: client, wanted_for: 600, clock: -> { @now })
+    @poller = CK::Poller.new(db: @conn, client: client, wanted_for: 600, ci: ci_settings, clock: -> { @now })
     @port = CK::Port.new(db: @conn, projects: ->(s) { @conn[:projects].where(slug: s).first },
                          approvals: ->(s) { CK.steps(@kb.board_of(s)) }, launcher: @launcher,
                          stale_after: 180, wanted_for: 600, clock: -> { @now })
@@ -73,6 +100,10 @@ class CiChecksTest < Minitest::Test
   end
 
   def finish_at(t) = Time.at(t).utc.iso8601
+
+  # config ci (card #470): jenkins/ci gates on both test repos, a check pending over 60 min is stuck
+  def ci_settings = Busyyaks::CiSettings.parse!("max_pending_minutes" => 60,
+                                                "required" => { "o/r" => ["jenkins/ci"], "o/r_local" => ["jenkins/ci"] })
 
   # a card's PRs are the ones assigned to it (kanban_pr_assign → metadata prs.<role>), nothing else
   def assign!(role, url) = @kb.assign_pr(@id, url: url, role: role, by: "lead")
@@ -131,7 +162,8 @@ class CiChecksTest < Minitest::Test
     @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now - 50) }]
     @http.runs = [{ "status" => "completed", "conclusion" => "success", "completed_at" => finish_at(@now - 20) }]
     @poller.run
-    assert_equal({ number: 112, state: "success", finished_at: @now - 20, head: "abc" }, @port.pr_checks(@card))
+    assert_equal({ number: 112, state: "success", finished_at: @now - 20, head: "abc", builds: [CI_URL],
+                   detail: "passed: jenkins/ci", }, @port.pr_checks(@card))
     @http.runs = [{ "status" => "completed", "conclusion" => "failure", "completed_at" => finish_at(@now - 20) }]
     @poller.run
     assert_equal "failure", @port.pr_checks(@card)[:state]
@@ -178,7 +210,8 @@ class CiChecksTest < Minitest::Test
     @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now - 5) }]
     @poller.run
     assert(@http.requests.any? { |u| u.end_with?("/repos/o/r/pulls/5") })
-    assert_equal({ number: 5, state: "success", finished_at: @now - 5, head: "abc" }, @port.approval_checks(card, public_step))
+    assert_equal({ number: 5, state: "success", finished_at: @now - 5, head: "abc", builds: [CI_URL],
+                   detail: "passed: jenkins/ci", }, @port.approval_checks(card, public_step))
     assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, local_step)[:reason],
                  "the first gate needs the local PR open: merged ahead of the operator is refused"
 
@@ -234,9 +267,9 @@ class CiChecksTest < Minitest::Test
     assert_equal "unpolled", @port.approval_checks(card, deploy)[:state], "merged: the merge commit's CI is asked"
     @http.statuses_by_sha["m1" * 20] = [{ "state" => "pending", "updated_at" => finish_at(@now) }]
     @poller.run
-    assert_equal "jenkins/ci for the local PR #112 merge is pending: merge commit m1m1m1m",
+    assert_equal "jenkins/ci for the local PR #112 merge is pending: merge commit m1m1m1m: running: jenkins/ci",
                  @port.approval_checks(card, deploy)[:reason]
-    assert(@http.requests.any? { |u| u.end_with?("/repos/o/r_local/commits/#{'m1' * 20}/status") }, "the merge commit")
+    assert(@http.requests.any? { |u| u.include?("/repos/o/r_local/commits/#{'m1' * 20}/status?") }, "the merge commit")
     @http.statuses_by_sha["m1" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
     @poller.run
     assert_equal [112, "success"], @port.approval_checks(card, deploy).values_at(:number, :state)
@@ -261,7 +294,8 @@ class CiChecksTest < Minitest::Test
     @http.compare = "ahead"
     @poller.run
     assert_equal [112, "success"], @port.approval_checks(card, deploy).values_at(:number, :state)
-    assert_equal "merge commit m1m1m1m has no checks of its own; read local head h2h2h2h, which contains it",
+    assert_equal "merge commit m1m1m1m has no checks of its own; read local head h2h2h2h, which contains it: " \
+                 "passed: jenkins/ci",
                  @conn[:gh_pr_checks].where(ref: "merge:112").get(:detail)
     assert(@http.requests.any? { |u| u.end_with?("/repos/o/r_local/compare/#{'m1' * 20}...#{'h2' * 20}") })
     @http.statuses_by_sha["h2" * 20] = [{ "state" => "failure", "updated_at" => finish_at(@now) }]
@@ -501,8 +535,9 @@ class CiChecksTest < Minitest::Test
     handoff!
     run_services_for(120)
     pages = -> { @conn[:gh_pages].where(Sequel.like(:url, "ci:%")).order(:url).select_map(%i[url items]) }
-    assert_equal ["ci:/repos/o/r/commits/abc/check-runs?per_page=100", "ci:/repos/o/r/commits/abc/status",
-                  "ci:/repos/o/r/pulls/112",], pages.call.map(&:first)
+    assert_equal ["ci:/repos/o/r/commits/abc/check-runs?per_page=100&page=1",
+                  "ci:/repos/o/r/commits/abc/status?per_page=100&page=1", "ci:/repos/o/r/pulls/112",],
+                 pages.call.map(&:first)
     assert_equal({ "number" => 112, "state" => "open", "head" => { "sha" => "abc" } },
                  JSON.parse(pages.call.last[1]))
     assert_operator pages.call.sum { |_, i| i.size }, :<, 300, "no PR body, no repo, no status description"
@@ -630,5 +665,217 @@ class CiChecksTest < Minitest::Test
   def test_the_board_config_is_wired
     assert_equal({ ci_ping_after_minutes: 10, ci_comment_after_minutes: 20, owner_idle_hours: 4 },
                  Busyyaks::Kanban.config.idle_watch.to_h)
+  end
+
+  # ── card #470: CI read correctness ──
+
+  # one row the poller cannot read — GitHub's error or any other (a body of a shape it does not expect) — is stored on
+  # that row; the rows after it are still answered
+  def test_one_bad_row_does_not_abort_the_ci_batch
+    @http.pulls = [PR, { "number" => 113, "state" => "open", "head" => "not a mapping" }]
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @conn[:gh_pr_checks].insert(repo: "o/r", ref: "pr:113", requested_at: @now) # first: it fails before 112 is read
+    @conn[:gh_pr_checks].insert(repo: "o/r", ref: "pr:114", requested_at: @now) # GitHub: no such PR → "none"
+    @conn[:gh_pr_checks].insert(repo: "o/r", ref: "pr:112", requested_at: @now)
+    assert_equal 3, @poller.run
+    rows = @conn[:gh_pr_checks].to_hash(:ref)
+    assert_match(/\ATypeError: /, rows["pr:113"][:error])
+    assert_nil rows["pr:113"][:checked_at]
+    assert_equal %w[none success], [rows["pr:114"][:state], rows["pr:112"][:state]]
+    assert_equal [nil, nil], [rows["pr:114"][:error], rows["pr:112"][:error]]
+    assign!("pr", "https://github.com/o/r/pull/113")
+    e = assert_raises(CK::Unavailable) { @port.pr_checks(@kb.card(@id)) }
+    assert_match(%r{\AGitHub check poll for o/r pr:113 failed: TypeError: }, e.message)
+  end
+
+  # every page of a check list GitHub counts is read; a list it counts but does not hand over whole is refused, never
+  # taken for green
+  def test_check_runs_beyond_one_page_are_read_or_refused
+    @http.pulls = [PR]
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @http.runs = Array.new(150) do |i|
+      { "name" => i == 149 ? "jenkins/ci" : "lint-#{i}", "status" => "completed",
+        "conclusion" => i == 149 ? "failure" : "success", "completed_at" => finish_at(@now), }
+    end
+    @port.pr_checks(@card)
+    @poller.run
+    assert_equal "failure", @port.pr_checks(@card)[:state], "the required run on page 2 was read"
+    assert(@http.requests.any? { |u| u.end_with?("/check-runs?per_page=100&page=2") })
+    @http.short_by = 1 # GitHub counts one more than it hands over
+    @now += 60
+    @poller.run
+    e = assert_raises(CK::Unavailable) { @port.pr_checks(@card) }
+    assert_match(/GitHub counts 2 statuses but 1 were read \(page 1 was short\)/, e.message)
+  end
+
+  # a REQUIRED check pending longer than ci.max_pending_minutes is stuck: the gate says so with the context and the
+  # time, and the owner is pinged once for that build (finished_at = the moment it became stuck)
+  def test_a_check_pending_too_long_is_stuck
+    @http.pulls = [PR]
+    started = @now - 3540 # 59 min ago
+    @http.statuses = [{ "state" => "pending", "updated_at" => finish_at(started) }]
+    @port.pr_checks(@card)
+    @poller.run
+    assert_equal "pending", @port.pr_checks(@card)[:state]
+    @now += 120 # 61 min
+    @poller.run
+    got = @port.pr_checks(@card)
+    assert_equal ["stuck", started + 3600], got.values_at(:state, :finished_at)
+    assert_equal "PR #112: CI stuck — jenkins/ci pending since #{finish_at(started)}, over ci.max_pending_minutes 60",
+                 got[:reason]
+    @http.statuses = [{ "context" => "slow-docs", "state" => "pending", "updated_at" => finish_at(started) },
+                      { "state" => "success", "updated_at" => finish_at(@now) },]
+    @now += 60
+    @poller.run
+    assert_equal "success", @port.pr_checks(@card)[:state], "an informational check is never stuck"
+
+    # in a gate: held, and one ping to the owner for the stuck build
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    handoff!
+    @http.statuses = [{ "state" => "pending", "updated_at" => finish_at(@now) }]
+    run_services_for(3600 + 300)
+    pings = @conn[:card_pings].where(card_id: @id, reason: "gate_red").all
+    assert_equal 1, pings.size
+    assert_match(/PR #112: CI stuck — jenkins\/ci pending since .* while card ##{@id} "ship" waits in Human Check/,
+                 pings[0][:text])
+    e = assert_raises(AgentsKanban::Invalid) { @kb.approve(@id, by: "operator") }
+    assert_match(/CI stuck — jenkins\/ci pending since/, e.message)
+  end
+
+  # only the contexts config ci.required lists for the repo gate; every other check is informational (named when it
+  # fails); a required one that has not reported is not green; a repo the config does not list is refused, never guessed
+  def test_only_required_contexts_gate
+    @http.pulls = [PR]
+    @port.pr_checks(@card)
+    check = lambda do |statuses, runs = []|
+      @http.statuses = statuses
+      @http.runs = runs
+      @now += 60
+      @poller.run
+      @port.pr_checks(@card).values_at(:state, :detail)
+    end
+    ok = { "state" => "success", "updated_at" => finish_at(@now) }
+    red = { "state" => "failure", "updated_at" => finish_at(@now) }
+    lint = { "name" => "lint", "status" => "completed", "conclusion" => "failure", "completed_at" => finish_at(@now) }
+    assert_equal ["success", "passed: jenkins/ci; informational, failing: codecov, lint"],
+                 check.call([ok, red.merge("context" => "codecov")], [lint])
+    assert_equal ["failure", "failed: jenkins/ci"], check.call([red, ok.merge("context" => "codecov")])
+    assert_equal ["nochecks", "required jenkins/ci not reported on abc; informational, failing: lint"],
+                 check.call([ok.merge("context" => "codecov")], [lint])
+    @http.pulls << PR.merge("number" => 1)
+    @conn[:gh_pr_checks].insert(repo: "o/other", ref: "pr:1", requested_at: @now)
+    @poller.run
+    assert_equal "no required CI contexts for o/other: config/busyyaks.yml ci.required does not list it",
+                 @conn[:gh_pr_checks].where(repo: "o/other").get(:error)
+  end
+
+  # the handoff's ci_url must be the build of the head it hands over (a required check's target_url / details_url on
+  # it): an older build or a URL naming no build is refused AT THE HANDOFF. A rebuild of the same head afterwards never
+  # parks the card: the Approve asks only whether the head's required checks are green
+  def test_handoff_ci_url_must_be_the_heads_build
+    @http.pulls = [PR]
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @port.pr_checks(@card)
+    @poller.run
+    hand = lambda do |url|
+      @kb.handoff(@id, qa: "open the board and check the card moves", pr_url: "https://github.com/o/r/pull/112",
+                       ci_url: url, ui_change: false, by: "lead")
+    end
+    e = assert_raises(AgentsKanban::Invalid) { hand.call("https://ci.example.com/job/r/0/") }
+    assert_match(%r{ci_url https://ci.example.com/job/r/0/ is not the build of abc \(#{CI_URL}\) — hand off with the head's},
+                 e.message)
+    assert_equal ["doing", nil], @kb.card(@id).values_at(:column, :ci_url), "nothing written"
+    hand.call(CI_URL)
+    assert_equal [CI_URL, nil], [@kb.card(@id)[:ci_url], @kb.card(@id)[:approved_by]]
+    rerun = "https://ci.example.com/job/r/2/"
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now), "target_url" => rerun }]
+    @now += 60
+    @poller.run
+    assert_nil @kb.gate_hold(@kb.card(@id), @kb.board_of("o-r")), "approvable now: the head is green"
+    @kb.approve(@id, by: "operator")
+    assert_equal "operator", @kb.card(@id)[:approved_by]
+  end
+
+  # Local: Deploy check: the handoff's ci_url is the build of the merge commit on the working branch (jenkins/ci on
+  # local, e.g. .../job/local/23/) — or, when Jenkins coalesced it, of the branch head that contains it
+  def test_a_deploy_check_handoff_passes_with_the_merge_commits_build
+    card, _first, deploy = local_steps
+    build = "https://jenkins.example.com/job/busyyaks/job/local/23/"
+    @http.pulls = [MERGED]
+    @http.statuses_by_sha["m1" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now), "target_url" => build }]
+    2.times do # the local PR's state, then its merge commit's CI
+      @port.approval_checks(card, deploy)
+      @poller.run
+    end
+    handing = ->(url) { @port.approval_checks(card.merge(handoff_ci_url: url), deploy) }
+    assert_equal [112, "success"], handing.call(build).values_at(:number, :state)
+    assert_match(%r{ci_url .*/local/22/ is not the build of the commit read \(#{build}\)},
+                 handing.call(build.sub("23", "22"))[:reason])
+    assert_equal "success", handing.call(nil)[:state], "no ci_url handed over: nothing to compare"
+
+    head = "https://jenkins.example.com/job/busyyaks/job/local/24/" # coalesced: the merge commit has no checks
+    @http.statuses_by_sha["m1" * 20] = []
+    @http.heads["local"] = "h2" * 20
+    @http.compare = "ahead"
+    @http.statuses_by_sha["h2" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now), "target_url" => head }]
+    @now += 60
+    @poller.run
+    assert_equal "success", handing.call(head)[:state]
+    assert_equal "success", @port.approval_checks(card, deploy)[:state], "the Approve: the head's CI, any build"
+  end
+
+  # a queued check run has no started_at (and no check run has a created_at): its pending time counts from the later of
+  # its check suite's created_at and the first poll that saw THIS run (by id) pending. A re-run reuses the old suite, so
+  # one queued hours after the push is not stuck at once; a run queued forever is stuck max_pending_minutes after first
+  # sight
+  def test_a_queued_check_run_without_a_start_becomes_stuck_from_its_suite
+    @http.pulls = [PR]
+    @http.suites[77] = { "id" => 77, "created_at" => finish_at(@now - (5 * 3600)) } # the push, 5 h ago
+    queued = ->(id) {
+ [{ "id" => id, "status" => "queued", "started_at" => nil, "completed_at" => nil, "check_suite" => { "id" => 77 } }] }
+    @http.runs = queued.call(501) # a re-run, queued now in the old suite
+    seen = @now
+    poll = lambda do |seconds|
+      @now += seconds
+      @port.pr_checks(@card)
+      @poller.run
+      @port.pr_checks(@card)
+    end
+    poll.call(0)
+    assert_equal "pending", poll.call(0)[:state], "the suite is 5 h old, the run was first seen now"
+    assert(@http.requests.any? { |u| u.end_with?("/repos/o/r/check-suites/77") })
+    59.times { poll.call(60) } # 59 min after first sight, polled every minute
+    assert_equal "pending", poll.call(0)[:state]
+    got = poll.call(120)
+    assert_equal ["stuck", seen + 3600], got.values_at(:state, :finished_at), "61 min after first sight"
+    @http.runs = queued.call(502) # re-run again: a new run id, a new clock
+    assert_equal "pending", poll.call(60)[:state]
+
+    @http.suites[77] = { "id" => 77 }
+    e = assert_raises(CK::Unavailable) { poll.call(60) }
+    assert_match(/check suite 77 of jenkins\/ci has no created_at/, e.message)
+  end
+
+  # a finished required check GitHub gives no completion time: refused on its row, never assumed
+  def test_a_finished_check_without_a_completion_time_is_refused
+    @http.pulls = [PR]
+    @http.runs = [{ "status" => "completed", "conclusion" => "success", "started_at" => finish_at(@now),
+                    "completed_at" => nil, }]
+    @port.pr_checks(@card)
+    @poller.run
+    e = assert_raises(CK::Unavailable) { @port.pr_checks(@card) }
+    assert_match(/o\/r abc: finished check jenkins\/ci has no completion time/, e.message)
+  end
+
+  # the enrolled projects' local / public repos config ci.required does not list (shown on /github; never a boot refusal)
+  def test_enrolled_repos_missing_from_ci_required_are_named
+    ci = ci_settings
+    assert_empty CK.unlisted(@conn, ci), "o-r is not enrolled: nothing to list"
+    enrol!
+    assert_empty CK.unlisted(@conn, ci), "o/r_local and o/r are listed"
+    @conn[:projects].insert(slug: "x", path: "/projects/x", remote: "git@github.com:p/x_local.git", own: true,
+                            commits_window: 0, mine_window: 0, dirty: 0, scanned_at: 0, local_mode: "upstream",
+                            local_repo: "https://github.com/p/x_local.git", public_repo: "git@github.com:Up/X.git")
+    assert_equal %w[Up/X p/x_local], CK.unlisted(@conn, ci)
   end
 end

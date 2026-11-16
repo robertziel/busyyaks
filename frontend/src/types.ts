@@ -358,6 +358,8 @@ export type GithubData = {
   people: GithubNewPerson[];
   feed: GithubFeed;
   html: { repos: string; people: string; feed: string };
+  // enrolled projects' repos config ci.required does not list: their cards' CI gate is refused (card #470)
+  ci_unconfigured: string[];
 };
 // the dashboard feed part (github.com/feed = received_events)
 export type GithubFeedStatus = {
