@@ -19,8 +19,9 @@
 #                                 also covers the vendored engine under frontend/src/vendor). Any finding fails it —
 #                                 never ignored or baselined, fixed by upgrading. Needs network (advisory DBs)
 #   scripts/ci/test.sh secrets    gitleaks over the full git history; any finding fails it, never allowlisted
-#   scripts/ci/test.sh host       the host-side programs' tests (bin/yaks, bin/env, the launcher's rules, the
-#                                 installers)
+#   scripts/ci/test.sh host       the host-side programs' tests (bin/yaks, bin/env, bin/setup, the launcher's rules,
+#                                 the installers), then the README Quickstart replayed without Ruby
+#                                 (scripts/ci/quickstart-test, in the docker CLI image)
 #                                 on the OLDEST host Ruby they support (HOST_RUBY_IMAGE = Busyyaks::CLI::MIN_RUBY):
 #                                 a construct newer than that passes the suite's Ruby 3.4 and breaks on the host
 #   scripts/ci/test.sh flake      the flake gate: every test file the change touches (vs CI_BASE_REF), plus
@@ -31,6 +32,9 @@
 #                                 what the change is measured against — the PR's base, or the previous commit of a push
 #   scripts/ci/test.sh all        lint, ruby, ruby-pg, frontend, flake, audit, secrets and host at once, each into its own
 #                                 log, printed one after the other once all have finished; fails if any fails
+#   scripts/ci/test.sh A B …      each named stage, one after the other in that order (every one runs, a red one too),
+#                                 then `ci: A exit 0 · B exit 1`; fails naming each red stage. An unknown name, or `all`
+#                                 beside another, is refused (exit 2) before anything runs
 #
 # Where it runs: Jenkins (the maintainer's runner, Jenkinsfile) and GitHub Actions (.github/workflows/ci.yml, every
 # pull request on the public repo, forks included) run this same script; so does any machine with Docker.
@@ -57,6 +61,19 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 SRC=$PWD
 
+# The stages, in `all`'s order. The arguments are checked here, before any Docker call: every one must be a stage
+# (`all` only alone) — a name that is not one never runs a subset quietly.
+STAGES=(lint ruby ruby-pg frontend flake audit secrets host)
+usage() { echo "usage: $0 all | STAGE... (stages: ${STAGES[*]}; several run one after the other)" >&2; exit 2; }
+[ "$#" -gt 0 ] || usage
+for arg in "$@"; do
+  if [ "$arg" = all ]; then
+    [ "$#" -eq 1 ] || { echo "ci: 'all' runs every stage: name it alone" >&2; usage; }
+  else
+    case " ${STAGES[*]} " in *" $arg "*) ;; *) echo "ci: unknown stage '$arg'" >&2; usage ;; esac
+  fi
+done
+
 # scripts/ci/runner.env: the public runner's shape, the one place it is written. Only its two keys, each a positive
 # integer; a missing file, key or value fails here — never a default.
 RUNNER_ENV=scripts/ci/runner.env
@@ -79,7 +96,8 @@ GITLEAKS_IMAGE=zricethezav/gitleaks:v8.30.1
 HOST_RUBY_IMAGE=ruby:3.2.3-slim      # Busyyaks::CLI::MIN_RUBY's version (test/unit/cli_test.rb asserts they agree)
 # the standalone tests of what runs on the host (none requires test_helper: no app, no gems)
 HOST_TESTS=(test/unit/cli_test.rb test/unit/cli_remote_test.rb test/unit/cli_chooser_test.rb test/integration/yaks_test.rb test/unit/env_file_test.rb
-            test/unit/launcher_rules_test.rb test/unit/deploy_template_test.rb test/unit/install_launcher_test.rb test/unit/deploy_units_test.rb)
+            test/unit/launcher_rules_test.rb test/unit/deploy_template_test.rb test/unit/install_launcher_test.rb test/unit/deploy_units_test.rb
+            test/unit/setup_test.rb test/unit/ci_stages_test.rb)
 
 # Bind mounts are resolved by the Docker DAEMON. Under Jenkins this script runs inside the controller's container,
 # talking to the host's daemon, so it needs the checkout's path on the HOST: the source of the container mount that
@@ -187,9 +205,11 @@ ruby_compose() {
   name="$PROJECT-$mode"
   # Compose interpolates the whole file, and the live services' `${VAR:?}` refuse an empty value. The test service
   # sets its own environment, so the live wiring only has to be present: .env.example's keys (every one must be
-  # listed there), the empty secrets filled with a marker no service run here reads.
+  # listed there), the empty values filled with a marker no service run here reads — an absolute path, since some are
+  # bind-mount sources (PROJECTS_ROOT, LAUNCHER_RUN_DIR: empty in .env.example) and a bare word there is a
+  # named volume compose refuses.
   mkdir -p "tmp/ci/$name"
-  sed -E 's/^([A-Z0-9_]+)=$/\1=ci-unused/' .env.example > "tmp/ci/$name/compose.env"
+  sed -E 's#^([A-Z0-9_]+)=$#\1=/ci-unused#' .env.example > "tmp/ci/$name/compose.env"
   # This run's own image tag instead of busyyaks:test (two branches building at once would swap each other's image).
   {
     # MT_CPU: minitest's thread pool per test process is the runner's CPUs, never the host's nproc (a quota leaves nproc
@@ -234,7 +254,7 @@ ruby-pg_suite() {
 pg_compose_smoke() {
   local name="$PROJECT-pgsmoke" status=0 out
   mkdir -p "tmp/ci/$name/data/postgres" "tmp/ci/$name/data/postgres-run" "tmp/ci/$name/log"
-  sed -E -e 's/^([A-Z0-9_]+)=$/\1=ci-unused/' -e 's/^DATABASE_ADAPTER=.*/DATABASE_ADAPTER=postgresql/' \
+  sed -E -e 's#^([A-Z0-9_]+)=$#\1=/ci-unused#' -e 's/^DATABASE_ADAPTER=.*/DATABASE_ADAPTER=postgresql/' \
     -e 's#^POSTGRES_HOST=.*#POSTGRES_HOST=/data/postgres-run#' -e 's/^POSTGRES_PORT=.*/POSTGRES_PORT=5432/' \
     -e 's/^POSTGRES_DB=.*/POSTGRES_DB=smoke/' -e 's/^POSTGRES_USER=.*/POSTGRES_USER=smoke/' \
     -e 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=smoke-pw/' -e 's/^POSTGRES_LOCK_TIMEOUT_MS=.*/POSTGRES_LOCK_TIMEOUT_MS=15000/' \
@@ -424,7 +444,13 @@ secrets_suite() {
 host_suite() {
   docker run --rm -v "$HOST_SRC:/src:ro" -w /src "$HOST_RUBY_IMAGE" sh -euc '
     ruby -v
-    for f in "$@"; do echo "== $f"; ruby -Ilib -Itest "$f"; done' host "${HOST_TESTS[@]}"
+    for f in "$@"; do echo "== $f"; ruby -Ilib -Itest "$f"; done' host "${HOST_TESTS[@]}" || return
+  # the README Quickstart's steps before the browser, replayed where there is NO Ruby: the docker
+  # CLI image (busybox sh, git, compose — it reads .env for real; no daemon asked), as a non-root user like a reader
+  echo "== scripts/ci/quickstart-test (no Ruby: $COMPOSE_IMAGE)"
+  # HOME: a dir of that user's whose ancestors no one else can write (LAUNCHER_RUN_DIR goes under it; /tmp is refused)
+  docker run --rm -u 1000:1000 --tmpfs /home/you:exec,uid=1000,gid=1000,mode=0755 -e HOME=/home/you -v "$HOST_SRC:/src:ro" \
+    "$COMPOSE_IMAGE" sh /src/scripts/ci/quickstart-test /src
 }
 
 # The given suites at once. Each one's output goes to its own log (interleaved lines would be unreadable), printed
@@ -445,15 +471,24 @@ all_suites() {
   return $failed
 }
 
-case "${1:-}" in
-  lint) lint_suite ;;
-  ruby) ruby_suite ;;
-  ruby-pg) ruby-pg_suite ;;
-  frontend) frontend_suite ;;
-  audit) audit_suite ;;
-  secrets) secrets_suite ;;
-  host) host_suite ;;
-  flake) flake_suite ;;
-  all) all_suites lint ruby ruby-pg frontend flake audit secrets host ;;
-  *) echo "usage: $0 lint|ruby|ruby-pg|frontend|flake|audit|secrets|host|all" >&2; exit 2 ;;
-esac
+# The named stages one after the other, each on the terminal as it runs; every one runs, then the summary line. Each in
+# its own process (as in all_suites): a function called in an `||` list would run with `set -e` switched off.
+run_stages() {
+  local name status failed=() summary=()
+  for name in "$@"; do
+    echo "════ $name ════"
+    status=0; "${name}_suite" & wait $! || status=$?
+    summary+=("$name exit $status")
+    [ "$status" -eq 0 ] || failed+=("$name")
+  done
+  echo "ci: $(printf '%s\n' "${summary[@]}" | paste -sd ',' | sed 's/,/ · /g')"
+  [ "${#failed[@]}" -eq 0 ] || { echo "ci: failed: ${failed[*]}" >&2; return 1; }
+}
+
+if [ "$1" = all ]; then
+  all_suites "${STAGES[@]}"
+elif [ "$#" -eq 1 ]; then
+  "${1}_suite"
+else
+  run_stages "$@"
+fi

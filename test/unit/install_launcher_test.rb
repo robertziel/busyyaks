@@ -101,11 +101,32 @@ class InstallLauncherTest < Minitest::Test
     assert_includes err, "overlaps PROJECTS_ROOT"
   end
 
+  # the .env group 3 values the README says to fill before installing: each empty one named, nothing installed
+  def test_the_launchers_own_env_values_must_be_filled_first
+    env = File.join(@dir, ".env")
+    File.write(env, File.read(env).sub(/^LAUNCHER_STATE_DIR=.*$/, "LAUNCHER_STATE_DIR="))
+    systemctl(active: true)
+    _out, err, status = install
+    assert_equal 1, status.exitstatus
+    assert_includes err, ".env: missing or empty LAUNCHER_STATE_DIR"
+    assert_includes err, "fill those in .env (group 3, the host launcher)"
+    refute File.exist?(File.join(@home, ".config/systemd/user/busyyaks-launcher.service"))
+  end
+
+  def test_a_missing_file_points_at_bin_setup
+    File.delete(File.join(@dir, "config/kanban.yml"))
+    systemctl(active: true)
+    _out, err, status = install
+    assert_equal 1, status.exitstatus
+    assert_includes err, "config/kanban.yml missing: run bin/setup, then bin/setup check"
+  end
+
   private
 
   def write_env(run_dir)
     File.write(File.join(@dir, ".env"), "HOST_UID=#{Process.uid}\nHOST_GID=#{Process.gid}\nLAUNCHER_RUN_DIR=#{run_dir}\n" \
-                                        "PROJECTS_ROOT=#{@projects}\n")
+                                        "PROJECTS_ROOT=#{@projects}\nLAUNCHER_STATE_DIR=#{@root}/state/launcher\n" \
+                                        "CLAUDE_SESSIONS_DIR=#{@root}/sessions\n")
   end
 
   def stub(name, body)

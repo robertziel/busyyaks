@@ -68,7 +68,7 @@ module Busyyaks
       ["remote connect TARGET [--mcp]", "forward its dashboard (and MCP) to this machine over ssh, until ssh ends"],
       ["remote attach TARGET SESSION", "an agent's terminal on that server, here, over ssh"],
       ["remote --stdio", "server side of attach: ssh's stdin/stdout ↔ the launcher socket"],
-      ["doctor", "every host tool the stack needs, per feature; exit 1 if one is missing"],
+      ["doctor", "every host tool the stack needs, per feature, and the first start's checks; exit 1 if one fails"],
       ["help", "this list"],
     ].freeze
 

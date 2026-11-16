@@ -41,7 +41,7 @@ class CiGatesTest < Minitest::Test
   # the lint wrappers and the lint image script, for `audit` / `all` (their own runs are the lint stage's business)
   STUB_OK = "#!/bin/sh\necho stub\n"
   # the stages `all` runs, as the script lists them
-  STAGES = File.read(TEST_SH)[/^  all\) all_suites (.+) ;;$/, 1].split
+  STAGES = File.read(TEST_SH)[/^STAGES=\((.+)\)$/, 1].split
 
   def setup
     @dir = File.realpath(Dir.mktmpdir("ci-gates"))

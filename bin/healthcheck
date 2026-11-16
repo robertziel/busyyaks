@@ -1,0 +1,16 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The compose healthcheck of a service with no HTTP endpoint (scanner, github, notifier; docker-compose.yml x-app):
+#   bin/healthcheck SECONDS   exit 0 once the container's main process (PID 1) has run SECONDS without a restart.
+# Each of these boots the whole app (config/app.rb) and then its own checks; one that fails at boot exits and is
+# restarted by its policy, so its PID 1 never gets old: `docker compose up --wait` reports it unhealthy instead of
+# returning 0 over a crash loop. It says nothing about the work a loop does after that — the dashboard does.
+require "etc"
+
+seconds = Integer(ARGV.fetch(0))
+uptime = File.read("/proc/uptime").split.first.to_f
+# /proc/1/stat field 22 = start time in clock ticks since boot. comm (field 2) may hold spaces and ")": the fields after
+# its LAST ")" count from 3
+started = File.read("/proc/1/stat").rpartition(")").last.split[19].to_f / Etc.sysconf(Etc::SC_CLK_TCK)
+exit(uptime - started >= seconds)

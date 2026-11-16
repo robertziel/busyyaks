@@ -6,6 +6,7 @@ Docker only; nothing is installed on the host.
 # every stage at once, logs kept apart; the env: below the table
 CI_BASE_REF=origin/main CI_GITHUB_READ_TOKEN=$(gh auth token) CI_GITHUB_CACHE_DIR=~/.cache/busyyaks-ci scripts/ci/test.sh all
 scripts/ci/test.sh ruby                # one stage: lint | ruby | ruby-pg | frontend | flake | audit | secrets | host
+scripts/ci/test.sh lint frontend       # several: one after the other, each runs; fails naming the red ones (a typo: exit 2)
 docker compose run --rm --build test; s=$?; docker compose --profile test rm -sfv test-postgres; (exit $s)   # the Ruby suite only (its exit status kept), then its test-postgres (never `down`: it would stop the stack)
 ```
 

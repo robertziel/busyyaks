@@ -90,12 +90,12 @@ from <a href="https://robertz.co/feeds/architecture/how-i-reached-100-prs-a-day/
 
 | For | You need |
 |---|---|
-| the dashboard, scanner, MCP, boards | Linux, Docker with the compose plugin, `openssl`, a directory of git repos |
+| the dashboard, scanner, MCP, boards | Linux, Docker Engine 25+ with the compose plugin (2.20+), `git`, a POSIX shell, a directory of git repos — no host Ruby: `bin/setup` is `sh`, everything else runs in the image |
 | signing in | nothing on localhost (`auth: { provider: none, allow_unauthenticated: true }`); anything reachable from elsewhere needs an [auth provider](#sign-in) |
-| GitHub pages and merged PRs | a GitHub login and a read-only token (the Quickstart reads it with the [`gh` CLI](https://cli.github.com): `gh auth token`; any other read-only token works — then drop that line) |
-| the launcher (`bin/launcher`, on the host): Launch, claim, dialog answers, new repos | Ruby 3.x, `git`, `tmux`, the `claude` CLI, a systemd user manager (`systemctl --user`; on a server without a login session: `loginctl enable-linger`) |
+| GitHub pages and merged PRs | a GitHub login and a read-only token in `.env` (`gh auth token` with the [`gh` CLI](https://cli.github.com), or a fine-grained token with no repository access) |
+| connecting Claude Code (`bin/env` reads `.env`), the launcher (`bin/launcher`, on the host: Launch, claim, dialog answers, new repos), [`yaks`](#the-yaks-command) | Ruby 3.2+ on the host (stdlib only, no gems); the launcher also `git`, `tmux`, the `claude` CLI and a systemd user manager (`systemctl --user`; on a server without a login session: `loginctl enable-linger`) |
 | the agents sidebar, typing comments into sessions (optional) | an **agent-session collector** ([below](#agent-sessions)) |
-| the daily report (optional) | the runner's CLI (e.g. `hermes`), Ruby 3.x (`bin/env` reads `.env`), `jq`, `curl`, `flock`, `timeout` on the host, a systemd user manager, and an OpenAI-compatible LLM gateway |
+| the daily report (optional) | the runner's CLI (e.g. `hermes`), Ruby 3.2+ (`bin/env` reads `.env`), `jq`, `curl`, `flock`, `timeout` on the host, a systemd user manager, and an OpenAI-compatible LLM gateway |
 
 ### Agent sessions
 
@@ -112,43 +112,52 @@ with is not published yet, so you state which you have in `config/busyyaks.yml` 
 
 ## Quickstart
 
+Host Ruby is not needed for these steps ([Requirements](#requirements)). Each one stops with the reason and the fix
+when something is missing; run the next only once the previous succeeded.
+
+<!-- quickstart:start (scripts/ci/quickstart-test replays this block in a container without Ruby) -->
 ```bash
 git clone https://github.com/robertziel/busyyaks && cd busyyaks
 
-# fill in every value: compose, bin/launcher and bin/daily-report check them
-cp .env.example .env
-# roots, owner_remotes, author_emails, window_days, auth (none + allow_unauthenticated), agents (collector: none)
-cp config/busyyaks.example.yml config/busyyaks.yml
-# board-wide kanban settings: caps, theme, gates (the launchers + agent types are edited on Settings → Agents &
-# launchers, saved in the database; a fresh one starts with config/agents.template.yml: plain `claude`)
-cp config/kanban.example.yml config/kanban.yml
+# copies .env.example → .env, config/busyyaks.example.yml → config/busyyaks.yml and config/kanban.example.yml →
+# config/kanban.yml (an existing file is kept), writes the secrets that are empty (SESSION_SECRET, MCP_TOKEN,
+# MCP_REPORT_TOKEN) and HOST_UID / HOST_GID, then lists the values left to fill
+bin/setup
 
-# secrets and the host user into .env (GITHUB_TOKEN: any read-only token; `gh auth token` with the GitHub CLI)
-sed -i -e "s/^SESSION_SECRET=.*/SESSION_SECRET=$(openssl rand -hex 64)/" \
-       -e "s/^MCP_TOKEN=.*/MCP_TOKEN=$(openssl rand -hex 32)/" \
-       -e "s/^MCP_REPORT_TOKEN=.*/MCP_REPORT_TOKEN=$(openssl rand -hex 32)/" \
-       -e "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$(gh auth token)/" \
-       -e "s/^HOST_UID=.*/HOST_UID=$(id -u)/" -e "s/^HOST_GID=.*/HOST_GID=$(id -g)/" .env
-$EDITOR .env                  # PROJECTS_ROOT, GITHUB_LOGIN, TZ, LAUNCHER_RUN_DIR (a persistent dir, e.g. ~/.local/state/busyyaks/run written out), the rest; DATABASE_ADAPTER=sqlite as shipped (POSTGRES_* stay empty; PostgreSQL: see Database)
+# fill what bin/setup listed — PROJECTS_ROOT, LAUNCHER_RUN_DIR, GITHUB_LOGIN, GITHUB_TOKEN, TEAM_TERMINAL_URL,
+# SSH_ATTACH_TEMPLATE — each explained above its line; groups 4-6 of .env work as shipped (SQLite, ports 8080 / 8081)
+$EDITOR .env
 
-mkdir -p data                 # yours: the containers run as HOST_UID, never root
-vars=$(bin/env LAUNCHER_RUN_DIR) && eval "$vars" && mkdir -m 700 -p "$LAUNCHER_RUN_DIR"   # the launcher socket's dir
-docker compose up -d --build web mcp scanner github notifier
+# every value compose requires set, HOST_UID = you, PROJECTS_ROOT a real directory; creates ./data and
+# LAUNCHER_RUN_DIR (0700) as you, then compose's own check of .env — each problem named with its fix
+bin/setup check
+
+# builds the image (a few minutes the first time) and returns once every service runs and web answers /up;
+# "container … is unhealthy" / "dependency failed to start": docker compose logs web says why
+docker compose up -d --build --wait web mcp scanner github notifier
 ```
+<!-- quickstart:end -->
 
-Open `http://127.0.0.1:$WEB_HOST_PORT` — with `provider: none` there is no sign-in. The scanner reads every repo under
-`PROJECTS_ROOT` (mounted read-only) within `SCAN_INTERVAL_SECONDS`.
+config/busyyaks.yml as copied: every repo under `PROJECTS_ROOT`, no sign-in (`auth: none`, localhost only), no
+agent-session collector; config/kanban.yml: the board's caps, theme and gates (the launchers and agent types are
+edited on Settings → Agents & launchers, in the database; a fresh one starts with config/agents.template.yml: plain
+`claude`).
+
+Open `http://127.0.0.1:8080` (`WEB_HOST_PORT`) — with `provider: none` there is no sign-in; the first page is the
+hello screen (`/hello`), which checks the database, the scanner, the launcher and GitHub and says what each needs.
+The scanner reads every repo under `PROJECTS_ROOT` (mounted read-only) within `SCAN_INTERVAL_SECONDS`.
 
 Connect Claude Code to the MCP server:
 
 ```bash
-vars=$(bin/env MCP_HOST MCP_HOST_PORT MCP_TOKEN) && eval "$vars"   # bin/env: the one .env reader (host Ruby 3.x)
+vars=$(bin/env MCP_HOST MCP_HOST_PORT MCP_TOKEN) && eval "$vars"   # bin/env: the one .env reader (host Ruby 3.2+)
 claude mcp add --transport http --scope user busyyaks "http://$MCP_HOST:$MCP_HOST_PORT/mcp" \
   --header "Authorization: Bearer $MCP_TOKEN"
 ```
 
-Install the host launcher (systemd `--user`). Agents' board tools check the agent's tmux session through it, and the
-launch bar starts sessions with it:
+Install the host launcher (systemd `--user`; host Ruby 3.2+, `tmux`, `claude`). Fill `.env` group 3 (`LAUNCHER_STATE_DIR`,
+`CLAUDE_SESSIONS_DIR`) first. Agents' board tools check the agent's tmux session through it, and the launch bar starts
+sessions with it:
 
 ```bash
 deploy/install-launcher.sh
@@ -198,7 +207,7 @@ Commands:
 | `yaks env KEY...` | `export KEY='value'` lines from `.env` (as `bin/env`) |
 | `yaks env --ports` | this server's host name and its loopback web / MCP ports as JSON — what [`yaks remote connect`](#remote) asks over ssh; no secret |
 | `yaks remote add\|list\|remove\|connect\|attach` · `yaks remote --stdio` | a busyyaks server on another machine, over your own ssh: [Remote](#remote) |
-| `yaks doctor` | every host tool the stack needs, per feature; exit 1 if one is missing |
+| `yaks doctor` | every host tool the stack needs, per feature, and the first start's checks; exit 1 if one fails |
 
 **How it works from the terminal.** `yaks` finds its checkout from the symlink's real path, reads that checkout's
 `.env`, and runs everything there — so it works from any directory. `server status`, `server logs` and `doctor` only
@@ -224,7 +233,7 @@ usage: yaks <command>
   yaks remote connect TARGET [--mcp]   forward its dashboard (and MCP) to this machine over ssh, until ssh ends
   yaks remote attach TARGET SESSION    an agent's terminal on that server, here, over ssh
   yaks remote --stdio                  server side of attach: ssh's stdin/stdout ↔ the launcher socket
-  yaks doctor                          every host tool the stack needs, per feature; exit 1 if one is missing
+  yaks doctor                          every host tool the stack needs, per feature, and the first start's checks; exit 1 if one fails
   yaks help                            this list
 
 $ yaks server status
@@ -254,6 +263,12 @@ ok    curl                 /usr/bin/curl                          the daily repo
 ok    flock                /usr/bin/flock                         the daily report
 ok    timeout              /usr/bin/timeout                       the daily report
 ok    ruby                 3.2.3 (>= 3.2)                         yaks, the launcher, bin/env
+ok    .env                 the 38 keys compose requires set       the first start (bin/setup check)
+ok    config/kanban.yml    present                                the first start (bin/setup check)
+ok    HOST_UID:HOST_GID    1000:1000 (you)                        the first start (bin/setup check)
+ok    PROJECTS_ROOT        /home/you/projects                     the first start (bin/setup check)
+ok    ./data               /home/you/busyyaks/data                the first start (bin/setup check)
+ok    LAUNCHER_RUN_DIR     /home/you/.local/state/busyyaks/run    the first start (bin/setup check)
 
 $ yaks server logs scanner -f        # Ctrl-C stops following
 scanner-1  | scan ok repos=121 seconds=21.3
@@ -266,7 +281,8 @@ $ eval "$(yaks env WEB_HOST_PORT)" && echo "$WEB_HOST_PORT"
 ```
 
 `ok` = found / up · `miss` = optional and absent (only `yaks panel`'s needs; never fails doctor) · `FAIL` = missing,
-exit 1. The jq · curl · flock · timeout rows appear only when `config/busyyaks.yml` has `daily_report_runners`.
+exit 1. The jq · curl · flock · timeout rows appear only when `config/busyyaks.yml` has `daily_report_runners`. The
+first-start rows read what [`bin/setup check`](#quickstart) makes (doctor writes nothing): no `.env` → one FAIL row.
 
 ---
 
@@ -504,7 +520,7 @@ Some `.env` values point at tools outside busyyaks; every one is required:
 
 | Key | What to put there |
 |---|---|
-| `TEAM_TERMINAL_URL` | a web terminal that opens a tmux session (`{session}`, `{socket}`); behind the board's **Terminal** links. Without one, any URL: the links just won't work. |
+| `TEAM_TERMINAL_URL` | a web terminal that opens a tmux session (`{session}`, `{socket}`); behind the board's **Terminal** links. Required, no example value: without such a tool, the dashboard's own URL (each session's live screen is its **Open terminal** button) |
 | `SSH_ATTACH_TEMPLATE` | the command the **iTerm** button copies, e.g. `ssh -t your-host tmux attach -t {session}` |
 | `CLAUDE_SESSIONS_DIR` · `CLAUDE_SESSION_URL` | where Claude Code keeps its live session records, and the Remote Control URL (`{id}`) behind the **Claude** links |
 
@@ -614,16 +630,16 @@ The repo is built to be worked on by agents. A prompt to start from:
 ```text
 Set up busyyaks (this repo) on this machine and get its tests green.
 1. Read README.md and .env.example.
-2. cp .env.example .env, config/busyyaks.example.yml to config/busyyaks.yml and
-   config/kanban.example.yml to config/kanban.yml; fill them for this box (launch.commands: the invocations an agent
-   launcher may be, as in the example; the launchers themselves are set on Settings → Agents & launchers):
-   PROJECTS_ROOT = <dir holding my repos>, GITHUB_LOGIN = <login>;
+2. Run bin/setup (copies .env.example and the two config examples, writes the secrets and HOST_UID/HOST_GID, lists
+   what is left), then fill .env and the configs for this box (launch.commands: the invocations an agent launcher may
+   be, as in the example; the launchers themselves are set on Settings → Agents & launchers):
+   PROJECTS_ROOT = <dir holding my repos>, GITHUB_LOGIN = <login>, GITHUB_TOKEN = a read-only token,
+   TEAM_TERMINAL_URL + SSH_ATTACH_TEMPLATE (ask me: they point at my own tools / host name);
    keep `auth: { provider: none, allow_unauthenticated: true }` (localhost) and `agents: { collector: none }` unless I name a collector.
-   Generate SESSION_SECRET, MCP_TOKEN and MCP_REPORT_TOKEN with openssl rand; HOST_UID/HOST_GID = id -u / id -g;
-   LAUNCHER_RUN_DIR = ~/.local/state/busyyaks/run written out (persistent; outside this checkout and PROJECTS_ROOT; mkdir -m 700).
+   LAUNCHER_RUN_DIR = ~/.local/state/busyyaks/run written out (persistent; outside this checkout and PROJECTS_ROOT).
    Ask me for anything you cannot fill.
 3. Run scripts/ci/test.sh all (Docker only; install nothing on the host) and report pass/fail counts.
-4. mkdir -p data and LAUNCHER_RUN_DIR (-m 700); docker compose up -d --build web mcp scanner github notifier;
+4. bin/setup check && docker compose up -d --build --wait web mcp scanner github notifier;
    check http://127.0.0.1:$WEB_HOST_PORT/up is 200.
 Do not edit vendor/agents_kanban or frontend/src/vendor: they are vendored copies.
 ```

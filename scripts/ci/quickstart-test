@@ -1,0 +1,144 @@
+#!/bin/sh
+# Replays README § Quickstart's block (between <!-- quickstart:start --> and <!-- quickstart:end -->) line by line in
+# a container WITHOUT Ruby, so the Quickstart cannot rot: scripts/ci/test.sh host runs it in
+# docker:<ver>-cli (busybox sh, git, the docker CLI + compose plugin; no daemon).
+#
+#   scripts/ci/quickstart-test <checkout>     the checkout is only read: its files are copied into a temp dir first
+#
+# The block runs under `sh -eu`: a line that fails stops it, as it stops a reader. Three lines are stood in for:
+#   git clone … && cd busyyaks          → cd into the copy (the line must keep that shape)
+#   $EDITOR .env                        → EDITOR = a script that fills the values the block's comment names
+#   docker compose up … --build --wait  → a `docker` shim records the line (both flags required) and runs compose's own
+#                                         `config -q` instead: everything up to the image build is real
+# After it, every bind source compose resolves must exist and be the replay user's. A second replay whose EDITOR fills
+# nothing must stop at `bin/setup check`, before `docker compose up`; a third runs with the compose PostgreSQL profile.
+set -eu
+
+src=${1:?usage: scripts/ci/quickstart-test <checkout>}
+fail() { printf 'quickstart-test: %s\n' "$*" >&2; exit 1; }
+if command -v ruby > /dev/null; then fail "ruby is on PATH here: this replay must run without host Ruby"; fi
+real_docker=$(command -v docker) || fail "no docker CLI on PATH (its compose plugin reads .env)"
+
+# under $HOME, never /tmp: bin/setup check refuses a LAUNCHER_RUN_DIR below a dir others can write (a sticky /tmp too),
+# as bin/launcher does — HOME must be this user's, its ancestors root's and not writable by others
+work=$(mktemp -d "${HOME:?}/quickstart.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+
+# the README block, as written
+sed -n '/^<!-- quickstart:start/,/^<!-- quickstart:end -->/p' "$src/README.md" | sed '1,/^```bash$/d; /^```$/,$d' > "$work/block.sh"
+[ -s "$work/block.sh" ] || fail "README.md has no quickstart:start … quickstart:end block with a \`\`\`bash fence"
+head -n 1 "$work/block.sh" | grep -Eq '^git clone [^ ]+ && cd busyyaks$' \
+  || fail "the block's first line is not 'git clone <url> && cd busyyaks': $(head -n 1 "$work/block.sh")"
+grep -Fqx "\$EDITOR .env" "$work/block.sh" || fail "the block has no '\$EDITOR .env' line"
+grep -q '^docker compose up ' "$work/block.sh" || fail "the block has no 'docker compose up' line"
+
+# the clone: the files the steps read
+clone() {
+  rm -rf "$work/busyyaks"
+  mkdir -p "$work/busyyaks/bin" "$work/busyyaks/config"
+  for f in README.md .env.example docker-compose.yml docker-compose.dictation-network.yml bin/setup \
+           config/busyyaks.example.yml config/kanban.example.yml; do
+    cp -p "$src/$f" "$work/busyyaks/$f"
+  done
+}
+
+# the docker shim: `compose up` recorded, then compose's own config check; anything else is the real CLI
+mkdir -p "$work/shim"
+cat > "$work/shim/docker" <<SHIM
+#!/bin/sh
+if [ "\$1 \$2" = "compose up" ]; then
+  echo "\$*" >> "$work/up.log"
+  case " \$* " in *" --build "*) ;; *) echo "shim: compose up without --build" >&2; exit 1 ;; esac
+  case " \$* " in *" --wait "*) ;; *) echo "shim: compose up without --wait (it would return before web is up)" >&2; exit 1 ;; esac
+  exec "$real_docker" compose config -q
+fi
+exec "$real_docker" "\$@"
+SHIM
+chmod +x "$work/shim/docker"
+
+mkdir -p "$work/projects/demo/.git"
+cat > "$work/fill" <<FILL
+#!/bin/sh
+sed -e 's|^PROJECTS_ROOT=.*|PROJECTS_ROOT=$work/projects|' -e 's|^LAUNCHER_RUN_DIR=.*|LAUNCHER_RUN_DIR=$work/state/run|' \
+    -e 's|^GITHUB_LOGIN=.*|GITHUB_LOGIN=octocat|' -e 's|^GITHUB_TOKEN=.*|GITHUB_TOKEN=ghp_quickstart_test|' \
+    -e 's|^TEAM_TERMINAL_URL=.*|TEAM_TERMINAL_URL=http://127.0.0.1:8080/|' \
+    -e 's|^SSH_ATTACH_TEMPLATE=.*|SSH_ATTACH_TEMPLATE="ssh -t devbox tmux attach -t {session}"|' "\$1" > "\$1.new"
+cat "\$1.new" > "\$1" && rm "\$1.new"
+FILL
+printf '#!/bin/sh\nexit 0\n' > "$work/fill-nothing"
+# the compose PostgreSQL (docker-compose.yml postgres, docs/DEPLOY.md § The database): the fill + the profile + its keys
+cat > "$work/fill-postgres" <<FILL
+#!/bin/sh
+"$work/fill" "\$1"
+sed -e 's|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=postgres|' -e 's|^DATABASE_ADAPTER=.*|DATABASE_ADAPTER=postgresql|' \
+    -e 's|^POSTGRES_HOST=.*|POSTGRES_HOST=/data/postgres-run|' -e 's|^POSTGRES_PORT=.*|POSTGRES_PORT=5432|' \
+    -e 's|^POSTGRES_DB=.*|POSTGRES_DB=busyyaks|' -e 's|^POSTGRES_USER=.*|POSTGRES_USER=busyyaks|' \
+    -e 's|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=quickstart0test|' -e 's|^POSTGRES_LOCK_TIMEOUT_MS=.*|POSTGRES_LOCK_TIMEOUT_MS=15000|' \
+    "\$1" > "\$1.new"
+cat "\$1.new" > "\$1" && rm "\$1.new"
+FILL
+chmod +x "$work/fill" "$work/fill-nothing" "$work/fill-postgres"
+
+# every bind-mount source compose resolves for the services `up` would start (the profile's included) exists and is the
+# replay user's — what `up` itself trips on ("bind source path does not exist", or a root-owned dir Docker made), read
+# from compose's own config (no daemon), so a new bind that bin/setup does not create fails here
+binds() {
+  srcs=$(cd "$work/busyyaks" && "$real_docker" compose config --format json \
+           | grep -oE '"source": *"/[^"]*"' | sed 's/^"source": *"//; s/"$//' | sort -u)
+  [ -n "$srcs" ] || fail "compose config shows no bind source at all"
+  n=0
+  for p in $srcs; do
+    [ -e "$p" ] || fail "bind source $p does not exist after the Quickstart: compose up would stop on it"
+    [ "$(stat -c %u "$p")" = "$(id -u)" ] || fail "bind source $p is owned by uid $(stat -c %u "$p"), not the replay user $(id -u)"
+    n=$((n + 1))
+  done
+  echo "ok: $n bind sources exist, owned by uid $(id -u)"
+}
+
+# the block with the clone line stood in for
+replay() {
+  { echo "cd '$work/busyyaks'"; sed 1d "$work/block.sh"; } > "$work/run.sh"
+  (cd "$work" && PATH="$work/shim:$PATH" EDITOR="$1" sh -eu "$work/run.sh")
+}
+
+echo "== the Quickstart, every value filled"
+clone
+replay "$work/fill" || fail "the Quickstart block failed (its output is above)"
+[ "$(wc -l < "$work/up.log")" -eq 1 ] || fail "docker compose up ran $(wc -l < "$work/up.log") times, not once"
+[ "$(stat -c %a "$work/busyyaks/.env")" = 600 ] || fail ".env is not 0600"
+[ -d "$work/busyyaks/data" ] || fail "./data was not created"
+[ "$(stat -c %a "$work/state/run")" = 700 ] || fail "LAUNCHER_RUN_DIR was not created 0700"
+for k in SESSION_SECRET MCP_TOKEN MCP_REPORT_TOKEN; do
+  grep -Eq "^$k=[0-9a-f]{64,}$" "$work/busyyaks/.env" || fail "$k was not written"
+done
+echo "ok: $(cat "$work/up.log")"
+binds
+# `up --wait` returns 0 only once each service it starts is healthy, and a service without a healthcheck counts as
+# ready the moment it runs — a crash loop included. Every service the block starts must have one (compose's own config).
+unchecked=$(cd "$work/busyyaks" && "$real_docker" compose config | awk '
+  /^services:/ { s = 1; next } /^[^ ]/ { s = 0 }
+  s && /^  [a-z][a-z0-9_-]*:$/ { svc = substr($1, 1, length($1) - 1); seen[svc] = 0 }
+  s && /^    healthcheck:/ { seen[svc] = 1 }
+  END { for (k in seen) if (!seen[k]) print k }')
+unchecked=" $(printf '%s' "$unchecked" | tr '\n' ' ') "
+services=$(sed 's/.* --wait //; s/ -[^ ]*//g' "$work/up.log")
+for svc in $services; do
+  case "$unchecked" in *" $svc "*) fail "service $svc has no healthcheck: up --wait would return 0 over its crash loop" ;; esac
+done
+echo "ok: every service of the up line has a healthcheck"
+
+echo "== the Quickstart, .env left as bin/setup wrote it"
+clone
+rm -rf "$work/state" "$work/up.log"
+if replay "$work/fill-nothing" > "$work/out" 2>&1; then
+  cat "$work/out"; fail "the block went on with an incomplete .env"
+fi
+grep -q 'FAIL  PROJECTS_ROOT is empty in .env' "$work/out" || { cat "$work/out"; fail "bin/setup check did not name PROJECTS_ROOT"; }
+[ ! -e "$work/up.log" ] || fail "docker compose up ran after bin/setup check failed"
+echo "ok: stopped at bin/setup check, compose up not run"
+
+echo "== the Quickstart with the compose PostgreSQL (COMPOSE_PROFILES=postgres)"
+clone
+rm -rf "$work/state" "$work/up.log"
+replay "$work/fill-postgres" || fail "the Quickstart block failed with the postgres profile (its output is above)"
+binds
