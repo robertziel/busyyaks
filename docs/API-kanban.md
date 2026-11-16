@@ -61,6 +61,7 @@ Colours (labels, covers; config `label_colors`, the Glass vivid tokens): `green`
   "title": "Fix login", "labels": ["auth"], "assignee": "claude-shop_teamlead", "priority": "high",
   "comments": 2, "due": "2025-03-05T18:00:00+01:00", "due_done": false, "cover": "blue",
   "has_description": true, "checklist_done": 1, "checklist_total": 3, "attachments": 2,
+  "media": {"id": 41, "filename": "shot.png", "url": "/api/attachments/41"},
   "question": "Auth or **imgproc** first?", "question_options": ["Auth first", "Imgproc first"],
   "asked": "2025-03-02T16:40:00+01:00", "asked_by": "claude-shop_teamlead",
   "created_by": "operator@example.com",
@@ -82,7 +83,7 @@ Single-card responses (`{card, activity}`) add `description` (markdown), `descri
 ```
 
 - `labels`: names from the board's label set (unknown names → 422 listing the set). `position` is 0-based within the column, contiguous, renumbered on every move/archive.
-- Card face (SPA): due badge red = overdue, orange = due within 24 h, green = `due_done`; `checklist_done/checklist_total`; `has_description`; `comments`.
+- Card face (SPA): `media` = the newest picture attachment (png/jpeg/gif/webp; null = none) shown under the cover, so a card is found by its picture; due badge red = overdue, orange = due within 24 h, green = `due_done`; `checklist_done/checklist_total`; `has_description`; `comments`.
 - Checklist item `body_html` is inline HTML (one paragraph unwrapped).
 
 ## Activity entry
