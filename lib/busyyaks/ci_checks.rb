@@ -55,6 +55,19 @@ module Busyyaks
         @launcher = launcher
         @stale_after = stale_after
         @clock = clock
+        # the PR states (gh_pr_states) behind the PR watch and a closed PR's reason: same freshness rule
+        @states = PrStates::Reader.new(db: db, stale_after: stale_after, wanted_for: wanted_for, clock: clock)
+      end
+
+      # The engine's PR watch (Store#pr_watch_pass, every notifier watch pass, every card outside a terminal column):
+      # every PR assigned to the card is asked (gh_pr_states, so the github service keeps them read) → the ones closed
+      # WITHOUT merging, {role:, number:, closed_at:, why:}, and one {error:} per PR (or assignment) that cannot be read
+      # — beside the closes, so a closed PR never hides another one's failure. A PR not read yet is not closed yet; nor
+      # is a closed row whose reason was never read (polled before the reason existed): told once the poller re-reads it.
+      def closed_prs(card)
+        errors = []
+        closed = assigned_prs(card, errors).filter_map { |role, repo, number| closed_pr(role, repo, number) }
+        closed + errors.map { |e| { error: e } }
       end
 
       def pr_checks(card)
@@ -116,7 +129,7 @@ module Busyyaks
               return merge_ci(repo, number) if approved_after_handoff?(card)
 
               return blocked(number, "the local PR ##{number} was merged before its approval")
-            when "closed" then return blocked(number, "the local PR ##{number} was closed without merging")
+            when "closed" then return blocked(number, "the local #{closed(repo, number)}")
             when "none" then return blocked(number, "the local PR ##{number} was not found on #{repo}")
             end
 
@@ -145,6 +158,61 @@ module Busyyaks
       rescue PrStates::Invalid => e
         raise Unavailable, e.message
       end
+
+      # → [[role, owner/name, number], …] every PR assigned to the card: `local` + `public` on an enrolled project, `pr`
+      # on any other (PrStates.assigned); an assignment or enrolment that cannot be read is added to `errors`.
+      def assigned_prs(card, errors)
+        project = @projects.call(card[:project_slug])
+        # not enrolled: the `pr` PR on whichever repo its URL names (repo nil = any)
+        return pr_of(card, PrStates::ROLES[:pr], nil, errors) unless project && project[:local_mode]
+
+        [[PrStates::ROLES[:local], project[:local_repo]], [PrStates::ROLES[:public], project[:public_repo]]]
+          .flat_map do |role, remote|
+          repo = PrStates.slug(remote)
+          next pr_of(card, role, repo, errors) if repo
+
+          # a PR assigned on a side whose repo cannot be named is an error; an unassigned side is nothing
+          if PrStates.assigned(card, role, nil)
+            errors << "#{role} PR: #{project[:local_error] || "the #{role} repo is not on github.com"}"
+          end
+          []
+        rescue PrStates::Invalid => e
+          errors << e.message
+          []
+        end
+      end
+
+      def pr_of(card, role, repo, errors)
+        r, number = PrStates.assigned(card, role, repo)
+        number ? [[role, r, number]] : []
+      rescue PrStates::Invalid => e
+        errors << e.message
+        []
+      end
+
+      # one assigned PR for the PR watch: its close, its error, or nil (open, merged, not read yet)
+      def closed_pr(role, repo, number)
+        st = @states.lookup(repo, "pr:#{number}")
+        return { error: "#{role} PR ##{number} on #{repo}: #{st[:error]}" } if st[:error]
+        return nil unless st[:state] == "closed" && st[:reason]
+        unless st[:closed_at]
+          return { error: "#{role} PR ##{number} on #{repo}: closed, #{st[:reason].delete_prefix(PrStates::UNKNOWN)}" }
+        end
+
+        { role: role, number: number, closed_at: st[:closed_at], why: said(st[:reason]) }
+      end
+
+      def said(reason) = reason.start_with?(PrStates::UNKNOWN) ? "reason #{reason}" : reason
+
+      # Why the PR closed without merging (gh_pr_states: its issue events), or what is not known yet.
+      def closed_why(repo, number)
+        st = @states.lookup(repo, "pr:#{number}")
+        return said(st[:reason]) if st[:reason]
+
+        st[:error] ? "why unknown: #{st[:error]}" : "why not read yet"
+      end
+
+      def closed(repo, number) = "PR ##{number} closed without merging (#{closed_why(repo, number)})"
 
       # → [owner/name, number] of the card's `local` PR on the project's local repo. None → Unavailable.
       def local_pr(card, project)
@@ -197,20 +265,22 @@ module Busyyaks
       def local_unmerged(repo, number)
         row = answer(repo, "pr:#{number}")
         return nil if row[:state] == "merged"
+        return blocked(number, "the local #{closed(repo, number)}") if row[:state] == "closed"
 
         what = case row[:state]
                when "unpolled" then "not read yet (asked now — try again in a minute)"
-               when "closed" then "closed without merging"
                when "none" then "not found"
                else "still open, not merged into the local repo"
                end
         { number: row[:number], state: "blocked", finished_at: nil, reason: "the local PR ##{number} is #{what}" }
       end
 
-      # The polled answer for repo + ref, registering the request ("I want this") — never a guess. No open PR → nil.
+      # The polled answer for repo + ref, registering the request ("I want this") — never a guess. No PR, or a merged
+      # one → nil; closed without merging → blocked, saying why (a gate never refuses it with the generic "no PR").
       def read(repo, ref)
         row = answer(repo, ref)
-        return nil if %w[none closed merged].include?(row[:state])
+        return blocked(row[:number], closed(repo, row[:number])) if row[:state] == "closed"
+        return nil if %w[none merged].include?(row[:state])
         return row.merge(reason: "PR ##{row[:number]}: CI stuck — #{row[:detail]}") if row[:state] == "stuck"
 
         row
@@ -274,7 +344,7 @@ module Busyyaks
     end
 
     # The github service's side. Every read is conditional (If-None-Match on the ETag GitHub gave for that URL last
-    # time, kept in gh_pages under `ci:<url>` with the fields the poller reads — KEEP, never the whole response): an
+    # time, kept in gh_pages under `ci:<fields>:<url>` with the fields the poller reads — KEEP, never the whole response): an
     # unchanged PR or check list answers 304, which GitHub does not count against the token's rate limit — a card
     # waiting days in a gate, its checks asked every minute (the engine's approval prefetch, card #247), costs nothing
     # while its PR stands still. A cached URL nobody read for wanted_for (a pushed-over sha, a card out of the gate)
@@ -286,6 +356,8 @@ module Busyyaks
                 details_url check_suite id].freeze
       PAGE = "ci:"
       PER_PAGE = 100 # GitHub's maximum for both commit status and check-run lists
+
+      def self.cache_key(url) = GithubNetwork.cache_key(PAGE, KEEP, url)
 
       # ci: CiSettings::Settings (config/busyyaks.yml ci) — the contexts that gate per repo + the stuck limit
       def initialize(db:, client:, gate:, wanted_for:, ci:, clock: -> { Busyyaks::Clock.epoch })
@@ -303,7 +375,8 @@ module Busyyaks
       # PrStates::Poller). A rate-limited answer is the token's: it pauses the gate and fails the rest of the batch.
       def run
         now = @clock.call
-        rows = @db[:gh_pr_checks].where(Sequel.lit("requested_at >= ?", now - @wanted_for)).all
+        # in id order: one batch, the same order on every database (PostgreSQL returns an updated row last)
+        rows = @db[:gh_pr_checks].where(Sequel.lit("requested_at >= ?", now - @wanted_for)).order(:id).all
         paused = @gate.paused
         if paused
           rows.each { |row| fail_row(row, paused) }
@@ -331,7 +404,7 @@ module Busyyaks
       # One conditional GET → the body's KEEP fields (a 304 = the stored ones, its row marked read now); a 404 with
       # missing_ok → nil.
       def get(url, missing_ok: false)
-        key = "#{PAGE}#{url}"
+        key = self.class.cache_key(url)
         cached = @pages.page(key)
         cached = nil unless cached&.dig(:items)
         page = @client.get(url, etag: cached&.dig(:etag), missing_ok: missing_ok)

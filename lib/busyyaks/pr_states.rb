@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "time"
 require_relative "github_network"
 require_relative "github"
 require_relative "clock"
@@ -9,13 +10,17 @@ module Busyyaks
   # private local-repo enrolment, Scanner#enrolment) and its state (open · draft · merged · closed).
   #
   # The GitHub token lives only in the `github` compose service, so the work is split over gh_pr_states, like CiChecks:
-  #   Reader  (web)     — asks for the PRs a card dialog shows (requested_at) and reads the answers. No token, no HTTP.
+  #   Reader  (web, notifier) — asks for the PRs a card dialog shows and, on every notifier watch pass, every PR
+  #                       assigned to a live card (CiChecks::Port#closed_prs: the engine's PR watch); reads the answers.
+  #                       No token, no HTTP.
   #   Poller  (github)  — every GITHUB_CI_INTERVAL_SECONDS answers the recently requested rows. A merged PR is final:
-  #                       answered once, never polled again.
+  #                       answered once, never polled again. A PR closed without merging keeps its closed_at and why
+  #                       (its issue events, read once per close: base deleted · head deleted · by <login>).
   # A failed poll, or an answer older than `stale_after`, is said on the link — never shown as the PR's state.
   module PrStates
     PR_URL = %r{\Ahttps://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)\z}
     FINAL = %w[merged].freeze
+    UNKNOWN = "unknown: " # a closed PR for which GitHub itself has no reason (no closed_at / closed event / actor)
 
     module_function
 
@@ -94,18 +99,21 @@ module Busyyaks
           return { error: "last GitHub read #{(now - row[:checked_at]) / 60} min ago (github service stopped?)" }
         end
 
-        { state: row[:state], number: row[:number], url: row[:url], checked_at: row[:checked_at] }
+        out = { state: row[:state], number: row[:number], url: row[:url], checked_at: row[:checked_at] }
+        row[:state] == "closed" ? out.merge(closed_at: row[:closed_at], reason: row[:reason]) : out
       end
     end
 
     # The github service's side. Every read is conditional, like CiChecks::Poller's: the ETag GitHub gave for the PR
-    # and the fields read from it (KEEP) are kept in gh_pages under `pr:<url>`, so an unchanged PR answers 304, which
+    # and the fields read from it (KEEP) are kept in gh_pages under `pr:<fields>:<url>`, so an unchanged PR answers 304, which
     # costs no rate limit — without it every wanted row was a full call each tick. A cached URL nobody read for
     # wanted_for is deleted at the end of each run. While `gate` (GithubPollers) is paused nothing is sent and every
     # wanted row says why.
     class Poller
-      KEEP = %w[number html_url state draft merged_at].freeze
+      KEEP = %w[number html_url state draft merged_at closed_at].freeze
       PAGE = "pr:"
+
+      def self.cache_key(url) = GithubNetwork.cache_key(PAGE, KEEP, url)
 
       def initialize(db:, client:, gate:, wanted_for:, clock: -> { Busyyaks::Clock.epoch })
         @db = db
@@ -119,7 +127,8 @@ module Busyyaks
       # → number of rows read (0 while paused)
       def run
         now = @clock.call
-        rows = @db[:gh_pr_states].where(Sequel.lit("requested_at >= ?", now - @wanted_for)).all
+        # in id order: one batch, the same order on every database (PostgreSQL returns an updated row last)
+        rows = @db[:gh_pr_states].where(Sequel.lit("requested_at >= ?", now - @wanted_for)).order(:id).all
                                  .reject { |r| FINAL.include?(r[:state]) && r[:checked_at] && r[:error].nil? }
         paused = @gate.paused
         if paused
@@ -152,12 +161,63 @@ module Busyyaks
         pr = get("/repos/#{row[:repo]}/pulls/#{Integer(name)}")
         raise GithubNetwork::Error, "#{row[:repo]}##{name}: 404 — no such PR, or the token cannot see the repo" unless pr
 
-        { number: pr["number"], url: pr["html_url"], state: state(pr) }
+        out = { number: pr["number"], url: pr["html_url"], state: state(pr), closed_at: nil, reason: nil }
+        return out unless out[:state] == "closed"
+
+        closed_at = closed_at(pr)
+        # the reason is read once per close: the same close already read keeps its reason (an unknown one too: GitHub
+        # has none for it). A failed read raises — the row's error, read again next poll — never stored as the reason.
+        known = row[:reason] if row[:state] == "closed" && closed_at && row[:closed_at] == closed_at
+        out.merge(closed_at: closed_at, reason: known || close_reason(row[:repo], pr["number"], closed_at))
+      end
+
+      # the PR's closed_at as epoch seconds, nil when GitHub gave none or an unreadable one (said as the reason)
+      def closed_at(pr)
+        Time.iso8601(pr["closed_at"].to_s).to_i
+      rescue ArgumentError
+        nil
+      end
+
+      # With no closed_at GitHub has no time for the close: "unknown: …" (the PR watch says it as the PR's error, never
+      # tells it). A failed events read raises (rate limit included: run pauses the pollers).
+      def close_reason(repo, number, closed_at)
+        return "#{UNKNOWN}GitHub gave #{repo}##{number} no closed_at" unless closed_at
+
+        reason(repo, number)
+      end
+
+      # Why a PR closed without merging, from its issue events (every page, oldest first): the events since its last
+      # reopen up to its last `closed` — a deleted base closes it ("base deleted": GitHub never retargets), a deleted head
+      # too ("head deleted"); otherwise somebody closed it ("by <login>", "by an unknown account" when the event names
+      # none). No closed event → "unknown: …": GitHub has no reason to give.
+      def reason(repo, number)
+        events = []
+        url = "/repos/#{repo}/issues/#{number}/events?per_page=#{GithubNetwork::PER_PAGE}"
+        while url
+          page = @client.get(url)
+          events.concat(page.body)
+          url = page.next_url
+        end
+        last = events.rindex { |e| e["event"] == "closed" }
+        return "#{UNKNOWN}#{repo}##{number} is closed but its issue events have no closed event" unless last
+
+        # the events since the last reopen up to the close — and those of the close's own second after it: GitHub
+        # writes base_ref_deleted and closed in one second, in either order (busyyaks PR #43,
+        # test/fixtures/github/issue_43_events.json). A branch deleted LATER (cleanup after a close) is not why.
+        from = (events[0...last].rindex { |e| e["event"] == "reopened" } || -1) + 1
+        at = events[last]["created_at"]
+        upto = last + events[(last + 1)..].take_while { |e| e["created_at"] == at }.size
+        kinds = events[from..upto].map { |e| e["event"] }
+        return "base deleted" if kinds.include?("base_ref_deleted")
+        return "head deleted" if kinds.include?("head_ref_deleted")
+
+        login = events[last].dig("actor", "login").to_s
+        login.empty? ? "by an unknown account" : "by #{login}"
       end
 
       # one conditional GET → the PR's KEEP fields (a 304 = the stored ones, its cache entry marked read now); 404 → nil
       def get(url)
-        key = "#{PAGE}#{url}"
+        key = self.class.cache_key(url)
         cached = @pages.page(key)
         cached = nil unless cached&.dig(:items)
         page = @client.get(url, etag: cached&.dig(:etag), missing_ok: true)
@@ -222,10 +282,17 @@ module Busyyaks
 
       def flagged(url, label, repo, role, st)
         state = st[:error] ? "unknown" : st[:state]
-        tags = [role && tag(role, "info"), tag(state, TONE.fetch(state, "warn"))].compact
+        # a PR closed without merging says why on its tag: "closed: base deleted"
+        text = if st[:reason]
+                 "#{state}: #{st[:reason].start_with?(UNKNOWN) ? 'why unknown' : st[:reason]}"
+               else
+                 state
+               end
+        tags = [role && tag(role, "info"), tag(text, TONE.fetch(state, "warn"))].compact
         detail = [row("Repo", repo), role && row("Role", role == "local" ? "private local repo" : "public repo"),
-                  row("State", state),]
+                  row("State", state == "closed" ? "closed without merging" : state),]
         detail << row("Why", st[:error]) if st[:error]
+        detail << row("Why closed", st[:reason]) if st[:reason]
         # an absolute time: a relative "Ns ago" changed the card JSON on every request, so the card dialog's rev poll
         # refetched the whole card every 3 s
         detail << row("Read", "#{Time.at(st[:checked_at]).strftime('%Y-%m-%d %H:%M:%S %Z')} (GitHub)") if st[:checked_at]

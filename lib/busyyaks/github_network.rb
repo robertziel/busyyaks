@@ -6,6 +6,7 @@ require "uri"
 require "time"
 require "yaml"
 require "set"
+require "digest"
 require_relative "github_feed"
 require_relative "github_pollers"
 require_relative "clock"
@@ -24,6 +25,11 @@ module Busyyaks
   # Every run is recorded in gh_runs: ok or the error (token rejected, rate limited, unreachable) + the rate limit left.
   # A failed run keeps what earlier runs stored; the feed shows the error and the last good run's time beside it.
   module GithubNetwork
+    # A conditional-read cache entry's key (gh_pages url) names the field set its items were cut to: an entry written
+    # with another set (an upgrade added a field) is another key, so it is never read and its ETag never sent — the next
+    # read is a full 200 that stores every current field, and the old entry ages out with its prefix's prune.
+    def self.cache_key(prefix, fields, url) = "#{prefix}#{Digest::SHA256.hexdigest(fields.join("\n"))[0, 12]}:#{url}"
+
     API = "https://api.github.com"
     JSON_ACCEPT = "application/vnd.github+json"
     STAR_ACCEPT = "application/vnd.github.star+json"

@@ -14,7 +14,7 @@ class CiChecksTest < Minitest::Test
   CK = Busyyaks::CiChecks
 
   class FakeHttp
-    attr_accessor :pulls, :statuses, :runs, :requests, :statuses_by_sha, :heads, :compare, :short_by, :suites
+    attr_accessor :pulls, :statuses, :runs, :requests, :statuses_by_sha, :heads, :compare, :short_by, :suites, :events
     def initialize
       @requests = []
       @pulls = []
@@ -44,7 +44,14 @@ class CiChecksTest < Minitest::Test
       @requests << url
       path = url.sub(/\?.*/, "")
       body = case path
-             when %r{/pulls/(\d+)\z} then @pulls.find { |p| p["number"] == Regexp.last_match(1).to_i }
+             when %r{/pulls/(\d+)\z}
+               pr = @pulls.find { |p| p["number"] == Regexp.last_match(1).to_i }
+               # a closed PR has its closed_at (the PR watch tells each close once, keyed by it)
+               pr && pr["state"] == "closed" ? { "closed_at" => "2026-11-16T23:06:57Z" }.merge(pr) : pr
+             when %r{/issues/\d+/events}
+               return [500, {}, "{\"message\":\"Server Error\"}"] if @events == :fail
+
+               @events || [{ "event" => "closed", "actor" => { "login" => "octo" } }]
              when %r{/commits/([^/]+)/status\z}
                paged(url, "statuses", @statuses_by_sha.fetch(Regexp.last_match(1), @statuses).map { |x| status(x) })
              when %r{/branches/([^/?]+)\z}
@@ -92,6 +99,7 @@ class CiChecksTest < Minitest::Test
     @port = CK::Port.new(db: @conn, projects: ->(s) { @conn[:projects].where(slug: s).first },
                          approvals: ->(s) { CK.steps(@kb.board_of(s)) }, launcher: @launcher,
                          stale_after: 180, wanted_for: 600, clock: -> { @now })
+    @states = Busyyaks::PrStates::Poller.new(db: @conn, client: client, gate: @gate, wanted_for: 600, clock: -> { @now })
     @kb = Busyyaks::Kanban.store(@conn, clock: -> { @now })
     @id = @kb.create(slug: "o-r", title: "ship", by: "lead", column: "doing")
     @kb.update(@id, { "assignee" => "lead" }, by: "lead")
@@ -236,7 +244,7 @@ class CiChecksTest < Minitest::Test
     assert_match(/local PR #112 is not read yet/, @port.approval_checks(card, step)[:reason])
     @http.pulls = [PR.merge("state" => "closed", "merged_at" => nil)]
     @poller.run
-    assert_match(/local PR #112 is closed without merging/, @port.approval_checks(card, step)[:reason])
+    assert_equal "the local PR #112 closed without merging (why not read yet)", @port.approval_checks(card, step)[:reason]
   end
 
   # the local board: its first approval (Local: Human review) = the open local PR's checks; Local: Deploy check →
@@ -349,7 +357,10 @@ class CiChecksTest < Minitest::Test
     @http.pulls = [PR.merge("state" => "closed", "merged_at" => nil)]
     @port.approval_checks(card, first)
     @poller.run
-    assert_equal "the local PR #112 was closed without merging", @port.approval_checks(card, first)[:reason]
+    assert_equal "the local PR #112 closed without merging (why not read yet)", @port.approval_checks(card, first)[:reason]
+    @http.events = [{ "event" => "head_ref_deleted" }, { "event" => "closed", "actor" => { "login" => "robertziel" } }]
+    @states.run
+    assert_equal "the local PR #112 closed without merging (head deleted)", @port.approval_checks(card, first)[:reason]
   end
 
   # the local PR is the assigned one — never a PR in pr_url or in a handoff's text
@@ -529,6 +540,15 @@ class CiChecksTest < Minitest::Test
     assert_match(/CI failed/, assert_raises(AgentsKanban::Invalid) { @kb.approve(@id, by: "operator") }.message)
   end
 
+  # the CI poller's cache key names its KEEP set too: an entry written with another set is another key, never read
+  def test_the_ci_cache_key_names_its_field_set
+    url = "/repos/o/r/pulls/112"
+    key = CK::Poller.cache_key(url)
+    assert key.start_with?("ci:") && key.end_with?(":#{url}")
+    refute_equal key, Busyyaks::GithubNetwork.cache_key("ci:", CK::Poller::KEEP - ["merged_at"], url)
+    refute_equal key, "ci:#{url}", "the key before field sets were named"
+  end
+
   # the poller's ETag cache keeps only the fields it reads, and forgets a URL nobody read for the poll window
   def test_the_etag_cache_is_slim_and_pruned
     @http.pulls = [PR.merge("body" => "x" * 10_000, "head" => { "sha" => "abc", "repo" => { "big" => "y" * 10_000 } })]
@@ -536,9 +556,9 @@ class CiChecksTest < Minitest::Test
     handoff!
     run_services_for(120)
     pages = -> { @conn[:gh_pages].where(Sequel.like(:url, "ci:%")).order(:url).select_map(%i[url items]) }
-    assert_equal ["ci:/repos/o/r/commits/abc/check-runs?per_page=100&page=1",
-                  "ci:/repos/o/r/commits/abc/status?per_page=100&page=1", "ci:/repos/o/r/pulls/112",],
-                 pages.call.map(&:first)
+    urls = ["/repos/o/r/commits/abc/check-runs?per_page=100&page=1",
+            "/repos/o/r/commits/abc/status?per_page=100&page=1", "/repos/o/r/pulls/112",]
+    assert_equal urls.map { |u| CK::Poller.cache_key(u) }.sort, pages.call.map(&:first)
     assert_equal({ "number" => 112, "state" => "open", "head" => { "sha" => "abc" } },
                  JSON.parse(pages.call.last[1]))
     assert_operator pages.call.sum { |_, i| i.size }, :<, 300, "no PR body, no repo, no status description"
@@ -661,6 +681,168 @@ class CiChecksTest < Minitest::Test
     n.watch
     n.deliver
     assert_equal 1, @launcher.sent.size, "one ping per CI completion"
+  end
+
+  # Every PR assigned to a live card is watched on the notifier's watch pass — never only while somebody
+  # has the card open — and a close without merging is told once on the card and to its owner, with the reason
+  def test_a_closed_unmerged_pr_alarms_the_card_and_pings_the_owner_once
+    @http.pulls = [PR]
+    log = StringIO.new
+    n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: log)
+    n.watch # the watch pass asks for the PR's state: nobody opened the card
+    assert_equal [["o/r", "pr:112"]], @conn[:gh_pr_states].select_map(%i[repo ref])
+    @states.run
+    n.watch
+    n.deliver
+    assert_empty @launcher.sent, "an open PR alarms nobody"
+    @http.pulls = [PR.merge("state" => "closed", "merged_at" => nil)]
+    @http.events = [{ "event" => "base_ref_deleted" }, { "event" => "closed", "actor" => { "login" => "robertziel" } }]
+    @now += 60
+    @states.run
+    n.watch
+    n.deliver
+    assert_equal 1, @launcher.sent.size, log.string
+    assert_match(/PR #112 \(pr\) closed without merging \(base deleted\) while card ##{@id} "ship" is in In progress/,
+                 @launcher.sent.first[1])
+    said = @kb.activity(@id).select { |a| a[:kind] == "comment" }.map { |a| a[:body] }
+    assert_equal ["PR #112 (pr) closed without merging (base deleted) — pinged shop."], said
+    3.times do
+      @now += 60
+      @states.run
+      n.watch
+      n.deliver
+    end
+    assert_equal 1, @launcher.sent.size, "one ping per close"
+    assert_match(/pr watch: card #{@id} PR closed without merging, owner pinged/, log.string)
+  end
+
+  # a failed read of the close's reason tells nothing yet and is said as the PR's error; the close is told once, with
+  # its reason, when the next poll reads it — never an "unknown" pinned on the alarm by a transient failure
+  def test_a_close_whose_reason_read_fails_is_said_as_an_error_then_told_once_with_the_reason
+    log = StringIO.new
+    n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: log)
+    n.watch
+    @http.pulls = [PR.merge("state" => "closed", "merged_at" => nil)]
+    @http.events = :fail
+    @states.run
+    n.watch
+    n.deliver
+    assert_empty @launcher.sent
+    assert_match(/pr watch: card #{@id}: pr PR #112 on o\/r: GitHub read failed: GitHub 500/, log.string)
+    @http.events = [{ "event" => "head_ref_deleted" }, { "event" => "closed", "actor" => { "login" => "ann" } }]
+    3.times do
+      @now += 60
+      @states.run
+      n.watch
+      n.deliver
+    end
+    assert_equal 1, @launcher.sent.size, log.string
+    assert_match(/PR #112 \(pr\) closed without merging \(head deleted\)/, @launcher.sent.first[1])
+    assert_equal 1, @kb.activity(@id).count { |a| a[:kind] == "comment" }
+  end
+
+  # a close GitHub gave no closed_at is never told under a made-up key: said as the PR's error on every pass
+  def test_a_close_with_no_closed_at_is_said_never_told
+    @kb.pr_watch_pass
+    @http.pulls = [PR.merge("state" => "closed", "merged_at" => nil, "closed_at" => nil)]
+    @states.run
+    assert_equal [[@id, "unavailable: pr PR #112 on o/r: closed, GitHub gave o/r#112 no closed_at"]], @kb.pr_watch_pass
+    assert_empty @kb.activity(@id).select { |a| a[:kind] == "comment" }
+    assert_empty @kb.pings(@id)
+  end
+
+  # a row polled as closed before closed_at / reason existed (an upgrade) is not told until the poller re-reads it —
+  # then once, with the reason: never "()" first and the real close again after
+  def test_a_closed_row_polled_before_the_upgrade_is_told_once_after_its_re_read
+    @conn[:gh_pr_states].insert(repo: "o/r", ref: "pr:112", number: 112, state: "closed", checked_at: @now,
+                                requested_at: @now)
+    assert_equal [], @kb.pr_watch_pass, "no reason read yet: nothing told"
+    @http.pulls = [PR.merge("state" => "closed", "merged_at" => nil)]
+    @http.events = [{ "event" => "closed", "actor" => { "login" => "ann" } }]
+    @now += 60
+    @states.run
+    assert_equal [[@id, :closed]], @kb.pr_watch_pass
+    @now += 60
+    @states.run
+    assert_equal [], @kb.pr_watch_pass
+    said = @kb.activity(@id).select { |a| a[:kind] == "comment" }.map { |a| a[:body] }
+    assert_equal ["PR #112 (pr) closed without merging (by ann) — pinged shop."], said
+  end
+
+  def test_a_card_in_a_terminal_column_is_not_watched
+    b = @kb.board_of("o-r")
+    refute_empty b.terminal
+    b.terminal.each do |col|
+      @conn[:cards].where(id: @id).update(column: col)
+      assert_equal [], @kb.pr_watch_pass
+    end
+    assert_empty @conn[:gh_pr_states].all
+  end
+
+  def test_the_pr_watch_reads_both_sides_of_an_enrolled_card_and_says_a_failed_read
+    enrol!
+    assign!("local", "https://github.com/o/r_local/pull/112")
+    assign!("public", "https://github.com/o/r/pull/43")
+    @kb.pr_watch_pass
+    assert_equal [["o/r", "pr:43"], ["o/r_local", "pr:112"]], @conn[:gh_pr_states].order(:repo).select_map(%i[repo ref])
+    @http.pulls = [PR.merge("number" => 43, "state" => "closed", "merged_at" => nil)] # 112: 404 on o/r_local
+    @states.run
+    local_down = %r{\Aunavailable: local PR #112 on o/r_local: GitHub read failed: .*404}
+    pass = @kb.pr_watch_pass
+    assert_equal 2, pass.size
+    assert_includes pass, [@id, :closed], "the closed public PR is told although the local read failed"
+    assert_match local_down, pass.first[1], "one entry per assigned PR, in the card's order (local, public)"
+    # the close is told already; the local PR's failed read is still said on the next pass — never hidden by it
+    @now += 60
+    @states.run
+    pass = @kb.pr_watch_pass
+    assert_equal 1, pass.size
+    assert_match local_down, pass.first[1]
+    @http.pulls = []
+    @now += 60
+    @states.run
+    pass = @kb.pr_watch_pass
+    assert_equal 2, pass.size, "both reads failed: both said"
+    assert_match local_down, pass.first[1]
+    assert_match(%r{\Aunavailable: public PR #43 on o/r: GitHub read failed}, pass.last[1])
+  end
+
+  def test_a_bad_assignment_is_said_by_the_pr_watch
+    @kb.update(@id, { "metadata" => { "prs" => { "pr" => "https://example.com/x" } } }, by: "lead")
+    assert_match(/\Aunavailable: card ##{@id} metadata prs.pr is not a PR on github.com/,
+                 @kb.pr_watch_pass.first[1])
+    enrol!
+    @conn[:projects].where(slug: "o-r").update(public_repo: nil, local_error: "guard.upstreamRemote has no URL")
+    @kb.update(@id, { "metadata" => { "prs" => { "public" => "https://github.com/o/r/pull/5" } } }, by: "lead")
+    assert_equal [[@id, "unavailable: public PR: guard.upstreamRemote has no URL"]], @kb.pr_watch_pass
+  end
+
+  # a gate card whose PR closed is told what happened — never the generic "no PR whose checks could be read" — and its
+  # owner is pinged by the PR watch
+  def test_gate_card_whose_pr_closed_is_told_not_silent
+    enrol!
+    v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
+    @kb.board_save("o-r", v3, by: "operator")
+    assign!("local", "https://github.com/o/r_local/pull/112")
+    assign!("public", "https://github.com/o/r/pull/43")
+    @conn[:cards].where(id: @id).update(column: "public_human_review")
+    @http.pulls = [MERGED, PR.merge("number" => 43, "state" => "closed", "merged_at" => nil)]
+    @http.events = [{ "event" => "base_ref_deleted" }, { "event" => "closed", "actor" => { "login" => "robertziel" } }]
+    log = StringIO.new
+    n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: log)
+    2.times do # the local PR's merge is read first, then the public PR's checks are asked
+      n.watch
+      @poller.run
+      @states.run
+    end
+    n.watch
+    n.deliver
+    hold = "PR #43 closed without merging (base deleted)"
+    assert_equal hold, @kb.card(@id)[:gate_hold]
+    e = assert_raises(AgentsKanban::Invalid) { @kb.approve(@id, by: "operator") }
+    assert_match(/card ##{@id} — #{Regexp.escape(hold)}/, e.message)
+    assert_equal 1, @launcher.sent.size, log.string
+    assert_match(/PR #43 \(public\) closed without merging \(base deleted\)/, @launcher.sent.first[1])
   end
 
   def test_the_board_config_is_wired

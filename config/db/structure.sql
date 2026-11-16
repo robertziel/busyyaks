@@ -429,6 +429,8 @@ CREATE TABLE `gh_pr_states`(
   `url` varchar(255),
   `state` varchar(255),
   `error` text,
+  `closed_at` integer,
+  `reason` varchar(255),
   UNIQUE(`repo`, `ref`)
 );
 CREATE TABLE `agent_settings`(
@@ -497,4 +499,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261205000000_setup_completions.rb'),
 ('20261206000000_agents_kanban_session_boards.rb'),
 ('20261207470000_gh_pr_checks_builds.rb'),
-('20261208000000_gh_pollers.rb');
+('20261208000000_gh_pollers.rb'),
+('20261208046700_pr_closed_reason.rb');
