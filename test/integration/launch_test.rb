@@ -197,8 +197,24 @@ mtime: Busyyaks::Clock.now.to_f, }],
     kb.ask(id, question: "Auth or imgproc first?", options: nil, by: "elsewhere")
     s = agent(api(:get, "/api/agents"), "elsewhere")
     assert_equal ["blocked", "card ##{id}"], s.values_at("state", "state_by")
-    assert_equal [[id, "Auth or imgproc first?", "/projects/group/repo?tab=board&card=#{id}"]],
-                 s["asks"].map { |a| a.values_at("id", "question", "path") }
+    assert_equal [[id, "Auth or imgproc first?", "/projects/group/repo?tab=board&card=#{id}", []]],
+                 s["asks"].map { |a| a.values_at("id", "question", "path", "options") }
+    # the question's choices come with it (the project page's Needs-you lane answers with one)
+    other = kb.create(slug: "group/repo", title: "pick two", by: "op", column: "doing")
+    kb.set_owner(other, session: "elsewhere", by: "op")
+    kb.ask(other, question: "Rebase or split?", options: ["Rebase", "Split PR"], by: "elsewhere")
+    s = agent(api(:get, "/api/agents"), "elsewhere")
+    assert_equal ["Rebase", "Split PR"], s["asks"].find { |a| a["id"] == other }["options"]
+  end
+
+  # the Working lane's evidence — the running tool, the turn's elapsed seconds and tokens, the card a kanban
+  # tool acts on — from the screen's verdict only; a session whose screen says nothing has nil there (shown "working")
+  def test_agents_carry_what_each_working_screen_shows
+    fake_launcher
+    j = api(:get, "/api/agents")
+    assert_equal({ "tool" => "busyyaks · kanban_comment", "elapsed_s" => 65, "tokens" => "↓ 1.6k", "card" => TOOL_CARD },
+                 agent(j, "group_repo")["live"])
+    assert_equal({ "tool" => nil, "elapsed_s" => nil, "tokens" => nil, "card" => nil }, agent(j, "asker")["live"])
   end
 
   # a card blocked on the world (another card, CI, a third party) is not the operator's to answer — its owner

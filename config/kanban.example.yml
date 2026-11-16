@@ -69,7 +69,7 @@ theme:
   --ak-menu-shadow: var(--menu-shadow)
   # agent faces: one colour per agent type, and per subagent role (face_roles below) — distinct skin hues
   --ak-face-type-lead: var(--vivid-blue)
-  --ak-face-type-worker: var(--vivid-purple)
+  --ak-face-type-worker: color-mix(in srgb, var(--vivid-yellow) 70%, var(--ink))   # gold, off the needs-you purple and the team green (eyes ≥ 6.3:1 in both skins)
   --ak-face-type-team: var(--vivid-green)
   --ak-face-type-plain: var(--vivid-orange)
   --ak-face-type-reviewer: var(--vivid-pink)

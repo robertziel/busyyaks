@@ -115,6 +115,10 @@ module Busyyaks
         cards_known: s.cards_known?,
         # its face: the registered agent name + type (nil = no open registration), the live phase = its mood
         agent: s.registration&.dig(:agent), agent_type: s.registration&.dig(:type), phase: s.live[:phase],
+        # what its working screen shows now (the project page's Working lane; the live line's evidence):
+        # the tool's name, the turn's elapsed seconds + tokens, the card a kanban tool acts on — nil when
+        # the screen does not say
+        live: s.live.slice(:tool, :elapsed_s, :tokens, :card),
         cards: s.open_cards.map do |c|
           agent_card(c, column_label: c[:column_label], column_type: c[:column_type], gate_hold: c[:gate_hold],
                         blocked_external: c[:blocked_external])
@@ -122,8 +126,16 @@ module Busyyaks
         cards_finished: s.finished_cards.size,
         subagents: s.subagents, engines: s.engines, title: s.title, cwd: s.cwd, model: s.model,
         waiting_for: s.waiting_for, dialogs: s.dialogs, screen_errors: s.screen_errors,
-        asks: s.asks.map { |c| agent_card(c, question: c[:question].to_s[0, 300]) },
+        asks: s.asks.map { |c| agent_card(c, question: c[:question].to_s[0, 300], options: ask_options(c)) },
         reviews: s.reviews.map { |c| agent_card(c, pr_url: c[:pr_url]) }, }
+    end
+
+    # a kanban_ask question's answer choices (posted as the operator's comment = the answer); a question a dialog raised
+    # (dialog_id) has none here: its keys are pressed through the session's dialog, never posted as text
+    def ask_options(c)
+      return [] if c[:dialog_id] || c[:question_options].nil?
+
+      JSON.parse(c[:question_options])
     end
 
     # A card in an agent row: id, board, title, the row's own fields, then the board link (that key order is the JSON's)

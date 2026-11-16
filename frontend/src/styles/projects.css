@@ -24,112 +24,484 @@
   gap: 12px;
   padding: 12px 14px;
 }
-/* a project's tmux sessions — one grid, every column aligned across rows */
-.sessions {
+/* a project's tmux sessions as status lanes: Needs you · Working · Quiet. Status = a word + a dot, never colour
+   alone; the purple is "waiting for you" (as the board's chip), the blue "working". Text colours are the vivid hue mixed
+   toward --ink (darker on light, lighter on dark) for ≥ 4.5:1 on their tints in both skins. */
+/* the lanes' tokens: on the lanes AND on their ⋯ menus — a menu is a portal in <body>, outside .lanes (its
+   focus ring read an undefined --live there and drew nothing) */
+.lanes,
+.lane-pop {
+  --you: color-mix(in srgb, var(--vivid-purple) 80%, var(--ink));
+  --you-tint: color-mix(in srgb, var(--vivid-purple) 11%, transparent);
+  --you-line: color-mix(in srgb, var(--vivid-purple) 38%, transparent);
+  --live: color-mix(in srgb, var(--vivid-blue) 78%, var(--ink));
+  --live-tint: color-mix(in srgb, var(--vivid-blue) 10%, transparent);
+}
+.lanes {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  border-top: 1px solid var(--line);
-  padding-top: 10px;
+  min-width: 0;
 }
-.sessions-head {
+.lane {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 0;
+  align-items: start;
+}
+.lane + .lane {
+  border-top: 1px solid var(--row-rule);
+}
+.lanes > .lane:first-child,
+.lanes > .lanes-err + .lane {
+  padding-top: 0;
+}
+.lanes > .lane:last-child {
+  padding-bottom: 0;
+}
+.lane-label {
+  margin: 0;
+  padding-top: 5px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+.lane-label span {
+  font: 500 12px var(--mono);
+  color: var(--ink-faint);
+}
+.lane.you .lane-label,
+.lane.you .lane-label span {
+  color: var(--you);
+}
+.lane-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+.lanes-err {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--bad);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+/* the chip's main button: face · name · status — the terminal */
+.lane-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 8px;
+}
+.lane-main[aria-disabled="true"] {
+  cursor: help;
+}
+.lane-main:focus-visible,
+.lane-kebab:focus-visible,
+.lane-more:focus-visible,
+.lane-card:focus-visible {
+  outline: 2px solid var(--live);
+  outline-offset: 2px;
+}
+.lane-face {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+}
+.lane-face.attached {
+  box-shadow: 0 0 0 2px var(--ok);
+}
+.lane-face.unread::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--panel);
+}
+.lane-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.lane-st {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 500 12px var(--mono);
+  white-space: nowrap;
+  color: var(--ink-faint);
+}
+.lane-st i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.lane-st.you {
+  color: var(--you);
+}
+.lane-st.live {
+  color: var(--live);
+}
+.lane-st.live i {
+  box-shadow: 0 0 0 3px var(--live-tint);
+  animation: lane-pulse 1.6s ease-in-out infinite;
+}
+.lane-st.ci {
+  color: var(--warn);
+}
+.lane-st.ext {
+  color: var(--bad);
+}
+.lane-st.done {
+  color: var(--ok);
+}
+.lane-st.idle i,
+.lane-st.unknown i {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+@keyframes lane-pulse {
+  50% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+.lane-el {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.lane-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.lane-card b,
+.lane-cid {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--accent);
+  flex: none;
+}
+.lane-card span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+a.lane-card:hover span {
+  text-decoration: underline;
+}
+/* Needs you: one answer card per session */
+.lane-need {
+  flex: 1 1 380px;
+  min-width: 0;
+  background: var(--you-tint);
+  box-shadow: inset 0 0 0 1px var(--you-line);
+  border-radius: 12px;
+  padding: 7px 10px 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.lane-need.on {
+  box-shadow: inset 0 0 0 1.5px var(--you);
+}
+.need-head,
+.need-foot {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
-  min-height: 28px;
-}
-.sessions-head b {
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--ink-dim);
-  font-size: 11px;
-}
-.sessions-grid {
-  display: grid;
-  grid-template-columns: 30px minmax(0, max-content) minmax(0, 1fr) 3.5em max-content max-content;
-  column-gap: 12px;
-  row-gap: 4px;
-  align-items: center;
-}
-.sessions-row {
-  display: contents;
-}
-.sessions-row > * {
   min-width: 0;
 }
-/* the session's face; attached = a ring in the ok colour, as the dot it replaces was */
-.sessions-face {
-  display: inline-grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
+.need-q {
+  margin: 0;
+  font-weight: 500;
+  font-size: 13.5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
-.sessions-face.attached {
-  box-shadow: 0 0 0 2px var(--ok);
-}
-.sessions .sessions-name code {
+.launchbar .need-q code {
+  font: 12px var(--mono);
+  font-weight: 400;
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--you-line);
+  padding: 1px 7px;
+  border-radius: var(--radius-chip);
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   display: block;
 }
-.sessions-type,
-.sessions-age {
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.sessions-age {
-  text-align: right;
-}
-.sessions-links {
+.need-opts {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 6px;
-  align-items: center;
+  justify-content: flex-end;
 }
-.sessions-links .copychip {
+.need-opts .btn.need-pri {
+  background: var(--vivid-purple);
+  color: var(--panel); /* white on the light skin, the near-black panel on the dark: ≥ 4.5:1 on the purple in both */
+}
+.need-note {
+  margin: 0;
+  font-size: 12px;
+}
+/* Working: a chip per session — the phase on line 1, the card on line 2 */
+.lane-work {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 12px;
+  background: var(--mat-fill-2);
+  flex: 1 1 250px;
+  min-width: 0;
+  max-width: 360px;
+}
+.lane-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 30px;
+  min-width: 0;
+}
+.lane-sub .lane-el {
+  margin-left: auto;
+  flex: none;
+}
+.lane-work.on,
+.lane-quiet.on {
+  box-shadow: inset 0 0 0 1.5px var(--live);
+}
+/* Quiet: pills */
+.lane-quiet {
   display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 10px 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--mat-fill-2);
+  min-width: 0;
+  max-width: 100%;
+}
+.lane-quiet .lane-name {
+  color: var(--ink-faint);
+}
+.lane-quiet .lane-st {
+  font-size: 11.5px;
+}
+.lane-more {
+  border: 0;
+  font: 500 12px var(--sans);
+  color: var(--ink-dim);
+  background: var(--mat-fill);
+  min-height: 28px;
+  padding: 0 11px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.lane-none {
+  font-size: 12.5px;
+}
+.lane-launch {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+}
+/* the selected chip's detail strip, under its lane */
+.lane-strip {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 5px 8px 5px 12px;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1.5px var(--live);
+  font-size: 12px;
+  min-width: 0;
+}
+.lane-strip > span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.lane-det {
+  background: var(--mat-fill-2);
+  padding: 1px 7px;
+  border-radius: var(--radius-chip);
+}
+/* ⋯ menus */
+.lane-menu {
+  position: relative;
+  display: inline-flex;
+}
+.lane-kebab {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+}
+.lane-kebab:hover,
+.lane-kebab[aria-expanded="true"] {
+  background: var(--mat-fill);
+  color: var(--ink);
+}
+/* a ⋯ menu: a portal in <body>, fixed where menuPosition puts it — the open menu is the one thing in use, so
+   it is over every page layer, the card peek (1000: a hover preview the pointer may raise on its way) included */
+.lane-pop {
+  position: fixed;
+  z-index: 1001;
+  min-width: 236px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  background: var(--panel);
+  border-radius: 12px;
+  box-shadow: var(--menu-shadow);
+  padding: 5px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+}
+.lane-pop-head,
+.lane-pop-note {
+  padding: 6px 9px 4px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+.lane-pop-head {
+  font-family: var(--mono);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 3px;
+}
+.lane-mi {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  text-decoration: none;
+}
+.lane-mi:hover,
+.lane-mi:focus {
+  background: var(--mat-fill-2);
+}
+/* a menu item's keyboard focus ring, by the menu's own class (the menu is not under .lanes): inset, so the menu's
+   scroll box never clips it; --live is ≥ 3:1 on the menu's --panel in both skins */
+.lane-pop [role="menuitem"]:focus-visible {
+  outline: 2px solid var(--live);
+  outline-offset: -2px;
+}
+.lane-mi[aria-disabled="true"] {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+.lane-mi .ic {
+  width: 16px;
+  text-align: center;
+  color: var(--ink-faint);
+}
+.lane-mi.bad,
+.lane-mi.bad .ic {
+  color: var(--bad);
+}
+.lane-mi.bad {
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 7px 7px;
+  margin-top: 3px;
 }
 @media (max-width: 720px) {
-  /* phone: each row is its own grid — name · age · Stop, the links on a line under the name */
-  .sessions-grid {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
+  /* phone: the lane's label above its chips; every chip a full row */
+  .lane {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
   }
-  .sessions-row {
-    display: grid;
-    grid-template-columns: 30px minmax(0, 1fr) 3em max-content;
-    grid-template-areas: "face name age stop" ". links links links";
-    column-gap: 10px;
-    row-gap: 6px;
-    align-items: center;
+  .lane-label {
+    padding-top: 0;
   }
-  .sessions-row > .sessions-face {
-    grid-area: face;
+  .lane-work,
+  .lane-need {
+    flex-basis: 100%;
+    max-width: none;
   }
-  .sessions-row > .sessions-name {
-    grid-area: name;
-  }
-  .sessions-row > .sessions-age {
-    grid-area: age;
-  }
-  .sessions-row > .stop-btn {
-    grid-area: stop;
-  }
-  .sessions-row > .sessions-links {
-    grid-area: links;
+  .need-foot {
     flex-wrap: wrap;
   }
-  .sessions-type {
-    display: none;
+  .lane-launch {
+    margin-left: 0;
+    flex-basis: 100%;
+    justify-content: flex-start;
   }
+  .lane-pop {
+    min-width: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lane-st.live i {
+    animation: none;
+  }
+}
+/* the last snapshot (liveIssue "old"): dimmed, no pulse — nothing on it is presented as live */
+.lanes.stale .lane-body > :not(.lane-launch) {
+  opacity: 0.55;
+}
+.lanes.stale .lane-st.live i {
+  animation: none;
+  box-shadow: none;
 }
 .launchbar code,
 .flash code {
@@ -898,4 +1270,75 @@ table.jobs td.log {
   .twisty::before {
     transition: none;
   }
+}
+/* the answer cards stretch to one height per row; their footer wraps: the card first, the answers right */
+.lane.you .lane-body {
+  align-items: stretch;
+}
+.need-foot {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.need-foot > .lane-card {
+  flex: 0 1 auto;
+  min-width: min(14em, 100%);
+}
+.need-foot > .spacer {
+  flex: 1 0 0;
+}
+.need-opts {
+  margin-left: auto;
+}
+.lane-work .lane-main {
+  max-width: 100%;
+}
+.need-opts .btn {
+  text-align: left;
+}
+/* each Working chip / Quiet pill carries its own ⋯ (the strip only informs); a long phase ("tool ·
+   kanban_comment") is cut with an ellipsis inside its chip, never drawn over the next one */
+.lane-work-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.lane-work-head .lane-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.lane-work-head .lane-kebab,
+.lane-quiet .lane-kebab {
+  width: 24px;
+  height: 22px;
+  flex: none;
+}
+.lane-quiet {
+  padding-right: 3px;
+}
+.lane-st {
+  min-width: 0;
+}
+/* the phase word is never cut — the chip gives up the tool's name first, then the session name */
+.lane-st-w {
+  flex: none;
+}
+.lane-st-tool {
+  min-width: 0;
+  flex: 0 1000 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lane-work .lane-name {
+  flex: 0 1 auto;
+  min-width: 4ch;
+}
+.lane-work .lane-st {
+  flex: 0 100 auto;
+  overflow: hidden;
+}
+.lane-work .lane-main > .lane-face {
+  flex: none;
 }
