@@ -22,6 +22,7 @@ module Busyyaks
     get "/api/icons/*slug", to: "api.icons"
     get "/api/projects", to: "api.projects.index"
     get "/api/projects/*slug/board/rev", to: "api.board.rev"   # live updates: poll, refetch on change
+    get "/api/projects/*slug/board/presence", to: "api.board.presence" # who works on each card now: the faces
     get "/api/projects/*slug/board", to: "api.board.show"      # kanban JSON API (docs/API-kanban.md)
     post "/api/projects/*slug/board", to: "api.board.create"
     post "/api/projects/*slug/labels", to: "api.labels.create"

@@ -1,7 +1,11 @@
 // A project's live tmux sessions: one aligned grid under the Launch bar — state dot · session name (click
 // to copy `tmux attach`) · agent type + launcher when the engine registered it (blank for a hand-started session, never
 // guessed) · age · Claude ↗ / iTerm ⧉ / Terminal ↗ · Stop. Header: count + Stop all.
-import type { LaunchesData, TmuxSession } from "../types";
+// Each session wears its agent's face (two eyes): coloured by the registered type, its mood the Agents sidebar's live
+// state of that session (the same /api/agents read, shared) — a session nobody registered gets a still, typeless face.
+import type { AgentSession, AgentsData, LaunchesData, TmuxSession } from "../types";
+import { useResource } from "../api";
+import { moodOf, AgentFace } from "../vendor/agents_kanban";
 import { ago, at } from "../lib/format";
 import { ClaudeLink, CopyChip, ItermCopy, TerminalLink } from "./Copy";
 import { StopButton } from "./StopSessions";
@@ -15,6 +19,11 @@ type Props = {
 
 export function Sessions({ sessions, launches, busy, stop }: Props) {
   const reg = new Map((launches.concurrency?.sessions ?? []).map((r) => [r.session, r]));
+  // the Agents sidebar's read (Layout mounts it on every page) keeps this key fresh every 10 s: no poll of its own here
+  const { data: agents } = useResource<AgentsData>("/api/agents");
+  const live = new Map<string, AgentSession>(
+    (agents?.groups ?? []).flatMap((g) => g.sessions.map((a) => [a.name, a] as [string, AgentSession])),
+  );
   return (
     <div className="sessions">
       <div className="sessions-head">
@@ -40,9 +49,20 @@ export function Sessions({ sessions, launches, busy, stop }: Props) {
         <div className="sessions-grid" role="list">
           {sessions.map((s) => {
             const r = reg.get(s.name);
+            const a = live.get(s.name);
             return (
               <div key={s.name} className="sessions-row" role="listitem">
-                <span className={`dot ${s.attached ? "ok" : ""}`} title={s.attached ? "attached" : "detached"} />
+                <span
+                  className={`sessions-face${s.attached ? " attached" : ""}`}
+                  title={s.attached ? "attached" : "detached"}
+                >
+                  <AgentFace
+                    name={r?.agent ?? s.name}
+                    type={r?.type ?? null}
+                    mood={a ? moodOf({ state: a.state, phase: a.phase }) : null}
+                    size={26}
+                  />
+                </span>
                 <CopyChip
                   text={`tmux attach -t ${s.name}`}
                   className="sessions-name"

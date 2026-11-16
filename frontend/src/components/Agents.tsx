@@ -17,6 +17,7 @@ import { YakLoader } from "./YakLoader";
 import { useEffect, useState, type SyntheticEvent } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, apiPost, invalidate, useResource } from "../api";
+import { moodOf, AgentFace } from "../vendor/agents_kanban";
 import { fold, groupKey, type Filter } from "../lib/agentFold";
 import { ago, projectPath } from "../lib/format";
 import * as store from "../lib/store";
@@ -213,7 +214,15 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
                       <summary
                         title={`${LABEL[s.state]}${s.unread ? " · unread" : ""}${s.state_by ? ` — ${s.state_by}` : ""}`}
                       >
-                        <i className="ag-dot" />
+                        <span className="ag-face">
+                          <AgentFace
+                            name={s.agent ?? s.name}
+                            type={s.agent_type}
+                            mood={moodOf({ state: s.state, phase: s.phase })}
+                            size={28}
+                          />
+                          <i className="ag-dot" />
+                        </span>
                         <span className="ag-main">
                           <span className="ag-name">
                             {s.name}

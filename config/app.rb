@@ -19,7 +19,11 @@ module Busyyaks
     # (Busyyaks::Auth::CSP_BASE: 'self', and GitHub's avatar CDN for the /github feed's avatars).
     Busyyaks::Auth.setup!(Busyyaks::Auth.build(Busyyaks::Config.load.auth, root: File.expand_path("..", __dir__)))
       .banner&.then { |b| warn(b) } # provider none: AUTH DISABLED, in every process's log at every boot
-    Busyyaks::Auth.csp_sources.each { |k, v| config.actions.content_security_policy[k] = v }
+    # + the origin of config/kanban.yml `avatar_url` (a person's picture) in img-src, when it is set
+    avatar = Busyyaks::Kanban.avatar_origin
+    extra = Busyyaks::Auth.provider.csp
+    extra = extra.merge(img_src: Array(extra[:img_src]) + [avatar]) if avatar
+    Busyyaks::Auth.csp_sources(extra).each { |k, v| config.actions.content_security_policy[k] = v }
 
     # A malformed JSON body (Hanami's body parser, before any action) is the client's fault: 400, not 500.
     config.render_error_responses["Hanami::Middleware::BodyParser::BodyParsingError"] = :bad_request

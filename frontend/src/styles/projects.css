@@ -48,7 +48,7 @@
 }
 .sessions-grid {
   display: grid;
-  grid-template-columns: 10px minmax(0, max-content) minmax(0, 1fr) 3.5em max-content max-content;
+  grid-template-columns: 30px minmax(0, max-content) minmax(0, 1fr) 3.5em max-content max-content;
   column-gap: 12px;
   row-gap: 4px;
   align-items: center;
@@ -58,6 +58,17 @@
 }
 .sessions-row > * {
   min-width: 0;
+}
+/* the session's face; attached = a ring in the ok colour, as the dot it replaces was */
+.sessions-face {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+.sessions-face.attached {
+  box-shadow: 0 0 0 2px var(--ok);
 }
 .sessions .sessions-name code {
   max-width: 100%;
@@ -94,14 +105,14 @@
   }
   .sessions-row {
     display: grid;
-    grid-template-columns: 10px minmax(0, 1fr) 3em max-content;
-    grid-template-areas: "dot name age stop" ". links links links";
+    grid-template-columns: 30px minmax(0, 1fr) 3em max-content;
+    grid-template-areas: "face name age stop" ". links links links";
     column-gap: 10px;
     row-gap: 6px;
     align-items: center;
   }
-  .sessions-row > .dot {
-    grid-area: dot;
+  .sessions-row > .sessions-face {
+    grid-area: face;
   }
   .sessions-row > .sessions-name {
     grid-area: name;

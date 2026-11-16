@@ -191,6 +191,10 @@ export type AgentSession = {
   state_by: string | null;
   unread: boolean;
   cards_known: boolean;
+  // its face: the open registration's agent name + type (null = not registered), the live phase = its mood
+  agent: string | null;
+  agent_type: string | null;
+  phase: "thinking" | "tool" | "writing" | "subagents" | null;
   cards: AgentCard[];
   cards_finished: number;
   turn_ended_at: number | null;

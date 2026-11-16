@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 require "busyyaks/kanban"
 
 # config/kanban.yml and the vendored engine ship together: a value the engine refuses (e.g. max 0 where it wants "integer >= 1")
@@ -13,6 +14,20 @@ class KanbanConfigTest < Minitest::Test
     assert_equal %w[queued working review gate], cfg.agent_type("worker").spawns_for
     assert_equal 24, cfg.flags.reminder_hours
     assert_equal [3, "unresolved", "red", %w[local_agent_review public_agent_review]], cfg.review_loop.to_a
+    # subagent roles' colours, a person's picture, and every agent type + role a colour of its own
+    assert_equal({ "reviewer" => ["reviewer-*"], "qa" => ["qa-*"] }, cfg.face_roles)
+    colours = (cfg.agent_type_keys + cfg.face_roles.keys).map { |t| cfg.theme.fetch("--ak-face-type-#{t}") }
+    assert_equal colours.uniq, colours, "two agent types / roles share a face colour"
+  end
+
+  # the CSP's one image host for a person's picture: the origin of avatar_url, nil when it is null
+  def test_avatar_origin_is_the_avatar_url_host_or_nil
+    assert_equal "https://gravatar.com", Busyyaks::Kanban.avatar_origin
+    file = Busyyaks::Kanban.file_config
+    Busyyaks::Kanban.stub(:file_config, file.merge("avatar_url" => nil)) { assert_nil Busyyaks::Kanban.avatar_origin }
+    Busyyaks::Kanban.stub(:file_config, file.merge("avatar_url" => "https://pics.test:8443/a/{sha256}")) do
+      assert_equal "https://pics.test:8443", Busyyaks::Kanban.avatar_origin
+    end
   end
 end
 

@@ -130,7 +130,7 @@
 .ag-s summary {
   list-style: none;
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-columns: 28px minmax(0, 1fr) auto; /* the face (.ag-face) · name · badges */
   gap: 8px;
   align-items: center;
   padding: 6px 6px;
@@ -150,6 +150,21 @@
   background: var(--line-strong);
   display: inline-block;
   flex: none;
+}
+/* the session's face (type colour, live mood); the state dot sits on its corner as a badge */
+.ag-face {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+.ag-face > .ag-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  outline: 2px solid var(--panel);
 }
 .st-working > summary .ag-dot,
 .ag-list .st-busy .ag-dot {

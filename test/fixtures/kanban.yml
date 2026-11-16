@@ -59,6 +59,13 @@ theme:
   --ak-shadow-card: var(--shadow-card)
   --ak-shadow-thumb: var(--shadow-thumb)
   --ak-menu-shadow: var(--menu-shadow)
+  # agent faces: one colour per agent type, and per subagent role (face_roles below) — distinct skin hues
+  --ak-face-type-lead: var(--vivid-blue)
+  --ak-face-type-worker: var(--vivid-purple)
+  --ak-face-type-team: var(--vivid-green)
+  --ak-face-type-plain: var(--vivid-orange)
+  --ak-face-type-reviewer: var(--vivid-pink)
+  --ak-face-type-qa: var(--vivid-teal)
 # CI idle watch (engine: Store#idle_watch_pass; PR checks come from the github service through lib/busyyaks/ci_checks.rb)
 # on every board's WORKING column (In progress). A card whose PR's checks all finished and whose owner did nothing for
 # 10 min is pinged once ("CI on PR #N finished (<state>) — hand off or fix"); 20 min after that ping, still silent, the
@@ -99,3 +106,10 @@ flags: { reminder_hours: 24 }
 # carries the label `unresolved` (red). The operator's Changes requested allows exactly one more round.
 review_loop: { max_rounds: 3, unresolved_label: unresolved, unresolved_color: red,
                columns: [local_agent_review, public_agent_review] }
+# agent faces: a subagent comments under its own name ("reviewer-<agent>", "qa-<agent>"), which no session
+# registers — a name matching a role's glob wears that role's colour (--ak-face-type-<role> in theme above). null = off.
+face_roles: { reviewer: ["reviewer-*"], qa: ["qa-*"] }
+# a PERSON's picture: an https URL template with {sha256} of the trimmed, lower-cased email — Gravatar's scheme
+# (d=404: no picture on record → the initials). Its origin is added to the CSP's img-src at boot. null = initials only,
+# nothing leaves the page. e.g. "https://gravatar.com/avatar/{sha256}?s=80&d=404"
+avatar_url: "https://gravatar.com/avatar/{sha256}?s=80&d=404"

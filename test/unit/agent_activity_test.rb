@@ -49,8 +49,12 @@ class AgentActivityTest < Minitest::Test
     assert_equal NONE.merge(phase: "tool", elapsed_s: 65, tokens: "↓ 1.6k", tool: "Bash"), a
     a = read("● busyyaks - kanban_comment (MCP)(id: 459, body: \"[Author Agent] · …\")\n  ⎿  Running…\n\n· Writing… (3s)")
     assert_equal NONE.merge(phase: "tool", elapsed_s: 3, tool: "busyyaks · kanban_comment", card: 459), a
+    # every kanban tool names the card its `id:` acts on (a lead reading a card is on it); other ids are not cards
     other = read("● busyyaks - kanban_card (MCP)(id: 12)\n  ⎿  Running…\n\n· Reading… (3s)")
-    assert_equal ["busyyaks · kanban_card", nil], other.values_at(:tool, :card)
+    assert_equal ["busyyaks · kanban_card", 12], other.values_at(:tool, :card)
+    edit = read("● busyyaks - kanban_comment_edit (MCP)(comment_id: 77, body: \"x\")\n  ⎿  Running…\n\n· Editing… (3s)")
+    assert_nil edit[:card]
+    assert_nil read("● Bash(echo id: 5)\n  ⎿  Running…\n\n· Running… (3s)")[:card], "only kanban tools name a card"
     assert_nil read("● Bash(ls)\n  ⎿  Running…\n\n✻ Pondering… (12s · ↑ 340 tokens · thinking)")[:tool] # thinks, no call
   end
 
