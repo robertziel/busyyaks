@@ -8,17 +8,34 @@ function hue(s: string): number {
   return h;
 }
 
+// the placeholder's initials: the first letter of the slug's last part's first `letters` words ("?" for none)
+export function monogram(slug: string, letters = 2): string {
+  const name = slug.split("/").pop() || slug;
+  return (
+    name
+      .replace(/[^A-Za-z0-9]+/g, " ")
+      .trim()
+      .split(" ")
+      .slice(0, letters)
+      .map((w) => w[0])
+      .join("")
+      .toUpperCase() || "?"
+  );
+}
+
+// letters: how many initials a monogram shows (1 where avatars overlap, e.g. the waiting widget's stack)
 export function ProjectIcon({
   slug,
   icon,
   size = 18,
+  letters = 2,
 }: {
   slug: string;
   icon: string | null | undefined;
   size?: number;
+  letters?: number;
 }) {
   const [broken, setBroken] = useState(false);
-  const name = slug.split("/").pop() || slug;
   const style = { width: size, height: size, borderRadius: Math.round(size * 0.24) };
   if (icon && !broken) {
     return (
@@ -35,15 +52,7 @@ export function ProjectIcon({
       />
     );
   }
-  const initials =
-    name
-      .replace(/[^A-Za-z0-9]+/g, " ")
-      .trim()
-      .split(" ")
-      .slice(0, 2)
-      .map((w) => w[0])
-      .join("")
-      .toUpperCase() || "?";
+  const initials = monogram(slug, letters);
   return (
     <span
       className="picon mono"

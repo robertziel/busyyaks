@@ -13,7 +13,9 @@ module Busyyaks
         # busyyaks adds each project's icon, each card's kind: "ask" = flagged needs_operator (a question, in
         # whatever column), "review" = in a gate column (work to check / a PR to merge), else the column's own key — and
         # its owner_session (null = none), which the widget matches against /api/agents to show whether that agent is
-        # running / blocked.
+        # running / blocked. `held` (a gate card CI holds) and `external` (blocked_external) get the same icon and
+        # owner_session, kind "held" / "external": the widget's third segment, never counted as waiting for you;
+        # a held card's `since` is its hand-off time (the engine dates only flags and moves; none → null).
         class Index < Busyyaks::Action
           include KanbanAPI
 
@@ -27,12 +29,23 @@ module Busyyaks
 
           def self.enrich(body, projects, waiting)
             icons = projects.to_h { |p| [p[:slug], Busyyaks::API.icon_url(p)] }
-            owners = waiting.by_slug.values.flatten.to_h { |c| [c[:id], c[:owner_session]] }
+            raw = [waiting.by_slug, waiting.held, waiting.external].flat_map { |h| h.values.flatten }.to_h { |c| [c[:id], c] }
+            owners = raw.transform_values { |c| c[:owner_session] }
+            handoffs = raw.transform_values { |c| AgentsKanban::Store.iso(c[:handoff_at]) }
             body.merge(projects: body[:projects].map do |g|
               b = waiting.boards.fetch(g[:slug])
               cards = g[:cards].map { |c| c.merge(kind: kind(c, b), owner_session: owners[c[:id]]) }
               g.merge(icon: icons[g[:slug]], cards: cards)
-            end)
+            end,
+                       held: aside(body[:held], "held", icons, owners) { |c| { since: handoffs[c[:id]] } },
+                       external: aside(body[:external], "external", icons, owners) { {} })
+          end
+
+          def self.aside(groups, kind, icons, owners)
+            groups.map do |g|
+              cards = g[:cards].map { |c| c.merge(kind: kind, owner_session: owners[c[:id]], **yield(c)) }
+              g.merge(icon: icons[g[:slug]], cards: cards)
+            end
           end
 
           def self.kind(card, board)

@@ -311,12 +311,13 @@ YML
 frontend_suite() {
   require_pin || return 1
   # read-only source, frontend/ copied in without node_modules: npm ci never touches the checkout. public/static beside
-  # it, as in the checkout: a test runs public/static/skin.js (the skin choice, outside the bundle). Prettier reads the
+  # it, as in the checkout: a test runs public/static/skin.js (the skin choice, outside the bundle); skins/ too: the
+  # waiting widget's contrast test reads the skin tokens. Prettier reads the
   # whole repo in place (read-only; it never writes with --check) with the copy's node_modules: the same files and glob
   # as `npm run format:check`, .gitignore + .prettierignore applied (Prettier's default ignore files, read from /repo)
   docker run --rm --cpus "$CI_RUNNER_CPUS" -e "CI_RUNNER_CPUS=$CI_RUNNER_CPUS" -v "$HOST_SRC:/repo:ro" "$NODE_IMAGE" sh -euc '
     mkdir -p /w/frontend /w/public && cd /repo/frontend && tar cf - --exclude=./node_modules . | tar xf - -C /w/frontend
-    cp -r /repo/public/static /w/public/static && cd /w/frontend
+    cp -r /repo/public/static /w/public/static && cp -r /repo/skins /w/skins && cd /w/frontend
     npm ci --no-audit --no-fund
     npx tsc --noEmit
     npm run lint
