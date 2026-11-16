@@ -129,6 +129,8 @@ module Busyyaks
     # bin/daily-report's placeholders ("<series> FAILED", "<series> NOT RUN — …"): never a previous report.
     NOT_A_REPORT = /\b(FAILED|NOT RUN|NOT CONFIGURED)\b/
     CHURN_PATHS_MAX = 15
+    # MCP_TOKEN and MCP_REPORT_TOKEN: shorter → the server refuses to boot (bin/setup check refuses the same)
+    MIN_TOKEN_CHARS = 32
 
     # sessions: -> live tmux session names for kanban_claim (nil = the host launcher's `sessions` op).
     # scan_interval: .env SCAN_INTERVAL_SECONDS (the scanner's value): last_scan is `stale` when it finished longer ago
@@ -136,8 +138,12 @@ module Busyyaks
     # a negative duration (ScanFreshness)
     def initialize(token:, report_token:, scan_interval:, store: nil, config: nil, clock: -> {
  Busyyaks::Clock.now }, sessions: nil)
-      raise KeyError, "MCP_TOKEN is empty" if token.to_s.length < 32
-      raise KeyError, "MCP_REPORT_TOKEN must be at least 32 characters" if report_token.to_s.length < 32
+      { "MCP_TOKEN" => token, "MCP_REPORT_TOKEN" => report_token }.each do |key, value|
+        next if value.to_s.length >= MIN_TOKEN_CHARS
+
+        raise KeyError, "#{key} is #{value.to_s.length} characters; at least #{MIN_TOKEN_CHARS}: " \
+                        "empty it in .env and run bin/setup (it writes a new one)"
+      end
       raise KeyError, "MCP_REPORT_TOKEN must differ from MCP_TOKEN" if report_token == token
 
       unless scan_interval.is_a?(Integer) && scan_interval.positive?

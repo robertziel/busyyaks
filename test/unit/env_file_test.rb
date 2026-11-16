@@ -42,8 +42,9 @@ class EnvFileTest < Minitest::Test
 
   def test_the_examples_and_the_compose_file_agree
     env = E.read(File.join(ROOT, ".env.example"))
-    compose = File.readlines(File.join(ROOT, "docker-compose.yml")).reject { |l| l.lstrip.start_with?("#") }.join
-    compose.scan(/\$\{([A-Z0-9_]+):\?\}/).flatten.uniq.each do |k|
+    required = E.compose_required(File.read(File.join(ROOT, "docker-compose.yml")))
+    assert_includes required, "PROJECTS_ROOT"
+    required.each do |k|
       assert env.key?(k), "#{k}: compose needs it, .env.example lacks it"
     end
   end

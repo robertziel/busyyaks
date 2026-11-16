@@ -28,6 +28,7 @@ To run the app itself, follow the [Quickstart](README.md#quickstart).
 # what CI runs: lint · ruby · ruby-pg · frontend · flake · audit · secrets · host, at once
 CI_BASE_REF=origin/main CI_GITHUB_READ_TOKEN=$(gh auth token) CI_GITHUB_CACHE_DIR=~/.cache/busyyaks-ci scripts/ci/test.sh all
 scripts/ci/test.sh ruby      # one stage: lint | ruby | ruby-pg | frontend | flake | audit | secrets | host
+scripts/ci/test.sh lint frontend  # several: one after the other, each runs; fails naming the red ones (a typo: exit 2)
 scripts/lint/rubocop -a      # RuboCop autocorrect
 ```
 

@@ -82,6 +82,12 @@ module Busyyaks
       ok ? value : raise(Invalid, "#{key} must be #{what} (got #{value.inspect})")
     end
 
+    # The keys docker-compose.yml requires non-empty: every `${KEY:?}` outside a comment line, sorted (what compose
+    # refuses to interpolate empty; bin/setup reads the same list with grep — test/unit/setup_test.rb holds them equal).
+    def compose_required(text)
+      text.each_line.reject { |l| l.lstrip.start_with?("#") }.join.scan(/\$\{([A-Z0-9_]+):\?/).flatten.uniq.sort
+    end
+
     # `export KEY='value'` lines for `eval` in a shell script (bin/env), each value single-quoted.
     def shell_exports(env, keys)
       missing = keys.reject { |k| env.key?(k) && !env[k].empty? }

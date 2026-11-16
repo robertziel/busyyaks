@@ -72,14 +72,22 @@ class CliTest < Minitest::Test
     MCP_HOST_PORT=8081
     MCP_TOKEN=secret-token
     LAUNCHER_RUN_DIR=%<run>s
+    HOST_UID=%<uid>d
+    HOST_GID=%<gid>d
+    PROJECTS_ROOT=%<projects>s
   ENV
 
+  # a checkout through its first start: what bin/setup + bin/setup check leave (doctor's first-start rows all ok)
   def setup
-    @home = Dir.mktmpdir("yaks-home")
+    @home = File.realpath(Dir.mktmpdir("yaks-home"))
     @run = File.join(@home, "run")
-    FileUtils.mkdir_p([@run, File.join(@home, "config")])
-    File.write(File.join(@home, ".env"), format(ENV_FILE, run: @run))
+    @projects = File.join(@home, "projects")
+    FileUtils.mkdir_p([@run, @projects, File.join(@home, "config"), File.join(@home, "data")])
+    File.chmod(0o700, @run)
+    write_env
     File.write(File.join(@home, "config/busyyaks.yml"), "roots: []\n")
+    File.write(File.join(@home, "config/kanban.yml"), "{}\n")
+    File.write(File.join(@home, "docker-compose.yml"), "# ${IN_A_COMMENT:?}\nx: ${WEB_HOST_PORT:?} ${PROJECTS_ROOT:?}\n")
     @runner = FakeRunner.new
     @http = FakeHttp.new({ "/up" => [200, "ok"], "/mcp" => [200, JSON.generate(result: { tools: [{}, {}, {}] })] })
   end
@@ -87,6 +95,10 @@ class CliTest < Minitest::Test
   def teardown
     FileUtils.rm_rf(@home)
   end
+
+  def env_text(**over) = format(ENV_FILE, { run: @run, uid: Process.uid, gid: Process.gid, projects: @projects }.merge(over))
+
+  def write_env(**over) = File.write(File.join(@home, ".env"), env_text(**over))
 
   def yaks(*argv, os: "Linux", ruby: "3.4.1", env: { "PATH" => "/usr/bin", "DISPLAY" => ":0" })
     out = StringIO.new
@@ -170,7 +182,7 @@ class CliTest < Minitest::Test
   end
 
   def test_panel_print_uses_the_public_host
-    File.write(File.join(@home, ".env"), format(ENV_FILE, run: @run).sub("PUBLIC_HOST=", "PUBLIC_HOST=dash.example.com"))
+    File.write(File.join(@home, ".env"), env_text.sub("PUBLIC_HOST=", "PUBLIC_HOST=dash.example.com"))
     code, out, = yaks("panel", "--print")
     assert_equal 0, code
     assert_equal "https://dash.example.com\n", out
@@ -182,7 +194,7 @@ class CliTest < Minitest::Test
     code, _, err = yaks("panel")
     assert_equal 1, code
     assert_includes err, "xdg-open failed to open http://127.0.0.1:8080"
-    File.write(File.join(@home, ".env"), format(ENV_FILE, run: @run).sub("WEB_HOST_PORT=8080", "WEB_HOST_PORT=0"))
+    File.write(File.join(@home, ".env"), env_text.sub("WEB_HOST_PORT=8080", "WEB_HOST_PORT=0"))
     code, _, err = yaks("panel", "--print")
     assert_equal 1, code
     assert_includes err, 'WEB_HOST_PORT="0" is not a port'
@@ -459,13 +471,13 @@ class CliTest < Minitest::Test
   # a port that is not one, or an MCP_HOST off loopback (the bearer would leave the box): refused before any request
   def test_server_status_refuses_malformed_ports_and_a_non_loopback_mcp_host
     { "WEB_HOST_PORT=8080" => "WEB_HOST_PORT=abc", "MCP_HOST_PORT=8081" => "MCP_HOST_PORT=99999" }.each do |from, to|
-      File.write(File.join(@home, ".env"), format(ENV_FILE, run: @run).sub(from, to))
+      File.write(File.join(@home, ".env"), env_text.sub(from, to))
       code, out, err = yaks("server", "status")
       assert_equal [1, ""], [code, out], to
       key, value = to.split("=")
       assert_includes err, "yaks: .env: #{key} must be a port number 1-65535 (got #{value.inspect})"
     end
-    File.write(File.join(@home, ".env"), format(ENV_FILE, run: @run).sub("MCP_HOST=127.0.0.1", "MCP_HOST=10.0.0.5"))
+    File.write(File.join(@home, ".env"), env_text.sub("MCP_HOST=127.0.0.1", "MCP_HOST=10.0.0.5"))
     code, _, err = yaks("server", "status")
     assert_equal 1, code
     assert_includes err, "yaks: .env: MCP_HOST must be an IPv4 loopback address"
@@ -489,6 +501,40 @@ class CliTest < Minitest::Test
     assert_match(/^ok    ruby\s+3.4.1 \(>= #{CLI::MIN_RUBY}\)/, out)
     refute_match(/^\S+\s+jq\s/, out, "no daily_report_runners: its tools are not asked")
     assert_match(%r{^ok    graphical session\s+DISPLAY / WAYLAND_DISPLAY set\s+yaks panel$}, out)
+    assert_match(/^ok    \.env\s+the 2 keys compose requires set\s+the first start \(bin\/setup check\)$/, out)
+    assert_match(%r{^ok    config/kanban.yml\s+present\s}, out)
+    assert_match(/^ok    HOST_UID:HOST_GID\s+#{Process.uid}:#{Process.gid} \(you\)\s/, out)
+    assert_match(/^ok    PROJECTS_ROOT\s+#{Regexp.escape(@projects)}\s/, out)
+    assert_match(%r{^ok    \./data\s+#{Regexp.escape(@home)}/data\s}, out)
+    assert_match(/^ok    LAUNCHER_RUN_DIR\s+#{Regexp.escape(@run)}\s/, out)
+  end
+
+  # every first-start check bin/setup check makes is a doctor row naming what is wrong
+  def test_doctor_names_each_first_start_problem
+    @runner = FakeRunner.new(answers: { %w[docker compose version] => ["2.32.4\n", true] })
+    File.write(File.join(@home, "docker-compose.yml"), "x: ${WEB_HOST_PORT:?} ${GITHUB_TOKEN:?} ${LAUNCHER_RUN_DIR:?}\n")
+    File.symlink(@projects, link = File.join(@home, "projects-link"))
+    write_env(uid: Process.uid + 1, projects: link)
+    File.chmod(0o755, @run)
+    FileUtils.rm_rf(File.join(@home, "data"))
+    File.delete(File.join(@home, "config/kanban.yml"))
+    code, out, = yaks("doctor")
+    assert_equal 1, code
+    assert_match(/^FAIL  \.env\s+empty: GITHUB_TOKEN\s/, out)
+    assert_match(%r{^FAIL  config/kanban.yml\s+missing: bin/setup\s}, out)
+    assert_match(/^FAIL  HOST_UID:HOST_GID\s+#{Process.uid + 1}:#{Process.gid}, you are #{Process.uid}:#{Process.gid}\s/, out)
+    assert_match(/^FAIL  PROJECTS_ROOT\s+#{Regexp.escape(link)} is not its real path: write #{Regexp.escape(@projects)}\s/, out)
+    assert_match(%r{^FAIL  \./data\s+#{Regexp.escape(@home)}/data: missing \(bin/setup check creates it\)\s}, out)
+    owned = "#{Regexp.escape(@run)} is owned by uid #{Process.uid}, not HOST_UID #{Process.uid + 1}"
+    assert_match(/^FAIL  LAUNCHER_RUN_DIR\s+#{owned}\s/, out)
+    write_env
+    _, out, = yaks("doctor")
+    assert_match(/^FAIL  LAUNCHER_RUN_DIR\s+#{Regexp.escape(@run)} has mode 755, not 700\s/, out)
+    File.delete(File.join(@home, ".env"))
+    code, out, = yaks("doctor")
+    assert_equal 1, code
+    assert_match(%r{^FAIL  \.env\s+no \.env at #{Regexp.escape(@home)}/\.env: bin/setup\s}, out)
+    refute_match(/^\S+\s+PROJECTS_ROOT\s/, out, "no .env: the rows that read it are not asked")
   end
 
   # yaks panel's needs are optional: a server without a desktop passes doctor

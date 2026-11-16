@@ -141,6 +141,7 @@ $EDITOR config/busyyaks.yml                       # owner_remotes: host/owner pr
                                                   # come up; missing → the launcher refuses to start)
 deploy/install-launcher.sh                        # creates both dirs (0700), restarts the launcher on the new socket
 docker build -t busyyaks:local . && docker compose up -d --no-build web mcp notifier scanner github   # new mounts + env
+# ("dependency failed to start": web was not healthy in time — a long migration; run the same `up` again once /up answers)
 deploy/install-daily-timer.sh                     # the timer, checked with the new token
 rm -rf data/run                                   # the old socket dir: nothing reads it any more
 ```
@@ -302,7 +303,10 @@ table (`test/unit/db_copy_test.rb`).
    target, a missing file), or migrated with only the migrations' own rows (a schema-version refusal, a value that does not fit its column, a difference).
    The copy only runs into a database without tables: fix, then drop and recreate the target database (or stop
    postgres and empty `data/postgres`) before running it again.
-6. Start: `docker compose up -d --no-build web mcp scanner github notifier`.
+6. Start: `docker compose up -d --no-build web mcp scanner github notifier`. mcp, scanner, github and notifier wait for web to be healthy
+   (it migrates first). If web is not healthy within its `start_period` (120 s) and 3 more checks — a long
+   migration —, `up` exits `dependency failed to start` and leaves those four Created, not started (a restart policy
+   never starts a container that never ran): once `/up` answers, run the same `up` again.
 7. Check: `/up` 200; the board shows the cards; MCP `tools/list`; a new card gets the next id;
    `docker compose logs --since 5m web mcp scanner github notifier | grep -i error` empty.
 8. Rollback: `.env` `DATABASE_ADAPTER=sqlite` (and `COMPOSE_PROFILES=` empty), `docker compose up -d --no-build web

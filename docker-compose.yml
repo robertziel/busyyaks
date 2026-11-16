@@ -22,6 +22,10 @@ x-app: &app
   user: "${HOST_UID:?}:${HOST_GID:?}"
   restart: unless-stopped
   logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+  # healthy = PID 1 up 15 s without a restart (bin/healthcheck): a service that crash-loops at boot never is, so
+  # `up --wait` fails on it instead of returning 0. web and mcp override it with an HTTP check.
+  healthcheck: { test: ["CMD", "bin/healthcheck", "15"], interval: 30s, timeout: 5s, retries: 3,
+                 start_period: 60s, start_interval: 2s }
   environment: &env
     HANAMI_ENV: production
     HOME: /tmp   # the host user has no home in the image; bundler wants a writable one
@@ -127,7 +131,8 @@ services:
     ports: ["127.0.0.1:${WEB_HOST_PORT:?}:${WEB_CONTAINER_PORT:?}"]
     depends_on:
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
-    healthcheck: { test: ["CMD", "ruby", "-rnet/http", "-e", "exit Net::HTTP.start(\"127.0.0.1\", ENV.fetch('HANAMI_PORT')) { |h| h.get(\"/up\", \"Host\" => \"127.0.0.1:#{ENV.fetch('WEB_HOST_PORT')}\") }.code == '200'"], interval: 30s, timeout: 5s, retries: 3 }
+    healthcheck: { test: ["CMD", "ruby", "-rnet/http", "-e", "exit Net::HTTP.start(\"127.0.0.1\", ENV.fetch('HANAMI_PORT')) { |h| h.get(\"/up\", \"Host\" => \"127.0.0.1:#{ENV.fetch('WEB_HOST_PORT')}\") }.code == '200'"], interval: 30s, timeout: 5s, retries: 3,
+                   start_period: 120s, start_interval: 2s }   # the first start (migrations): asked every 2 s, so dependants and `up --wait` go on once it answers
 
   mcp:
     <<: *app
@@ -136,8 +141,12 @@ services:
     command: ["bin/mcp"]
     environment: { <<: *env, MCP_PORT: "${MCP_CONTAINER_PORT:?}", MCP_TOKEN: "${MCP_TOKEN:?}", MCP_REPORT_TOKEN: "${MCP_REPORT_TOKEN:?}", SCAN_INTERVAL_SECONDS: "${SCAN_INTERVAL_SECONDS:?}", MCP_HOST: "${MCP_HOST:?}", LOG_LEVEL: warn, LAUNCHER_SOCKET: /launcher/launcher.sock }
     ports: ["${MCP_HOST:?}:${MCP_HOST_PORT:?}:${MCP_CONTAINER_PORT:?}"]
+    # healthy = it answers its own bearer on /mcp (a GET with MCP_TOKEN → 405, POST only): booted, the token taken — an
+    # MCP_TOKEN it refuses stops the boot, so `up --wait` fails instead of returning over a crash loop
+    healthcheck: { test: ["CMD", "ruby", "-rnet/http", "-e", "exit Net::HTTP.start('127.0.0.1', ENV.fetch('MCP_PORT')) { |h| h.get('/mcp', 'Authorization' => \"Bearer #{ENV.fetch('MCP_TOKEN')}\") }.code == '405'"], interval: 30s, timeout: 5s, retries: 3,
+                   start_period: 60s, start_interval: 2s }
     depends_on:
-      web: { condition: service_started }
+      web: { condition: service_healthy }   # web migrates the database on start: the others boot on the migrated schema
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
 
   scanner:
@@ -146,7 +155,7 @@ services:
     command: ["bin/scan"]
     environment: { <<: *env, SCAN_INTERVAL_SECONDS: "${SCAN_INTERVAL_SECONDS:?}", LOG_LEVEL: warn }
     depends_on:
-      web: { condition: service_started }
+      web: { condition: service_healthy }   # web migrates the database on start: the others boot on the migrated schema
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
 
   # GitHub network collector (bin/github): who GITHUB_LOGIN follows, their stars and follows, every
@@ -156,7 +165,7 @@ services:
     command: ["bin/github"]
     environment: { <<: *env, LOG_LEVEL: warn, GITHUB_TOKEN: "${GITHUB_TOKEN:?}", GITHUB_INTERVAL_SECONDS: "${GITHUB_INTERVAL_SECONDS:?}" }
     depends_on:
-      web: { condition: service_started }
+      web: { condition: service_healthy }   # web migrates the database on start: the others boot on the migrated schema
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
 
   notifier:
@@ -167,7 +176,7 @@ services:
     environment: { <<: *env, LOG_LEVEL: warn, LAUNCHER_SOCKET: /launcher/launcher.sock,
                    NOTIFIER_INTERVAL_SECONDS: "${NOTIFIER_INTERVAL_SECONDS:?}", NOTIFIER_WATCH_SECONDS: "${NOTIFIER_WATCH_SECONDS:?}" }
     depends_on:
-      web: { condition: service_started }
+      web: { condition: service_healthy }   # web migrates the database on start: the others boot on the migrated schema
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
 
   test:

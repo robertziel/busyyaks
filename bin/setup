@@ -1,0 +1,270 @@
+#!/bin/sh
+# The Quickstart's steps before `docker compose up` (README § Quickstart), in POSIX sh: the dashboard needs no host
+# Ruby (README § Requirements). Run from anywhere; it works on the checkout it lives in.
+#
+#   bin/setup          copies each example that is missing (.env, config/busyyaks.yml, config/kanban.yml — an existing
+#                      file is kept, never overwritten), writes the secrets that are EMPTY in .env (SESSION_SECRET 64
+#                      bytes, MCP_TOKEN and MCP_REPORT_TOKEN 32 bytes, hex from /dev/urandom; a value already there is
+#                      kept), HOST_UID / HOST_GID = this user into a .env it just copied, makes .env 0600, then lists
+#                      every key compose requires that is still empty: fill those in .env.
+#   bin/setup check    every value compose requires is set (each empty one named), HOST_UID:HOST_GID is this user,
+#                      PROJECTS_ROOT is an existing directory written as its real path, LAUNCHER_RUN_DIR is absolute,
+#                      .env is readable by you only; creates ./data and LAUNCHER_RUN_DIR (0700) as this user (and, with
+#                      COMPOSE_PROFILES=postgres, ./data/postgres + ./data/postgres-run) — compose never creates them,
+#                      and Docker would make them root's —, then `docker compose config -q` (compose's own reading).
+#                      Exit 1 naming every problem and its fix; nothing after it runs: `bin/setup check && docker compose up …`.
+#
+# The required keys are read from docker-compose.yml itself (every `${KEY:?}`): one list, the file that needs them.
+# Both refuse a .env that lib/busyyaks/env_file.rb (bin/launcher, bin/env, `yaks doctor`) would refuse: a line that is
+# not KEY=value, a key given twice, a `$`, an inline ` #` comment, an unquoted value with a space, an unclosed quote or
+# a quote inside the value, a backslash inside double quotes — so `check` never says ok for a file the launcher then
+# stops on. Values are read as plain KEY=value / KEY="value" lines.
+set -eu
+
+# the app's own minimums, refused at its boot (test/unit/setup_test.rb holds them equal to the Ruby constants)
+MIN_SESSION_SECRET_BYTES=64   # lib/busyyaks/session_cookie.rb SessionCookie::MIN_SECRET_BYTES
+MIN_MCP_TOKEN_CHARS=32        # lib/busyyaks/mcp_server.rb McpServer::MIN_TOKEN_CHARS (MCP_TOKEN and MCP_REPORT_TOKEN)
+
+dir=$(cd "$(dirname "$0")/.." && pwd -P)
+cd "$dir"
+env_file=.env
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'bin/setup: %s\n' "$*" >&2; exit 1; }
+
+# .env's value of KEY: the last KEY= line, one pair of surrounding quotes dropped; nothing → empty
+value() {
+  v=$(sed -n "s/^$1=//p" "$env_file" | tail -n 1)
+  case "$v" in
+    \"*\") v=${v#\"}; v=${v%\"} ;;
+    \'*\') v=${v#\'}; v=${v%\'} ;;
+  esac
+  printf '%s' "$v"
+}
+
+# replaces KEY's line in .env with KEY=VALUE; .env keeps its mode. The value reaches awk through its environment, never
+# its argv (a secret on a command line is readable in /proc/<pid>/cmdline by every local user)
+put() {
+  (umask 077 && SETUP_KEY=$1 SETUP_VALUE=$2 awk 'BEGIN { k = ENVIRON["SETUP_KEY"] "=" }
+    index($0, k) == 1 { print k ENVIRON["SETUP_VALUE"]; next } { print }' "$env_file" > "$env_file.tmp")
+  cat "$env_file.tmp" > "$env_file"
+  rm -f "$env_file.tmp"
+}
+
+# what EnvFile refuses, one "line N: why" per problem (nothing = the file's shape is fine)
+shape() {
+  grep -nvE '^[[:space:]]*(#|$)|^[A-Za-z_][A-Za-z0-9_]*=' "$env_file" | sed 's/^\([0-9]*\):.*/line \1: not KEY=value/' || true
+  grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$env_file" | sort | uniq -d | sed 's/=$//; s/^/a key given twice: /' || true
+  grep -nE '^[A-Za-z_][A-Za-z0-9_]*=.*[$]' "$env_file" | sed 's/^\([0-9]*\):\([^=]*\)=.*/line \1: \2 holds a dollar sign (no interpolation: write the value out)/' || true
+  grep -nE '^[A-Za-z_][A-Za-z0-9_]*=[^"'"'"'].*[[:space:]]' "$env_file" \
+    | sed 's/^\([0-9]*\):\([^=]*\)=.*/line \1: \2: an unquoted value with a space or an inline " #" comment (quote it; comments on their own line)/' || true
+  grep -nE '^[A-Za-z_][A-Za-z0-9_]*=["'"'"']' "$env_file" \
+    | grep -vE '^[0-9]+:[A-Za-z_][A-Za-z0-9_]*=("[^"'"'"']*"|'"'"'[^"'"'"']*'"'"')$' \
+    | sed 's/^\([0-9]*\):\([^=]*\)=.*/line \1: \2: an unclosed quote, a quote inside the value, or text after the closing quote/' || true
+  grep -nE '^[A-Za-z_][A-Za-z0-9_]*="[^"]*[\\]' "$env_file" \
+    | sed 's/^\([0-9]*\):\([^=]*\)=.*/line \1: \2: a backslash inside double quotes (escapes are not supported)/' || true
+}
+
+# N random bytes as hex
+secret() { od -An -v -tx1 -N "$1" /dev/urandom | tr -d ' \n'; }
+
+# every ${KEY:?} of docker-compose.yml (comment lines skipped)
+required() {
+  grep -v '^[[:space:]]*#' docker-compose.yml | grep -o '[$]{[A-Z0-9_]*:?' | sed 's/^[$]{//; s/:?$//' | sort -u
+}
+
+# the required keys that are empty (or absent) in .env, one per line
+empty_required() {
+  for k in $(required); do
+    [ -n "$(value "$k")" ] || say "$k"
+  done
+}
+
+# LauncherRules.run_dir!'s rules (lib/busyyaks/launcher_rules.rb) that hold before the dir exists, so `check` never
+# makes a dir bin/launcher then refuses: outside PROJECTS_ROOT, this checkout and ./data (and not around them); every
+# existing ancestor a real dir (no symlink), this user's or root's, not writable by group / other (a sticky /tmp too:
+# another user could create the dir first after a reboot). The rest (its parent this user's, the dir 0700) after mkdir.
+run_dir_rules() {
+  r=$1 projects=$2
+  for o in "$projects" "$dir" "$dir/data"; do
+    [ -n "$o" ] || continue
+    case "$r/" in "$o"/*) bad "LAUNCHER_RUN_DIR $r is inside $o: every container mounts it; put it outside"; continue ;; esac
+    case "$o/" in "$r"/*) bad "LAUNCHER_RUN_DIR $r holds $o: every container mounts that; put it outside" ;; esac
+  done
+  [ ! -L "$r" ] || bad "LAUNCHER_RUN_DIR $r is a symlink: write its real path"
+  a=$(dirname "$r")
+  while :; do
+    if [ -L "$a" ]; then
+      bad "LAUNCHER_RUN_DIR $r: $a is a symlink: write the real path"
+    elif [ -e "$a" ]; then
+      u=$(stat -c %u "$a") m=$(stat -c %a "$a")
+      if [ "$u" != "$(id -u)" ] && [ "$u" != 0 ]; then
+        bad "LAUNCHER_RUN_DIR $r: its parent $a is owned by uid $u, not $(id -u) or root"
+      elif [ $((0$m & 18)) -ne 0 ]; then
+        bad "LAUNCHER_RUN_DIR $r: its parent $a is writable by group / other (mode $m): pick a dir of yours, e.g. ~/.local/state/busyyaks/run"
+      fi
+    fi
+    [ "$a" != / ] || break
+    a=$(dirname "$a")
+  done
+}
+
+init() {
+  fresh=
+  for pair in .env.example:.env config/busyyaks.example.yml:config/busyyaks.yml config/kanban.example.yml:config/kanban.yml; do
+    from=${pair%%:*} to=${pair#*:}
+    if [ -e "$to" ]; then
+      say "kept     $to (already there)"
+    else
+      cp "$from" "$to"
+      say "copied   $from → $to"
+      if [ "$to" = .env ]; then
+        chmod 600 .env   # it holds the secrets
+        fresh=1
+      fi
+    fi
+  done
+  bad_shape=$(shape)
+  [ -z "$bad_shape" ] || die "$env_file: $(printf '%s' "$bad_shape" | paste -sd ';' | sed 's/;/; /g') — fix it, then run bin/setup again"
+  if [ "$(stat -c %a "$env_file")" != 600 ]; then
+    chmod 600 "$env_file"
+    say "chmod    .env 600 (it holds the secrets)"
+  fi
+  for pair in SESSION_SECRET:64 MCP_TOKEN:32 MCP_REPORT_TOKEN:32; do
+    k=${pair%%:*} n=${pair#*:}
+    grep -q "^$k=" "$env_file" || die "$env_file has no $k= line: copy it from .env.example"
+    if [ -n "$(value "$k")" ]; then
+      say "kept     $k (set)"
+    else
+      put "$k" "$(secret "$n")"
+      say "wrote    $k ($n random bytes, hex)"
+    fi
+  done
+  if [ -n "$fresh" ]; then
+    put HOST_UID "$(id -u)"
+    put HOST_GID "$(id -g)"
+    say "wrote    HOST_UID=$(id -u) HOST_GID=$(id -g) (this user: the containers run as it)"
+  fi
+  left=$(empty_required)
+  if [ -n "$left" ]; then
+    say ""
+    say "Fill in .env (each is explained above its line there), then: bin/setup check"
+    for k in $left; do say "  $k"; done
+  else
+    say ""
+    say "Every value compose requires is set. Next: bin/setup check"
+  fi
+}
+
+check() {
+  problems=0
+  bad() { printf 'FAIL  %s\n' "$*" >&2; problems=$((problems + 1)); }
+  for f in .env config/busyyaks.yml config/kanban.yml; do
+    [ -f "$f" ] || { bad "$f is missing: run bin/setup"; }
+  done
+  [ "$problems" -eq 0 ] || exit 1
+
+  bad_shape=$(shape)
+  if [ -n "$bad_shape" ]; then
+    while IFS= read -r line; do bad ".env $line"; done <<SHAPE
+$bad_shape
+SHAPE
+  fi
+  case "$(stat -c %a .env)" in
+    600 | 400) ;;
+    *) bad ".env has mode $(stat -c %a .env) and holds the secrets: chmod 600 .env" ;;
+  esac
+
+  for k in $(empty_required); do
+    case "$k" in
+      SESSION_SECRET | MCP_TOKEN | MCP_REPORT_TOKEN) bad "$k is empty in .env: run bin/setup (it writes the secrets)" ;;
+      *) bad "$k is empty in .env: fill it (its comment in .env says what it is)" ;;
+    esac
+  done
+  # every secret / token rule a service refuses to boot on: SessionCookie (web), McpServer (mcp), Database (every
+  # service: the adapter's keys), Dictation (web: the token's characters)
+  s=$(value SESSION_SECRET)
+  if [ -n "$s" ] && [ "${#s}" -lt "$MIN_SESSION_SECRET_BYTES" ]; then
+    bad "SESSION_SECRET is ${#s} bytes, the web app needs at least $MIN_SESSION_SECRET_BYTES: empty it in .env and run bin/setup"
+  fi
+  t=$(value MCP_TOKEN) r=$(value MCP_REPORT_TOKEN)
+  for pair in "MCP_TOKEN:$t" "MCP_REPORT_TOKEN:$r"; do
+    k=${pair%%:*} v=${pair#*:}
+    if [ -n "$v" ] && [ "${#v}" -lt "$MIN_MCP_TOKEN_CHARS" ]; then
+      bad "$k is ${#v} characters, the MCP server needs at least $MIN_MCP_TOKEN_CHARS: empty it in .env and run bin/setup"
+    fi
+  done
+  if [ -n "$r" ] && [ "$r" = "$t" ]; then
+    bad "MCP_REPORT_TOKEN equals MCP_TOKEN, the MCP server refuses that: empty it in .env and run bin/setup"
+  fi
+  if [ "$(value DATABASE_ADAPTER)" = postgresql ]; then
+    for k in POSTGRES_HOST POSTGRES_PORT POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD POSTGRES_LOCK_TIMEOUT_MS; do
+      [ -n "$(value "$k")" ] || bad "$k is empty in .env: DATABASE_ADAPTER=postgresql needs it (.env group 5, Database)"
+    done
+  fi
+  case "$(value DICTATION_TOKEN)" in
+    *[[:space:]]* | *[[:cntrl:]]*) bad "DICTATION_TOKEN has whitespace or control characters: the web app refuses it" ;;
+  esac
+
+  uid=$(value HOST_UID) gid=$(value HOST_GID)
+  if [ -n "$uid$gid" ] && [ "$uid:$gid" != "$(id -u):$(id -g)" ]; then
+    bad "HOST_UID:HOST_GID is $uid:$gid, this user is $(id -u):$(id -g): set them to \`id -u\` / \`id -g\` of the user that runs bin/launcher"
+  fi
+
+  root=$(value PROJECTS_ROOT)
+  if [ -n "$root" ]; then
+    if [ ! -d "$root" ]; then
+      bad "PROJECTS_ROOT $root is not a directory: the directory that holds your git repos"
+    elif [ "$(cd "$root" && pwd -P)" != "$root" ]; then
+      bad "PROJECTS_ROOT $root is not its real path: write $(cd "$root" && pwd -P) (no symlink, no trailing /)"
+    fi
+  fi
+
+  run=$(value LAUNCHER_RUN_DIR)
+  case "$run" in
+    '') ;;
+    /*)
+      run_dir_rules "$run" "$root"
+      if [ "$problems" -eq 0 ]; then
+        # created 0700 when missing; an existing one is left as it is (bin/launcher refuses one open to others, never repairs)
+        if [ ! -d "$run" ] && ! { mkdir -p "$(dirname "$run")" && mkdir -m 700 "$run"; }; then
+          bad "LAUNCHER_RUN_DIR $run cannot be created"
+        elif [ "$(stat -c %u "$(dirname "$run")")" != "$(id -u)" ]; then
+          bad "LAUNCHER_RUN_DIR $run: its parent $(dirname "$run") is owned by uid $(stat -c %u "$(dirname "$run")"), not $(id -u)"
+        elif [ "$(stat -c %u "$run")" != "$(id -u)" ]; then
+          bad "LAUNCHER_RUN_DIR $run is owned by uid $(stat -c %u "$run"), not $(id -u): chown it, or pick another dir"
+        elif [ $((0$(stat -c %a "$run") & 63)) -ne 0 ]; then
+          bad "LAUNCHER_RUN_DIR $run is mode $(stat -c %a "$run"): open to group / other; check what is in it, then chmod 700 $run"
+        fi
+      fi
+      ;;
+    *) bad "LAUNCHER_RUN_DIR must be an absolute path, written out (got $run)" ;;
+  esac
+
+  if [ "$problems" -eq 0 ]; then
+    mkdir -p data
+    # the compose postgres service's binds (docker-compose.yml postgres): this user's too, before its first start
+    case ",$(value COMPOSE_PROFILES)," in *,postgres,*) mkdir -p data/postgres data/postgres-run ;; esac
+    [ "$(stat -c %u data)" = "$(id -u)" ] \
+      || bad "./data is owned by uid $(stat -c %u data), not $(id -u): sudo chown -R $(id -u):$(id -g) data"
+  fi
+
+  if ! command -v docker > /dev/null; then
+    bad "docker is not on PATH: install Docker with the compose plugin (README § Requirements)"
+  elif [ "$problems" -eq 0 ]; then
+    docker compose config -q || bad "docker compose config refused .env (its message is above)"
+  fi
+
+  if [ "$problems" -gt 0 ]; then
+    printf '%s problem(s): fix them, then bin/setup check again\n' "$problems" >&2
+    exit 1
+  fi
+  say "ok    .env complete · ./data and $run ready · docker compose config ok"
+  say "Next: docker compose up -d --build --wait web mcp scanner github notifier"
+}
+
+case "${1:-}" in
+  '') init ;;
+  check) check ;;
+  *) say "usage: bin/setup [check]" >&2; exit 2 ;;
+esac

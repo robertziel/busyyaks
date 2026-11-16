@@ -8,15 +8,20 @@ command -v systemctl >/dev/null || { echo "systemctl not on PATH: the launcher i
 systemctl --user show-environment >/dev/null 2>&1 \
   || { echo "no systemd user manager for $(id -un) (systemctl --user fails): log in through a session, or loginctl enable-linger" >&2; exit 1; }
 for c in ruby git tmux claude; do
-  command -v "$c" >/dev/null || { echo "$c not on PATH: bin/launcher needs ruby (3.x), git, tmux and the claude CLI" >&2; exit 1; }
+  command -v "$c" >/dev/null || { echo "$c not on PATH: bin/launcher needs ruby (3.2+), git, tmux and the claude CLI" >&2; exit 1; }
 done
-[ -f "$dir/.env" ] || { echo "$dir/.env missing: cp .env.example .env and fill it (README Quickstart)" >&2; exit 1; }
-[ -f "$dir/config/busyyaks.yml" ] || { echo "$dir/config/busyyaks.yml missing: cp config/busyyaks.example.yml" >&2; exit 1; }
-[ -f "$dir/config/kanban.yml" ] || { echo "$dir/config/kanban.yml missing: cp config/kanban.example.yml" >&2; exit 1; }
+# README § Requirements: Ruby 3.2+ (Busyyaks::CLI::MIN_RUBY, the oldest the host tests run on)
+ruby -e 'exit(Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("3.2"))' \
+  || { echo "ruby $(ruby -e 'print RUBY_VERSION') is older than 3.2: bin/launcher needs Ruby 3.2+" >&2; exit 1; }
+for f in .env config/busyyaks.yml config/kanban.yml; do
+  [ -f "$dir/$f" ] || { echo "$dir/$f missing: run bin/setup, then bin/setup check (README Quickstart)" >&2; exit 1; }
+done
 # the containers run as HOST_UID:HOST_GID and talk to this user's socket in LAUNCHER_RUN_DIR (mode 0600, the dir 0700;
 # mounted only into web, mcp and notifier; outside PROJECTS_ROOT and this checkout, which containers mount too)
-# (bin/env: the one .env reader — a malformed .env stops here, naming the line)
-vars=$("$dir/bin/env" HOST_UID HOST_GID LAUNCHER_RUN_DIR PROJECTS_ROOT)
+# (bin/env: the one .env reader — a malformed .env stops here, naming the line; an empty key stops it naming each:
+# LAUNCHER_STATE_DIR and CLAUDE_SESSIONS_DIR are the .env group 3 values the README says to fill before this)
+vars=$("$dir/bin/env" HOST_UID HOST_GID LAUNCHER_RUN_DIR PROJECTS_ROOT LAUNCHER_STATE_DIR CLAUDE_SESSIONS_DIR) \
+  || { echo "fill those in .env (group 3, the host launcher), then run this again" >&2; exit 1; }
 eval "$vars"
 [ "$HOST_UID:$HOST_GID" = "$(id -u):$(id -g)" ] \
   || { echo ".env HOST_UID:HOST_GID is '$HOST_UID:$HOST_GID', this user is $(id -u):$(id -g): the containers could not reach the launcher socket" >&2; exit 1; }

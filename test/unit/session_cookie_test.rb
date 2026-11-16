@@ -17,7 +17,7 @@ class SessionCookieTest < Minitest::Test
 
   def test_a_short_secret_stops_the_boot
     e = assert_raises(S::Invalid) { S.options(OK.merge("SESSION_SECRET" => "s" * 63)) }
-    assert_equal "SESSION_SECRET is 63 bytes; at least 64 (openssl rand -hex 64)", e.message
+    assert_equal "SESSION_SECRET is 63 bytes; at least 64: empty it in .env and run bin/setup (it writes a new one)", e.message
   end
 
   def test_flags_are_stated_never_defaulted
