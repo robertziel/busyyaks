@@ -8,6 +8,8 @@
 #   {"op":"launch","path":"/projects/x","session":"x_2","type":"lead","launcher":"fullclaude","vars":{...}}
 #                                                  → {"ok":true,"session":"x_2",...}  the engine registered x_2 first (Api#launch)
 #   {"op":"sessions"}                                                      → {"ok":true,"sessions":[...]}
+#   {"op":"lead_key","session":"x_teamlead"}       → {"ok":true,"key":…}  only for a lead THIS launcher started, while
+#                                                    it runs (the engine's lead check for kanban_spawn)
 #   {"op":"create","root":"/projects","name":"x","url":""}               → {"ok":true,"path":"/projects/x"}
 #   {"op":"jobs"}                                                          → clone jobs with status + log tail
 #   {"op":"agents"}                                → coding-agent sessions (agent_engines collector snapshot)
@@ -82,7 +84,7 @@ SOCKET = File.join(RUN_DIR, "launcher.sock")
 # Folder trust (LaunchTrust), read once at start; a bad value stops the start. TRUSTED = config/busyyaks.yml
 # launch.trusted_paths on this host (real paths); CREATED = the repos this launcher's create made, in .env
 # LAUNCHER_STATE_DIR (a dir only the launcher touches: no container mounts it).
-TRUSTED, CREATED = begin
+TRUSTED, CREATED, STATE_DIR = begin
   trust = Busyyaks::LaunchTrust
   paths = trust.parse!(YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["launch"])
   trusted = trust.host_paths!(trust.under_mount!(paths, CONTAINER_ROOT), container_root: CONTAINER_ROOT,
@@ -91,15 +93,31 @@ TRUSTED, CREATED = begin
                            mounted: { "PROJECTS_ROOT" => PROJECTS_ROOT, "the busyyaks checkout" => ROOT,
                                       "./data" => File.join(ROOT, "data"), "the launcher socket dir" => RUN_DIR, },
                            uid: Process.uid)
-  [trusted, trust::Created.new(state)]
+  [trusted, trust::Created.new(state), state]
 rescue Busyyaks::LaunchTrust::Invalid => e
   abort "folder trust: #{e.message}"
+end
+# The leads this launcher started (LauncherRules::Leads), in the same launcher-only state dir.
+LEADS = begin
+  Busyyaks::LauncherRules::Leads.new(STATE_DIR)
+rescue Busyyaks::LauncherRules::Invalid => e
+  abort "lead records: #{e.message}"
 end
 # config/busyyaks.yml launch.start_seconds (required, LauncherRules.start_seconds!): how long a launch waits for its
 # agent to come up while the launcher's command still runs; a bad or missing value stops the start.
 START_SECONDS = begin
   launch_cfg = YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["launch"]
   Busyyaks::LauncherRules.start_seconds!(launch_cfg.is_a?(Hash) ? launch_cfg["start_seconds"] : nil)
+rescue Busyyaks::LauncherRules::Invalid => e
+  abort "config/busyyaks.yml: #{e.message}"
+end
+# config/busyyaks.yml launch.scopes (required key, LauncherRules.scopes!): null or each session in its own
+# systemd user scope — a lead's with the oomd preference, the others' with a memory cap.
+SCOPES = begin
+  launch_cfg = YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["launch"]
+  abort "config/busyyaks.yml: launch.scopes is required (null = no systemd user manager on this host)" \
+    unless launch_cfg.is_a?(Hash) && launch_cfg.key?("scopes")
+  Busyyaks::LauncherRules.scopes!(launch_cfg["scopes"])
 rescue Busyyaks::LauncherRules::Invalid => e
   abort "config/busyyaks.yml: #{e.message}"
 end
@@ -380,6 +398,8 @@ def launch(req)
   rescue AgentsKanban::Invalid => e
     raise ArgumentError, e.message
   end
+  lead_key = lead_first!(cfg, t, req, dir)
+  argv = Busyyaks::LauncherRules.scoped(argv, scopes: SCOPES, session: name, lead: cfg.lead_type?(t))
   cmd = Shellwords.join(argv)
   # `bash -ic` so ~/.bashrc functions (fullclaude, …) exist; `exec bash` keeps the pane open after claude exits.
   # the folder-trust decision first: a record it cannot read refuses the launch before anything starts
@@ -411,7 +431,54 @@ def launch(req)
     error += " — and kill-session failed (#{kerr.strip}): the tmux session #{name} is still running" unless gone
     return { ok: false, error: error, status: 422 }
   end
+  # a lead that came up: its key into LEADS (the launcher's state only)
+  alive = ->(s) { tmux("has-session", "-t", "=#{s}")[2] }
+  LEADS.record(session: name, type: t.key, dir: dir, key: lead_key, alive: alive) if lead_key
   { ok: true, session: name, type: t.key, launcher: launcher.key, kind: launcher.kind, dir: dir, prompt: !prompt.nil?, **trust, **rc }
+end
+
+# LEAD-FIRST BOARDS, checked here too — the engine's registration is not trusted past this socket:
+#   a lead type brings its key (lead_key, 64 hex): kept in LEADS (this launcher's state dir) once its start is up —
+#   never put into the tmux session, logged or answered (only the lead_key op gives it back);
+#   a type `under` a lead starts only under a lead THIS launcher started for the SAME repo dir, of the type it runs
+#   under, whose tmux session runs (req "lead"), and brings no key; any other type brings neither.
+# → the lead's key to record after the start (nil for any other type). Refused (ArgumentError): nothing starts.
+def lead_first!(cfg, type, req, dir)
+  key = req["lead_key"]
+  lead = req["lead"]
+  if type.under
+    raise ArgumentError, "a #{type.key} session runs under the board's #{type.under}: no lead session given" \
+      unless lead.is_a?(String) && lead.match?(AgentsKanban::Launch::SESSION)
+
+    begin
+      LEADS.under!(lead, lead_type: type.under, dir: dir, alive: ->(s) { tmux("has-session", "-t", "=#{s}")[2] })
+    rescue Busyyaks::LauncherRules::Invalid => e
+      raise ArgumentError, e.message
+    end
+  elsif !lead.nil?
+    raise ArgumentError, "a #{type.key} session runs under no lead (got lead #{lead.inspect})"
+  end
+  unless cfg.lead_type?(type)
+    raise ArgumentError, "a #{type.key} session gets no lead key" unless key.nil?
+
+    return nil
+  end
+  raise ArgumentError, "a #{type.key} session needs its lead key (64 hex)" \
+    unless key.is_a?(String) && key.match?(Busyyaks::LauncherRules::Leads::KEY)
+
+  key
+end
+
+# {"op":"lead_key","session"} → {ok, key}: the key of a lead this launcher started, while its tmux session runs
+# (the engine's kanban_spawn / kanban_register lead check compares its digest). Refused for any other session.
+def lead_key_op(req)
+  name = req["session"].to_s
+  e = LEADS.find(name)
+  return { ok: false, error: "#{name}: no lead this launcher started", status: 422 } unless e
+  return { ok: false, error: "#{name}: its tmux session is not running", status: 422 } \
+    unless tmux("has-session", "-t", "=#{name}")[2]
+
+  { ok: true, key: e["key"] }
 end
 
 NAME = /\A[A-Za-z0-9][A-Za-z0-9._-]{0,99}\z/
@@ -999,6 +1066,7 @@ def handle(line)
   case req["op"]
   when "name" then name_op(req)
   when "launch" then launch(req)
+  when "lead_key" then lead_key_op(req)
   when "sessions" then { ok: true, sessions: sessions }
   when "create" then create(req)
   when "jobs" then { ok: true, jobs: jobs }

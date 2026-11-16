@@ -9,6 +9,9 @@ module Busyyaks
   class APIAction < Action
     handle_exception LauncherClient::Unavailable => :launcher_unavailable
     handle_exception LauncherClient::Refused => :launcher_refused
+    # the current agent settings revision does not run on the engine (e.g. a type under no lead): 503 with the
+    # engine's reason — nothing is launched or registered on a config the engine refuses
+    handle_exception Kanban::Unrunnable => :agent_settings_unrunnable
 
     private
 
@@ -27,6 +30,7 @@ module Busyyaks
 
     def launcher_unavailable(_req, res, e) = json(res, { error: e.message }, status: 503)
     def launcher_refused(_req, res, e) = json(res, { error: e.message }, status: 422)
+    def agent_settings_unrunnable(_req, res, e) = json(res, { error: e.message }, status: 503)
 
     # The engine's launches (agent types + who runs against the cap; config/kanban.yml is the ONE place a launch is
     # defined) + live tmux sessions per project path. The launcher being down is reported (launcher_error, and the

@@ -20,7 +20,7 @@ module Busyyaks
             results.each do |r|
               next unless r["stopped"] && kanban.open_session(r["name"])
 
-              kanban.end_session(r["name"], reason: "stopped by the operator", by: req.session[:email].to_s)
+              kanban.end_session(r["name"], reason: AgentsKanban::Store::OPERATOR_STOP, by: req.session[:email].to_s)
               r["registration"] = "ended"
             end
             json(res, { results: results })

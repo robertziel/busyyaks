@@ -42,7 +42,7 @@ class LauncherAttachTest < Minitest::Test
       "reap_protect" => [], "auth" => { "provider" => "none" }, "agents" => { "collector" => "none" },
       "dictation" => "none", "terminal" => { "public_host" => "deny", "max_open" => 4 },
       "ci" => { "max_pending_minutes" => 60, "required" => { "o/r" => ["jenkins/ci"] } },
-      "launch" => { "trusted_paths" => [], "commands" => INVOCATIONS, "start_seconds" => 30 }
+      "launch" => { "trusted_paths" => [], "commands" => INVOCATIONS, "start_seconds" => 30, "scopes" => nil }
     ))
     File.write(File.join(@co, ".env"), <<~ENV)
       PROJECTS_ROOT=#{File.join(@base, 'projects')}

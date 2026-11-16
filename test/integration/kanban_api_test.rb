@@ -158,7 +158,7 @@ class KanbanApiTest < Minitest::Test
     r0 = api(:get, "/api/waiting/rev")["rev"]
     assert_equal "no-store", last_response.headers["Cache-Control"]
     assert_equal({ "waiting_columns" => %w[human_check ready], "total" => 0, "projects" => [], "held" => [], "external" => [],
-                   "launch_failures" => [], }, api(:get, "/api/waiting"))
+                   "launch_failures" => [], "lead_ends" => [], }, api(:get, "/api/waiting"))
     # card #273: a session whose start failed (claude never came up) is in the list the layout's alert modal reads
     kb.register_session(session: "g_r_teamlead", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
     kb.end_session("g_r_teamlead", reason: "start failed: Temp directory is owned by uid 0", by: "op")
@@ -221,8 +221,7 @@ class KanbanApiTest < Minitest::Test
     c = api(:post, "/api/cards/#{id}/comment", body: "Ok, so what's the decision now?")
     assert_equal [201, "none: no owner session"], [last_response.status, c["delivered"]]
     m = api(:post, "/api/cards/#{id}/move", column: "qa")
-    assert_match(/\Aspawn deferred to the notifier pass: launcher not reachable/, m["delivered"],
-                 "an ownerless QA card gets its own worker")
+    assert_equal "none: no owner session", m["delivered"], "lead-first: nothing starts for it — the lead takes it"
     kb.set_owner(id, session: "acme_shop", by: "op")
     assert_equal "queued: acme_shop", api(:post, "/api/cards/#{id}/comment", body: "now?")["delivered"]
     assert_nil api(:post, "/api/cards/#{id}/move", column: "qa", position: 0)["delivered"], "a reorder in place moves nothing"

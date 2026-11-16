@@ -140,6 +140,47 @@ module Busyyaks
                .map { |r| { id: r[:id], author: r[:author], at: r[:created_at] } }
     end
 
+    # The engine keys lead-first boards removed — a revision written before it carries them.
+    PRE_LEAD_FIRST = %w[spawns_for spawn_launcher launcher_follows].freeze
+
+    # A revision written before lead-first boards in today's shape, or nil when it has none of the removed
+    # keys (nothing to convert). The lead = the type the others `launcher_follows`; it takes the column types any type
+    # `spawns_for` (an ownerless card becomes the lead's: it starts the worker with kanban_spawn), every type that
+    # followed it or spawned for cards runs `under` it, and `spawn_launcher` goes (nothing picks a launcher). No such
+    # lead while a type spawns for cards → Error: the revision cannot say who leads, a person must. A type left under no
+    # lead becomes `standalone` when it is a plain session (no prompt, adopts nothing); any other → Error (review round
+    # 1: no type runs leaderless by omission).
+    def lead_first(doc)
+      types = doc.fetch("agent_types")
+      return nil if types.none? { |t| t.keys.intersect?(PRE_LEAD_FIRST) }
+
+      leads = types.filter_map { |t| t["launcher_follows"] }.uniq
+      spawning = types.select { |t| Array(t["spawns_for"]).any? }
+      if leads.size != 1 && (spawning.any? || leads.size > 1)
+        raise Error, "agent settings: cannot convert to lead-first boards — #{leads.size} followed types " \
+                     "(#{leads.join(', ')}) for #{spawning.map { |t| t['key'] }.join(', ')}: save one on Settings → " \
+                     "Agents & launchers with `under: <lead type>`"
+      end
+      lead = leads.first
+      work = spawning.flat_map { |t| t["spawns_for"] }.uniq
+      out = types.map do |t|
+        n = t.except(*PRE_LEAD_FIRST)
+        n["under"] = lead if lead && t["key"] != lead && (t["launcher_follows"] == lead || Array(t["spawns_for"]).any?)
+        n["takes"] = (t["takes"] + work).uniq if t["key"] == lead
+        n
+      end
+      out.each do |n|
+        next if n["under"] || n["standalone"] || n["key"] == lead
+
+        unless n["prompt"].nil? && n["takes"] == []
+          raise Error, "agent settings: cannot convert to lead-first boards — agent type #{n['key']} would " \
+                       "run under no lead: save one on Settings → Agents & launchers with `under: <lead type>`"
+        end
+        n["standalone"] = true
+      end
+      doc.merge("agent_types" => out)
+    end
+
     # Write a new revision from `doc`, based on revision `base` (the one the editor loaded): validated by the engine
     # against the file's settings, every command on `commands`, `base` still the newest → the new revision's id.
     def save!(db, file:, doc:, base:, author:, commands:, clock: -> { Busyyaks::Clock.epoch })

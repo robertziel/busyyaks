@@ -13,6 +13,7 @@ ci: { max_pending_minutes: 60, required: { o/r: [jenkins/ci] } }
 launch:
   trusted_paths: []
   start_seconds: 30
+  scopes: null # the suite's container runs no systemd user manager
   commands: # the invocations of test/fixtures/agents.yml's launchers
     - { kind: claude_code, command: claude, args: ["--permission-mode", "bypassPermissions"], via_shell: false }
     - { kind: claude_code, command: localclaude, args: [], via_shell: true }

@@ -320,11 +320,13 @@ err("kanban_move", id: c["id"], column: "qa", author: "lead"))
                  err("kanban_create", project: "g/r", title: "orphan", author: "someone"))
     k = Busyyaks::Kanban.default
     a = k.create(slug: "g/r", title: "A", by: "op", column: "human_check")
-    # the lead runs two launchers and has no spawn_launcher: a hand-started session names the one it runs
+    # the lead runs two launchers: a hand-started session names the one it runs (nothing picks one)
     assert_match(/agent type lead runs fullclaude, localclaude — name the launcher this session was started with/,
                  err("kanban_register", project: "g/r", type: "lead", tmux_session: "tl_g_r", author: "x"))
     reg = ok("kanban_register", project: "g/r", type: "lead", launcher: "fullclaude", tmux_session: "tl_g_r", author: "x")
     assert_equal "fullclaude", reg["launcher"]
+    refute reg.key?("lead_key"), "no key in any answer (a lead by hand gets none)"
+    assert_nil Busyyaks::Kanban.default.open_session("tl_g_r")[:lead_key_digest]
     assert_equal ["claude-tl_g_r", [a], nil, 1],
                  [reg["agent"], reg["adopted"].map { |c| c["id"] }, reg["concurrency"]["max_sessions"],
                   reg["concurrency"]["running"],]

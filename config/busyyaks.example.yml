@@ -95,6 +95,11 @@ ci:
 #                as a question for you.
 launch:
   trusted_paths: []
+  # each agent session in its own systemd user scope, or null when this host runs no systemd user manager
+  # (required key). lead_oomd: avoid = a lead's scope is marked ManagedOOMPreference=avoid (per systemd docs oomd then
+  # prefers other candidates; not verified under pressure), none = no preference; session_memory_max: every OTHER
+  # session's MemoryMax (<n>K|M|G, null = no cap). Restart the launcher after an edit.
+  scopes: { lead_oomd: avoid, session_memory_max: null }
   # the INVOCATIONS any agent launcher may be on this host, each exactly {kind, command, args, via_shell}.
   # The launchers + agent types are edited on Settings → Agents & launchers (the database); a launcher must equal one
   # of these entries, or it is refused when saved and when bin/launcher starts it — a dashboard user picks among them

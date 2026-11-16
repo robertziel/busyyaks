@@ -41,16 +41,15 @@ export function launchFlash(r: LaunchResult) {
 }
 
 // The page's launches, narrowed to one board: running_here = the engine's registered sessions of that type on that
-// project; follows = the newest running session of the type it `launcher_follows` on that project (the engine's
-// Store#followed_launcher over the same running list — the engine still judges the launch and refuses another launcher).
+// project; follows = the newest running session of the lead type it runs `under` on that project (the engine's
+// Store#running_lead over the same running list — the engine still judges the launch: no lead → refused, another
+// launcher → refused). follows null on a type under a lead = no lead runs: the bar greys it.
 export function launchesFor(all: LaunchesData, slug: string): LaunchesData {
   const sessions = all.concurrency?.sessions ?? [];
   return {
     ...all,
     types: all.types.map((t) => {
-      const lead = t.launcher_follows
-        ? sessions.filter((s) => s.type === t.launcher_follows && s.project === slug).at(-1)
-        : undefined;
+      const lead = t.under ? sessions.filter((s) => s.type === t.under && s.project === slug).at(-1) : undefined;
       return {
         ...t,
         running_here: all.concurrency ? sessions.filter((s) => s.type === t.key && s.project === slug).length : null,

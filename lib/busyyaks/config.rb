@@ -23,7 +23,7 @@ module Busyyaks
     OPTIONAL = %w[engines daily_report_runners].freeze
     attr_reader :roots, :search_depth, :owner_remotes, :author_emails, :window_days, :reap_protect, :engines,
                 :daily_report_runners, :auth, :agent_collector, :trusted_paths, :launch_commands,
-                :launch_start_seconds, :dictation, :terminal, :ci
+                :launch_start_seconds, :launch_scopes, :dictation, :terminal, :ci
 
     # mount: where compose mounts PROJECTS_ROOT (.env PROJECTS_MOUNT, the one place it is set): every root is under it.
     def self.load(path = ENV.fetch("BUSYYAKS_CONFIG"), mount: ENV.fetch("PROJECTS_MOUNT"))
@@ -74,6 +74,15 @@ module Busyyaks
       # launch.start_seconds: how long bin/launcher waits for a started claude to come up (LauncherRules)
       @launch_start_seconds = begin
         LauncherRules.start_seconds!(hash["launch"]["start_seconds"])
+      rescue LauncherRules::Invalid => e
+        raise Invalid, e.message
+      end
+      # launch.scopes: each session in its own systemd user scope, the lead oomd's last pick (LauncherRules)
+      @launch_scopes = begin
+        raise Invalid, "launch.scopes is required (null = no systemd user manager on this host)" \
+          unless hash["launch"].key?("scopes")
+
+        LauncherRules.scopes!(hash["launch"]["scopes"])
       rescue LauncherRules::Invalid => e
         raise Invalid, e.message
       end

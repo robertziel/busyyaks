@@ -215,6 +215,49 @@ built-in colours. `config/kanban.example.yml` maps them all; a re-vendor that ad
   --ak-step-overhang: 12px
 ```
 
+## Lead-first boards: upgrading a deployment
+
+A board starts with its lead (the Launch bar, never automatic) and only the lead starts its team (`kanban_spawn`).
+The lead key is a guard against cooperative agents starting sessions without their lead, not authentication: every
+agent shares one MCP bearer and can name any tmux session (binding a caller needs per-session MCP tokens).
+Nothing restarts a lead: a lead that ends for any reason but your Stop is on the waiting alert, and the board says "no
+lead: press Launch".
+
+**One new required host key**, in the gitignored `config/busyyaks.yml` (the launcher and every service refuse to
+start without it):
+
+```yaml
+launch:
+  # each agent session in its own systemd user scope, or null when the host runs no systemd user manager
+  scopes: { lead_oomd: avoid, session_memory_max: null }   # session_memory_max: e.g. 16G for every non-lead session
+```
+
+`lead_oomd: avoid` MARKS a lead's scope `ManagedOOMPreference=avoid` (its cgroup gets `user.oomd_avoid=1`); per
+systemd.resource-control(5) systemd-oomd then prefers other candidates. Not verified under real memory pressure.
+
+**Order** (each step checked before the next):
+
+1. Back up the database (§ The database).
+2. Add `launch.scopes` to `config/busyyaks.yml`, and delete `lead_key_env` from `config/kanban.yml` if an earlier
+   build of this change put it there (the engine refuses unknown keys: boot fails naming it).
+3. `docker build -t busyyaks:local .`, then **restart the launcher** (`deploy/install-launcher.sh`). The new
+   launcher keeps a lead's key in `LAUNCHER_STATE_DIR/leads.json` (0600, launcher-only). A lead started by the OLD
+   launcher is not in that record and cannot `kanban_spawn`: stop it and Launch it again after step 5.
+4. **Migrate**: `bin/web` runs `20261207463000` on start (engine Schema v12: `agent_sessions.lead_id`, `needs_lead`,
+   `lead_key_digest` and `CHECK (needs_lead = 0 OR lead_id IS NOT NULL)`), and writes the current agent settings as
+   a NEW revision in the lead-first shape: `spawns_for` / `spawn_launcher` / `launcher_follows` removed, the lead takes
+   the work column types `spawns_for` named, each follower / spawner runs `under` the lead, a plain type (no prompt,
+   takes nothing) becomes `standalone`. A revision it cannot convert (no lead to name, or a prompted type under none)
+   stops the migration with the reason: fix it on Settings → Agents & launchers on the old version, then deploy again.
+   The old revision stays in the history.
+5. `docker compose up -d --no-build web mcp scanner github notifier`, `/up` 200, MCP `tools/list` lists
+   `kanban_spawn`, then Launch each board's lead.
+
+Rollback (`20261207463000` down): refused while a session under a lead is open, or while a revision saved on top of
+the migration's uses `under` / `standalone` (import a pre-463 revision with `bin/agent-settings import` first: that one
+stays the newest). With no later revision it writes the one from before the migration as the newest again; then it
+drops the three columns.
+
 ## Folder trust (the launcher)
 
 The launcher answers Claude Code's "Yes, I trust this folder" prompt, which lets the repo's `.claude` settings, hooks

@@ -151,6 +151,8 @@ class DBCopyTest < Minitest::Test
                  else sample(info[:type], table, col, i)
                  end
       end
+      # agent_sessions' CHECK (engine Schema v12): a session that needs a lead has one
+      row[:needs_lead] = row[:lead_id].nil? ? 0 : 1 if row.key?(:needs_lead)
       db[table].insert(row)
     end
   end

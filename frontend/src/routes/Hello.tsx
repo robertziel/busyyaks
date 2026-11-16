@@ -297,7 +297,6 @@ function Agents({ agents, onSaved }: { agents: AgentSettingsData; onSaved: (save
             <tr>
               <th>agent type</th>
               <th>launchers</th>
-              <th>spawn launcher</th>
             </tr>
           </thead>
           <tbody>
@@ -306,9 +305,6 @@ function Agents({ agents, onSaved }: { agents: AgentSettingsData; onSaved: (save
                 <td>{c.label}</td>
                 <td>
                   <code>{c.launchers[0].join(", ") || "—"}</code> → <code>{c.launchers[1].join(", ")}</code>
-                </td>
-                <td>
-                  <code>{c.spawn[0] || "—"}</code> → <code>{c.spawn[1]}</code>
                 </td>
               </tr>
             ))}
@@ -350,7 +346,7 @@ export function Hello() {
     const lead = agents.doc.agent_types.find((t) => t.key === "lead") ?? agents.doc.agent_types[0];
     return {
       launchers: agents.doc.launchers.map((l) => l.label),
-      def: lead?.spawn_launcher ?? lead?.launchers[0] ?? "—",
+      def: lead?.launchers[0] ?? "—",
     };
   }, [agents]);
 

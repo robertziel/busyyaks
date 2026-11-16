@@ -157,21 +157,10 @@ function TypeCard({
           />
         </label>
       ))}
-      <label>
-        spawn launcher{" "}
-        <select value={t.spawn_launcher} onChange={(e) => onChange({ ...t, spawn_launcher: e.target.value })}>
-          <option value="">none</option>
-          {t.launchers.map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        follows the launcher of{" "}
-        <select value={t.launcher_follows} onChange={(e) => onChange({ ...t, launcher_follows: e.target.value })}>
-          <option value="">none</option>
+      <label title="lead-first boards: a session of this type runs only while the board's lead of that type runs, on its launcher">
+        runs under{" "}
+        <select value={t.under} onChange={(e) => onChange({ ...t, under: e.target.value })}>
+          <option value="">no lead</option>
           {typeKeys
             .filter((k) => k !== t.key)
             .map((k) => (
@@ -212,15 +201,6 @@ function TypeCard({
           all={COLUMN_TYPES}
           on={t.takes}
           onChange={(v) => onChange({ ...t, takes: v })}
-        />
-      </div>
-      <div className="as-wide">
-        spawns for{" "}
-        <Checks
-          name={`${t.key} spawns for`}
-          all={COLUMN_TYPES}
-          on={t.spawns_for}
-          onChange={(v) => onChange({ ...t, spawns_for: v })}
         />
       </div>
       <label className="as-wide">

@@ -22,6 +22,7 @@ class MigrationsTest < Minitest::Test
   LOCAL = 20_261_130_000_000
   BEFORE_PRS = 20_261_202_000_000 # the last migration before the assigned PRs
   BEFORE_SESSION_BOARDS = 20_261_205_000_000 # the last migration before v11 (session boards: boards.archived_at)
+  BEFORE_LEAD_FIRST = 20_261_206_000_000 # the last migration before v12 (lead-first boards)
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -208,6 +209,54 @@ class MigrationsTest < Minitest::Test
     refute_includes @db.schema(:boards).map(&:first), :archived_at
     migrate
     assert_includes @db.schema(:boards).map(&:first), :archived_at
+  end
+
+  # review round 1: v12 adds lead_id / needs_lead / lead_key_digest and the CHECK, rewrites the newest agent
+  # settings revision as a new one (lead-first), and rolls back only with no open session under a lead and no revision
+  # saved after its own — then the pre-463 revision is the newest again
+  def test_v12_lead_first_checks_rewrites_the_revision_and_rolls_back
+    migrate(BEFORE_LEAD_FIRST)
+    fixture = YAML.safe_load_file(File.expand_path("../fixtures/agents.yml", __dir__))
+    old = fixture.merge("agent_types" => fixture["agent_types"].map do |t|
+      case t["key"]
+      when "lead" then t.merge("takes" => ["gate"])
+      when "worker" then t.except("under").merge("launcher_follows" => "lead", "spawn_launcher" => "fullclaude",
+                                                 "spawns_for" => %w[queued working review gate])
+      when "team" then t.except("under").merge("launcher_follows" => "lead")
+      else t.except("standalone")
+      end
+    end)
+    @db[:agent_settings].insert(doc: JSON.generate(old), author: "op", created_at: 1)
+    migrate
+    v12 = %i[lead_id needs_lead lead_key_digest]
+    assert_equal v12, @db.schema(:agent_sessions).map(&:first) & v12
+    row = { session: "w", socket: "default", project_slug: "p", type_key: "worker", launcher_key: "fullclaude",
+            agent_name: "worker-w", launched_by: "op", launched_at: 1, }
+    assert_raises(Sequel::CheckConstraintViolation, Sequel::ConstraintViolation) do
+      @db[:agent_sessions].insert(row.merge(needs_lead: 1, lead_id: nil))
+    end
+    newest = @db[:agent_settings].reverse(:id).first
+    assert_equal "migration 20261207463000", newest[:author]
+    doc = JSON.parse(newest[:doc])
+    assert_equal [nil, "lead", "lead", nil], doc["agent_types"].map { |t| t["under"] }
+    assert_equal [nil, nil, nil, true], doc["agent_types"].map { |t| t["standalone"] }
+    # refused while a session runs under a lead
+    lead = @db[:agent_sessions].insert(row.merge(session: "l", type_key: "lead", agent_name: "claude-l"))
+    w = @db[:agent_sessions].insert(row.merge(needs_lead: 1, lead_id: lead))
+    e = assert_raises(StandardError) { migrate(BEFORE_LEAD_FIRST) }
+    assert_match(/rollback refused: 1 open agent session\(s\) run under a lead/, e.message)
+    @db[:agent_sessions].where(id: [lead, w]).update(ended_at: 2)
+    # refused while a lead-first revision was saved after the migration's
+    later = @db[:agent_settings].insert(doc: newest[:doc], author: "op", created_at: 3)
+    e = assert_raises(StandardError) { migrate(BEFORE_LEAD_FIRST) }
+    assert_match(/rollback refused: agent settings revision\(s\) #{later} saved after migration 20261207463000/, e.message)
+    @db[:agent_settings].where(id: later).delete
+    migrate(BEFORE_LEAD_FIRST)
+    assert_empty @db.schema(:agent_sessions).map(&:first) & v12
+    back = @db[:agent_settings].reverse(:id).first
+    assert_equal ["migration 20261207463000 rollback", old], [back[:author], JSON.parse(back[:doc])]
+    migrate
+    assert_equal "lead", JSON.parse(@db[:agent_settings].reverse(:id).first[:doc])["agent_types"][1]["under"]
   end
 
   # a board saved before v7 has NULL in the new column: it reads as its column types' defaults

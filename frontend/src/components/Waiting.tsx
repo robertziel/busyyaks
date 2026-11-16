@@ -419,6 +419,7 @@ export function WaitingWidget() {
         createPortal(
           <LaunchFailureAlert
             failures={data.launch_failures}
+            leadEnds={data.lead_ends}
             storageKey="busyyaks.launch-failure-seen"
             projectHref={(slug) => `${projectPath(slug)}?tab=board`}
           />,
