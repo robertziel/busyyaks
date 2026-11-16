@@ -1,4 +1,4 @@
-// Stop / Stop all on a project's tmux sessions. The operator confirms, the host kills exactly the named
+// Stop / Stop all on a project's tmux sessions (the session lanes' ⋯ menus). The operator confirms, the host kills exactly the named
 // sessions of THIS project (POST /api/projects/*slug/stop) whatever they are doing — unlike "Clear idle", which only
 // stops sessions that are not working. Each session's result is shown; nothing is reported stopped that was not.
 import { useState } from "react";
@@ -43,24 +43,4 @@ export function useStopSessions(slug: string, onDone: () => void) {
     }
   };
   return { busy, stop };
-}
-
-export function StopButton({
-  label,
-  title,
-  busy,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  title: string;
-  busy: boolean;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button type="button" className="btn small stop-btn" title={title} disabled={disabled} onClick={onClick}>
-      {busy ? "Stopping…" : label}
-    </button>
-  );
 }

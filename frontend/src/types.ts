@@ -177,7 +177,9 @@ export type AgentCard = {
   blocked_external: string | null;
   path: string;
 };
-export type AgentAsk = { id: number; slug: string; title: string; question: string; path: string };
+// options = the question's choices (posted as the operator's comment = the answer); [] = answer with a comment, or a
+// dialog's question (its keys are pressed in the session: the session's dialogs)
+export type AgentAsk = { id: number; slug: string; title: string; question: string; options: string[]; path: string };
 export type AgentSession = {
   key: string;
   name: string;
@@ -195,6 +197,9 @@ export type AgentSession = {
   agent: string | null;
   agent_type: string | null;
   phase: "thinking" | "tool" | "writing" | "subagents" | null;
+  // what its working screen shows now (the live line's evidence): the running tool's name, the turn's elapsed
+  // seconds + tokens ("↓ 1.6k"), the card a kanban tool acts on — null when the screen does not say
+  live: { tool: string | null; elapsed_s: number | null; tokens: string | null; card: number | null };
   cards: AgentCard[];
   cards_finished: number;
   turn_ended_at: number | null;

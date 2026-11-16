@@ -135,6 +135,7 @@ export function ProjectBoard({ slug }: { slug: string }) {
         onChanged={() => invalidate("/api/boards")}
         dictation={dictation}
         cardTerminals={cardTerminals}
+        summary="folded"
       />
     </div>
   );

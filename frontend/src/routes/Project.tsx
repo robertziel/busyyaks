@@ -64,12 +64,12 @@ export function Project() {
       </div>
       {data.launches.types.length > 0 && (
         <section className="launchbar card">
-          <Launch slug={p.slug} launches={data.launches} launcherError={data.launcher_error} />
           <Sessions
             sessions={live}
             launches={data.launches}
             busy={stopping}
             stop={(names, what) => void stop(names, what)}
+            launch={<Launch slug={p.slug} launches={data.launches} launcherError={data.launcher_error} compact />}
           />
         </section>
       )}

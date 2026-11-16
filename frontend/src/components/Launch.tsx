@@ -66,9 +66,10 @@ export function busyyaksLaunchApi(all: LaunchesData): LaunchApi {
   };
 }
 
-type Props = { slug: string; launches: LaunchesData; launcherError: string | null };
+// compact = the project page's sessions section: small "＋ Type" buttons in its Quiet lane
+type Props = { slug: string; launches: LaunchesData; launcherError: string | null; compact?: boolean };
 
-export function Launch({ slug, launches, launcherError }: Props) {
+export function Launch({ slug, launches, launcherError, compact = false }: Props) {
   const { setFlash } = useFlash();
   // the launcher down: the engine's data says so (sessions_error) and every pill is greyed with that reason
   const data = useMemo<LaunchesData>(
@@ -84,6 +85,7 @@ export function Launch({ slug, launches, launcherError }: Props) {
       api={api}
       slug={slug}
       refreshEvery={0}
+      compact={compact}
       className="launchpair"
       onLaunched={(r) => {
         setFlash(launchFlash(r));
