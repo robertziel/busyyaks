@@ -29,6 +29,59 @@ class KanbanConfigTest < Minitest::Test
       assert_equal "https://pics.test:8443", Busyyaks::Kanban.avatar_origin
     end
   end
+
+  # the theme maps every --ak-* token the vendored engine's CSS declares, read from that CSS — a token left
+  # out would show the engine's own colour instead of this deployment's skin, so the boot refuses it
+  def test_the_theme_maps_every_engine_token_or_the_boot_is_refused
+    k = Busyyaks::Kanban
+    tokens = k.engine_tokens
+    assert_includes tokens, "--ak-working"
+    assert_includes tokens, "--ak-accent"
+    %w[config/kanban.example.yml test/fixtures/kanban.yml].each do |f|
+      theme = YAML.safe_load_file(File.join(__dir__, "../..", f))["theme"]
+      # beyond them only the agent faces' per-type discs (an open family keyed by agent type, each with an
+      # engine default outside .ak-root) — any other extra key is a typo or a token the engine no longer has
+      rest = theme.keys.grep_v(/\A--ak-face-type-[a-z0-9_-]+\z/)
+      assert_equal tokens, rest.sort, "#{f} maps exactly the engine's tokens"
+    end
+    k.check_file! # the suite's file passes
+    full = k.file_config
+    e = assert_raises(AgentsKanban::ConfigError) do
+      k.check_theme!(full.merge("theme" => full["theme"].except("--ak-working", "--ak-step-overhang")))
+    end
+    assert_match(/theme maps no value for --ak-step-overhang, --ak-working — every --ak-\* token/, e.message)
+    assert_match(/theme must map/, assert_raises(AgentsKanban::ConfigError) { k.check_theme!(full.except("theme")) }.message)
+    # the list is the CSS's, not a copy: a token the engine adds is required at once
+    css = ".ak-root {\n  --ak-new-one: red;\n  --ak-ink: #000;\n}\n"
+    assert_equal %w[--ak-ink --ak-new-one], k.engine_tokens(css)
+    assert_raises(AgentsKanban::ConfigError) { k.check_theme!(full, tokens: k.engine_tokens(css)) }
+  end
+
+  # every .ak-root rule counts, at any indent (the dark set sits in @media); a descendant rule's custom property is no
+  # token; a CSS in which nothing is found is refused, never read as "no token required"
+  def test_engine_tokens_read_every_ak_root_rule_and_refuse_finding_none
+    k = Busyyaks::Kanban
+    css = <<~CSS
+      .ak-root {
+        --ak-ink: #000;
+      }
+      .ak-root .kb-card {
+        --ak-not-a-token: 1px;
+        --kc: red;
+      }
+      @media (prefers-color-scheme: dark) {
+        .ak-root {
+          --ak-ink: #fff;
+          --ak-dark-only: #111;
+        }
+      }
+    CSS
+    assert_equal %w[--ak-dark-only --ak-ink], k.engine_tokens(css)
+    ["nothing here", ".ak-root .kb-card { --ak-x: 1px; }", ".ak-root {\n  color: red;\n}\n", ""].each do |bad|
+      e = assert_raises(AgentsKanban::ConfigError) { k.engine_tokens(bad) }
+      assert_match(/no --ak-\* token declared in a \.ak-root rule/, e.message)
+    end
+  end
 end
 
 # the boards live in the DATABASE — the template row (migration 20261116000000, seeded from the

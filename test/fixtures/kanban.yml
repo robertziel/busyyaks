@@ -29,6 +29,7 @@ theme:
   --ak-surface-3: var(--surface-3)
   --ak-line: var(--line)
   --ak-line-strong: var(--line-strong)
+  --ak-step-overhang: 12px   # how far the step buttons hang outside the lists (the engine's default)
   --ak-row-rule: var(--row-rule)
   --ak-track: var(--track)
   --ak-accent: var(--accent)
@@ -48,6 +49,7 @@ theme:
   --ak-vivid-purple: var(--vivid-purple)
   --ak-vivid-teal: var(--vivid-teal)
   --ak-vivid-pink: var(--vivid-pink)
+  --ak-working: var(--working)   # the blue glow of a card whose agent works now
   --ak-radius-card: var(--radius-card)
   --ak-radius-band: var(--radius-band)
   --ak-radius-ctl: var(--radius-ctl)

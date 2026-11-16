@@ -200,6 +200,21 @@ the boot with the steps below.
   migration's `down` drops the table and every revision; put them back into `config/kanban.yml` (without `kind`, which
   the old engine refuses) and drop `launch.commands` from `config/busyyaks.yml`.
 
+## The board theme (`config/kanban.yml` `theme`)
+
+Every `--ak-*` token the vendored engine's `frontend/src/vendor/agents_kanban/styles/kanban.css` declares in a
+`.ak-root` rule must have a value in `theme`. At boot `Busyyaks::Kanban.check_theme!` reads the token list from that
+CSS and refuses to start (web, mcp, notifier) naming each missing token — the board never falls back to the engine's
+built-in colours. `config/kanban.example.yml` maps them all; a re-vendor that adds a token adds it there too.
+
+**Upgrading to the working glow**: before the restart, add these two lines under `theme:` in the live
+`config/kanban.yml` — without them the boot is refused:
+
+```yaml
+  --ak-working: var(--working)
+  --ak-step-overhang: 12px
+```
+
 ## Folder trust (the launcher)
 
 The launcher answers Claude Code's "Yes, I trust this folder" prompt, which lets the repo's `.claude` settings, hooks

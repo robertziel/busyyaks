@@ -162,6 +162,30 @@ module Busyyaks
       [503, { error: "agent sessions: #{e.message}" }]
     end
 
+    # GET /api/projects/*slug/board/live → {sessions: {name => Session#live}} — the board's working glow: the
+    # project's agent sessions and every live card's owner session (wherever it runs), ONE answer for the whole board from
+    # the same shared snapshot as the card dialog's live line (LauncherClient.agents_snapshot, ≤ 2 s old): no launcher
+    # call per card. Polled every 3 s by every open board, so it reads only what it answers with: the owners (one
+    # distinct query, no board load) and the snapshot's sessions in this project's checkout or owning a card here
+    # (Agents.groups still files those by the longest project path, so a nested repo's session stays out). The
+    # launcher down → 503 with the reason, never an empty "nobody works".
+    def board_live(slug)
+      project = store.project(slug) or return [404, { error: "no project #{slug}" }]
+
+      owners = kanban.cards.where(project_slug: slug, archived_at: nil).exclude(owner_session: nil)
+                     .distinct.select_map(:owner_session).to_set
+      snap = LauncherClient.agents_snapshot
+      root = project[:path]
+      here = snap.fetch("sessions").select do |s|
+        owners.include?(s["name"]) ||
+          s["panes"].any? { |p| (pp = p["project_path"]) && (pp == root || pp.start_with?("#{root}/")) }
+      end
+      sessions = Busyyaks::Agents.groups(snap.merge("sessions" => here), store.projects).flat_map { |_, _, ss| ss }
+      [200, { sessions: sessions.select { |s| s.project == slug || owners.include?(s.name) }.to_h { |s| [s.name, s.live] } }]
+    rescue LauncherClient::Unavailable, LauncherClient::Refused => e
+      [503, { error: "agent sessions: #{e.message}" }]
+    end
+
     # GET /api/projects/*slug/board/presence → {cards: {id => [PresentAgent]}}: who works on each card right now (the
     # engine's Store#presence over the launcher's live reading), polled by the board
     def board_presence(slug)

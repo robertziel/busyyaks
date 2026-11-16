@@ -53,9 +53,39 @@ module Busyyaks
     def file_config = MEMO.synchronize { @file_config ||= AgentSettings.file_hash(CONFIG_PATH) }
 
     # Boot: the file must load on the engine with a valid agent part (the repo template's, only to validate the file's
-    # own keys — the running config is always the database's revision: `config`). No database is touched here, so
-    # `hanami db migrate` boots before the agent_settings table exists.
-    def check_file! = AgentSettings.host(file_config, AgentSettings.template)
+    # own keys — the running config is always the database's revision: `config`), and its `theme` must map every
+    # board token. No database is touched here, so `hanami db migrate` boots before the agent_settings table exists.
+    def check_file!
+      check_theme!(file_config)
+      AgentSettings.host(file_config, AgentSettings.template)
+    end
+
+    # The board's --ak-* tokens = what the VENDORED engine's kanban.css declares in its `.ak-root { … }` rules — every
+    # one, at any indent (the light defaults and the prefers-color-scheme: dark set inside @media); a rule for a
+    # descendant (`.ak-root .kb-card`) declares none. Read from the file, never a list kept here; a file in which none
+    # is found is refused (a parse that finds nothing must not pass every theme).
+    ENGINE_CSS = File.expand_path("../../frontend/src/vendor/agents_kanban/styles/kanban.css", __dir__)
+    def engine_tokens(css = File.read(ENGINE_CSS))
+      blocks = css.scan(/^[ \t]*\.ak-root[ \t]*\{([^}]*)\}/).flatten
+      tokens = blocks.flat_map { |b| b.scan(/(--ak-[a-z0-9-]+)\s*:/).flatten }.uniq.sort
+      raise AgentsKanban::ConfigError, "#{ENGINE_CSS}: no --ak-* token declared in a .ak-root rule" if tokens.empty?
+
+      tokens
+    end
+
+    # A token the theme leaves out would show the engine's built-in colour instead of this deployment's
+    # skin — so every one is mapped, or the boot is refused naming the missing ones.
+    def check_theme!(hash, tokens: engine_tokens)
+      theme = hash["theme"]
+      raise AgentsKanban::ConfigError, "#{CONFIG_PATH}: theme must map the board's --ak-* tokens" unless theme.is_a?(Hash)
+
+      missing = tokens - theme.keys
+      return if missing.empty?
+
+      raise AgentsKanban::ConfigError,
+            "#{CONFIG_PATH}: theme maps no value for #{missing.join(', ')} — every --ak-* token the vendored engine's " \
+            "kanban.css declares needs one (config/kanban.example.yml maps them all)"
+    end
 
     # The origin a person's picture comes from (the host config's `avatar_url`) — the one image host the CSP
     # adds for it; nil = avatar_url null (initials only, no request leaves the page). The engine validated the template.

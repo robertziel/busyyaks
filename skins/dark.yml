@@ -32,3 +32,4 @@ tokens:
   "--warn": "#f2c14e"
   "--bad": "#ff6b7a" # rose: never a second orange beside --accent
   "--accent": "#ff8a3d"
+  "--working": "#5b9bff" # the board's blue glow: a card whose agent works now
