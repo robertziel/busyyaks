@@ -78,11 +78,14 @@ class AttachmentsApiTest < Minitest::Test
     assert_equal [a["id"]], card["attachments"].map { |x| x["id"] }
     board = JSON.parse(get("/api/projects/g/r/board").body)
     assert_equal 1, board["columns"][0]["cards"][0]["attachments"]
+    assert_equal({ "id" => a["id"], "filename" => "shot.png", "url" => a["url"] }, board["columns"][0]["cards"][0]["media"],
+                 "the card face carries its newest picture, served by this route")
 
     delete a["url"], {}, "HTTP_X_CSRF_TOKEN" => @csrf, "HTTP_ACCEPT" => "application/json"
     assert_equal 200, last_response.status
     d = JSON.parse(last_response.body)
     assert_empty d["card"]["attachments"]
+    assert_nil JSON.parse(get("/api/projects/g/r/board").body)["columns"][0]["cards"][0]["media"]
     assert_equal "deleted attachment shot.png", d["activity"].last["body"]
     get a["url"]
     assert_equal 404, last_response.status
