@@ -4,7 +4,9 @@
 # repo) against libgit2's own releases. ruby-advisory-db does not track libgit2, so this is that check: a NEWER release
 # on the same major.minor whose notes say it is a security release fails the build — fixed by bumping the ARG (and its
 # checksum), never by an allowlist. A release list GitHub does not give (network, rate limit) fails too: unknown is not
-# clean. Usage: ruby scripts/ci/libgit2-audit.rb <Dockerfile>
+# clean. Usage: CI_GITHUB_READ_TOKEN=<token> ruby scripts/ci/libgit2-audit.rb <Dockerfile>
+# Authenticated only: GitHub's anonymous limit is 60 requests/h per IP, shared by every build and agent on
+# a CI host, so anonymous audits went red with 403 whenever builds overlapped. No token → refused, never anonymous.
 require "json"
 require "net/http"
 require "uri"
@@ -14,14 +16,28 @@ pinned = File.read(dockerfile)[/^ARG LIBGIT2_VERSION=(\d+\.\d+\.\d+)$/,
 1] or abort "libgit2-audit: no ARG LIBGIT2_VERSION in #{dockerfile}"
 major, minor, patch = pinned.split(".").map(&:to_i)
 
-releases = (1..3).flat_map do |page|
+token = ENV.fetch("CI_GITHUB_READ_TOKEN", "")
+if token.strip.empty?
+  abort "libgit2-audit: CI_GITHUB_READ_TOKEN is not set — the audit never asks GitHub anonymously " \
+        "(60 requests/h per IP); give it a token that can read public repositories"
+end
+headers = { "Accept" => "application/vnd.github+json", "User-Agent" => "busyyaks-ci",
+            "Authorization" => "Bearer #{token.strip}", }
+
+releases = []
+(1..3).each do |page|
   uri = URI("https://api.github.com/repos/libgit2/libgit2/releases?per_page=100&page=#{page}")
-  res = Net::HTTP.get_response(uri, { "Accept" => "application/vnd.github+json", "User-Agent" => "busyyaks-ci" })
+  res = Net::HTTP.get_response(uri, headers)
   unless res.is_a?(Net::HTTPSuccess)
-    abort "libgit2-audit: GitHub answered #{res.code} for #{uri} — the release list is unknown, so is the audit"
+    left = res["x-ratelimit-remaining"]
+    reset = res["x-ratelimit-reset"]&.then { |t| Time.at(t.to_i).utc.strftime("%H:%M UTC") }
+    why = left == "0" ? " (rate limited, resets #{reset})" : ""
+    abort "libgit2-audit: GitHub answered #{res.code}#{why} for #{uri} — the release list is unknown, so is the audit"
   end
 
-  JSON.parse(res.body)
+  batch = JSON.parse(res.body)
+  releases.concat(batch)
+  break if batch.size < 100
 end
 abort "libgit2-audit: v#{pinned} is not a libgit2 release" unless releases.any? { |r| r["tag_name"] == "v#{pinned}" }
 

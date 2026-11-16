@@ -176,15 +176,28 @@ class CiGithubTest < Minitest::Test
   end
 
   # Every GitHub call goes through lib/github-api.sh's gh_curl: no other curl names a token or an Authorization header,
-  # and the Jenkinsfile runs no curl at all.
+  # and the Jenkinsfile runs no curl at all. A Ruby script (libgit2-audit.rb) sets the header in-process with
+  # Net::HTTP, where no argv sees it, and must spawn nothing: checked separately below.
   def test_no_token_reaches_curl_s_command_line_anywhere
     refute_match(/\bcurl\b|Authorization:/, File.read(File.join(ROOT, "Jenkinsfile")).gsub(%r{^\s*//.*$}, ""))
     Dir[File.join(ROOT, "scripts/ci/**/*")].select { |f| File.file?(f) }.each do |f|
       code = File.readlines(f).grep_v(/^\s*#/)
-      code.grep(/Authorization/).each do |l|
+      # a Ruby script's in-process Net::HTTP header is the next test's; every other rule here covers .rb files too
+      code.grep(/Authorization/).reject { f.end_with?(".rb") }.each do |l|
         assert_match(/^\s*curl -H @<\(printf 'Authorization: Bearer %s' "\$\{!var\}"\)/, l, "#{f}: #{l}")
       end
       code.grep(/(?<!gh_)\bcurl\b/).grep(/TOKEN/).each { |l| flunk("#{f}: a token next to a plain curl: #{l}") }
+    end
+  end
+
+  def test_a_ruby_ci_script_sends_its_token_in_process_and_spawns_nothing
+    Dir[File.join(ROOT, "scripts/ci/**/*.rb")].each do |f|
+      code = File.readlines(f).grep_v(/^\s*#/).join
+      next unless code.match?(/Authorization|TOKEN/)
+
+      assert_includes code, "Net::HTTP",
+"#{f}: an Authorization header only through Net::HTTP" if code.include?("Authorization")
+      refute_match(/\b(system|spawn|exec|popen|capture[23]?e?)\b|`|%x/, code, "#{f}: a script holding a token spawns nothing")
     end
   end
 end
