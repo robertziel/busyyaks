@@ -19,7 +19,7 @@ module Busyyaks
     DAILY_DAYS = 371
     # what the child reads of each repo's config: the push remote chain and the private-mirror guard
     CONFIG_KEYS = %w[branch.%{branch}.pushRemote remote.pushDefault branch.%{branch}.remote guard.mode
-                     guard.mirrorRemote guard.upstreamRemote guard.publicRemote].freeze
+                     guard.mirrorRemote guard.upstreamRemote guard.publicRemote guard.localBranch guard.publicBase].freeze
 
     def initialize(config, store, clock: -> { Busyyaks::Clock.epoch })
       @config = config
@@ -207,7 +207,8 @@ module Busyyaks
                     public_head: "guard.publicRemote", }.freeze
 
     def enrolment(read)
-      none = { local_mode: nil, local_repo: nil, public_repo: nil, public_head: nil, local_error: nil }
+      none = { local_mode: nil, local_repo: nil, public_repo: nil, public_head: nil, local_base: nil, public_base: nil,
+               local_error: nil, }
       mode = read["config"]["guard.mode"]
       return none if mode.to_s.empty?
       unless %w[own upstream].include?(mode)
@@ -221,7 +222,26 @@ module Busyyaks
         errors << (name.to_s.empty? ? "#{key} is not set" : "#{key} names remote #{name.inspect}, which has no URL") unless url
         [col, url]
       end
-      none.merge(local_mode: mode, **urls, local_error: errors.empty? ? nil : errors.join("; "))
+      bases = bases(read["config"], errors)
+      none.merge(local_mode: mode, **urls, **bases, local_error: errors.empty? ? nil : errors.join("; "))
+    end
+
+    # The branch each side's PRs must be based on: local_base = guard.localBranch (the local repo's working
+    # branch), public_base = guard.publicBase's branch (`<guard.upstreamRemote>/<branch>`, e.g. upstream/main → main).
+    # A key unset, or a publicBase that is no branch of the upstream remote → nil + said in local_error, never guessed.
+    def bases(cfg, errors)
+      local = cfg["guard.localBranch"].to_s
+      errors << "guard.localBranch is not set" if local.empty?
+      pub = cfg["guard.publicBase"].to_s
+      prefix = "#{cfg['guard.upstreamRemote']}/"
+      branch = pub.delete_prefix(prefix) if pub.start_with?(prefix) && pub.size > prefix.size && prefix != "/"
+      if pub.empty?
+        errors << "guard.publicBase is not set"
+      elsif branch.nil?
+        errors << "guard.publicBase #{pub.inspect} is not a branch of guard.upstreamRemote " \
+                  "#{cfg['guard.upstreamRemote'].inspect}"
+      end
+      { local_base: local.empty? ? nil : local, public_base: branch }
     end
   end
 end

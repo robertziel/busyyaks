@@ -111,6 +111,7 @@ class McpKanbanTest < Minitest::Test
     now = Busyyaks::Clock.epoch # the github service answers the request the refusal registered: green
     Hanami.app["db.gateway"].connection[:gh_pr_checks].where(repo: "o/r", ref: "pr:7")
                                                     .update(checked_at: now, number: 7, state: "success", finished_at: now,
+                                                            base: "main", draft: false, merge_state: "clean",
                                                             builds: JSON.generate([hand[:ci_url]])) # its build (card #470)
     ok("kanban_handoff", **hand)
 

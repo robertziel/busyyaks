@@ -264,6 +264,7 @@ mtime: Busyyaks::Clock.now.to_f, }],
     now = Busyyaks::Clock.epoch # the github service read the PR's checks green: a gate is handed off on green CI only
     Hanami.app["db.gateway"].connection[:gh_pr_checks].insert(repo: "o/r", ref: "pr:5", requested_at: now, checked_at: now,
                                                              number: 5, state: "success", finished_at: now,
+                                                             base: "main", draft: false, merge_state: "clean",
                                                              builds: '["https://ci/1"]') # the build handed off (card #470)
     kb.assign_pr(id, url: "https://github.com/o/r/pull/5", role: "pr", by: "elsewhere") # the PR its agent opened
     kb.handoff(id, qa: "Open the board, check the card ships what it says, then the PR diff and its CI build.",
