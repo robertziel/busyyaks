@@ -7,6 +7,7 @@ require "time"
 require "yaml"
 require "set"
 require_relative "github_feed"
+require_relative "github_pollers"
 require_relative "clock"
 
 module Busyyaks
@@ -36,7 +37,17 @@ module Busyyaks
     AVATAR = %r{\Ahttps://avatars\.githubusercontent\.com/[A-Za-z0-9_./?=&%-]+\z}
 
     class Error < StandardError; end
-    class RateLimited < Error; end
+    # reset: x-ratelimit-reset (epoch) when the primary limit is used up; retry_after: seconds from a secondary limit's
+    # Retry-After. Neither known → both nil (nothing says when it ends).
+    class RateLimited < Error
+      attr_reader :reset, :retry_after
+
+      def initialize(msg, reset: nil, retry_after: nil)
+        super(msg)
+        @reset = reset
+        @retry_after = retry_after
+      end
+    end
 
     # get(url, headers) → [status, {lowercased header => value}, body]; network failures raise Error.
     class Http
@@ -108,8 +119,11 @@ module Busyyaks
         path = url.delete_prefix(API)
         if status == 429 || (status == 403 && (h["x-ratelimit-remaining"] == "0" || msg.match?(/rate limit/i)))
           reset = h["x-ratelimit-reset"] ? Time.at(h["x-ratelimit-reset"].to_i).strftime("%H:%M") : "unknown"
-          raise RateLimited, "GitHub rate limited (#{h['x-ratelimit-remaining'] || '?'}/" \
-                             "#{h['x-ratelimit-limit'] || '?'} left, resets #{reset}) at #{path}: #{msg}"
+          retry_after = h["retry-after"]&.match?(/\A\d+\z/) ? h["retry-after"].to_i : nil
+          used_up = h["x-ratelimit-remaining"] == "0" && h["x-ratelimit-reset"]
+          raise RateLimited.new("GitHub rate limited (#{h['x-ratelimit-remaining'] || '?'}/" \
+                                "#{h['x-ratelimit-limit'] || '?'} left, resets #{reset}) at #{path}: #{msg}",
+                                reset: used_up ? h["x-ratelimit-reset"].to_i : nil, retry_after: retry_after)
         end
         raise Error, "GitHub rejected GITHUB_TOKEN (401): #{msg}" if status == 401
 
@@ -358,7 +372,17 @@ module Busyyaks
         { window: { hours: hours, from: from, to: now }, login: login, status: status(data, login, from),
           followees: followees.map { |f| person(f, network[f]) },
           repos: repos(data, followees, from, now), people: people(data, login, followees, from),
-          feed: FeedEvents.call(data, login: login, from: from, to: now), }
+          feed: FeedEvents.call(data, login: login, from: from, to: now), pollers: pollers(data, now), }
+      end
+
+      # the PR pollers' last tick (GithubPollers): its cost, the rate limit left, a pause; nil = never ran
+      def pollers(data, now)
+        row = GithubPollers.new(db: data.db).status
+        return nil unless row
+
+        row.slice(:ran_at, :calls, :not_modified, :rate_limit, :rate_remaining, :rate_reset)
+           .merge(paused_until: row[:paused_until] && row[:paused_until] > now ? row[:paused_until] : nil,
+                  error: row[:paused_until] && row[:paused_until] > now ? row[:error] : nil)
       end
 
       def status(data, login, from)

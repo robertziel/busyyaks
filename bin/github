@@ -9,6 +9,7 @@ require "hanami/prepare"
 require "busyyaks/github_network"
 require "busyyaks/ci_checks"
 require "busyyaks/pr_states"
+require "busyyaks/github_pollers"
 require "busyyaks/github_prs"
 require "busyyaks/config"
 require "busyyaks/clock"
@@ -24,16 +25,20 @@ $stdout.sync = true
 # PR check status for the kanban idle watch (config/kanban.yml idle_watch): answers the rows the notifier asked for
 # (gh_pr_checks), on its own faster cadence. A failed poll is stored on the row; the notifier says it, never guesses.
 # Same cadence: the PR state behind the card links' flags (gh_pr_states), asked for by the web.
-# an enrolled project's repo missing from ci.required is said on /github and refused on that card's gate — never a
+# Both share one token: a rate-limited answer pauses both until GitHub's reset (Busyyaks::GithubPollers, gh_pollers —
+# each tick's cost and the limit left, shown on /github). An enrolled project's repo missing from ci.required is said on /github and refused on that card's gate — never a
 # reason to stop polling every other project's PRs
 missing = Busyyaks::CiChecks.unlisted(data.db, config.ci)
 puts "ci.required does not list #{missing.join(', ')}: their cards' CI is refused until it does" if missing.any?
 Thread.new do
-  client = Busyyaks::GithubNetwork::Client.new(token: token)
-  poller = Busyyaks::CiChecks::Poller.new(db: data.db, client: client, wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval),
-                                          ci: config.ci) # config ci: the contexts that gate per repo + the stuck limit
-  states = Busyyaks::PrStates::Poller.new(db: data.db, client: client, wanted_for: Busyyaks::PrStates.wanted_for(ci_interval))
+  gate = Busyyaks::GithubPollers.new(db: data.db)
   loop do
+    client = Busyyaks::GithubNetwork::Client.new(token: token) # one per tick: its counters are the tick's cost
+    poller = Busyyaks::CiChecks::Poller.new(db: data.db, client: client, gate: gate,
+                                            wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval),
+                                            ci: config.ci) # config ci: the contexts that gate per repo + the stuck limit
+    states = Busyyaks::PrStates::Poller.new(db: data.db, client: client, gate: gate,
+                                            wanted_for: Busyyaks::PrStates.wanted_for(ci_interval))
     begin
       n = poller.run
       puts "ci checks polled=#{n}" if n.positive?
@@ -45,6 +50,13 @@ Thread.new do
       puts "pr states polled=#{n}" if n.positive?
     rescue StandardError => e
       puts "pr states FAILED #{e.class}: #{e.message}"
+    end
+    begin
+      gate.finished(client)
+      why = gate.paused
+      puts "pr pollers #{why}" if why
+    rescue StandardError => e
+      puts "pr pollers status FAILED #{e.class}: #{e.message}"
     end
     sleep ci_interval
   end

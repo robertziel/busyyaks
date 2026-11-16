@@ -98,41 +98,78 @@ module Busyyaks
       end
     end
 
+    # The github service's side. Every read is conditional, like CiChecks::Poller's: the ETag GitHub gave for the PR
+    # and the fields read from it (KEEP) are kept in gh_pages under `pr:<url>`, so an unchanged PR answers 304, which
+    # costs no rate limit — without it every wanted row was a full call each tick. A cached URL nobody read for
+    # wanted_for is deleted at the end of each run. While `gate` (GithubPollers) is paused nothing is sent and every
+    # wanted row says why.
     class Poller
-      def initialize(db:, client:, wanted_for:, clock: -> { Busyyaks::Clock.epoch })
+      KEEP = %w[number html_url state draft merged_at].freeze
+      PAGE = "pr:"
+
+      def initialize(db:, client:, gate:, wanted_for:, clock: -> { Busyyaks::Clock.epoch })
         @db = db
         @client = client
+        @gate = gate
+        @pages = GithubNetwork::Data.new(db)
         @wanted_for = wanted_for # seconds a row stays interesting after the web last asked
         @clock = clock
       end
 
-      # → number of rows answered
+      # → number of rows read (0 while paused)
       def run
         now = @clock.call
         rows = @db[:gh_pr_states].where(Sequel.lit("requested_at >= ?", now - @wanted_for)).all
                                  .reject { |r| FINAL.include?(r[:state]) && r[:checked_at] && r[:error].nil? }
-        rows.each do |row|
+        paused = @gate.paused
+        if paused
+          rows.each { |row| fail_row(row, paused) }
+          return 0
+        end
+
+        rows.each_with_index do |row, i|
           @db[:gh_pr_states].where(id: row[:id]).update(poll(row).merge(checked_at: now, error: nil))
+        rescue GithubNetwork::RateLimited => e # the token's limit: the rest of the batch would fail the same way
+          why = @gate.rate_limited!(e)
+          rows[i..].each { |r| fail_row(r, why) }
+          break
         rescue StandardError => e # stored on the row and said on the link; the rest of the batch still runs
-          error = e.is_a?(GithubNetwork::Error) ? e.message : "#{e.class}: #{e.message}"
-          @db[:gh_pr_states].where(id: row[:id]).update(error: error[0, 500], checked_at: nil)
-        end.size
+          fail_row(row, e.is_a?(GithubNetwork::Error) ? e.message : "#{e.class}: #{e.message}")
+        end
+        @db[:gh_pages].where(Sequel.like(:url, "#{PAGE}%")).where(Sequel.lit("at < ?", now - @wanted_for)).delete
+        rows.size
       end
 
       private
+
+      def fail_row(row, error) = @db[:gh_pr_states].where(id: row[:id]).update(error: error[0, 500], checked_at: nil)
 
       def poll(row)
         kind, name = row[:ref].split(":", 2)
         # a PR assigned to a card: a 404 is "not visible to the token / no such PR", never a state
         raise GithubNetwork::Error, "#{row[:repo]} #{row[:ref]}: not a pr:<n> ref" unless kind == "pr"
 
-        page = @client.get("/repos/#{row[:repo]}/pulls/#{Integer(name)}", missing_ok: true)
-        if page.status == 404
-          raise GithubNetwork::Error, "#{row[:repo]}##{name}: 404 — no such PR, or the token cannot see the repo"
-        end
+        pr = get("/repos/#{row[:repo]}/pulls/#{Integer(name)}")
+        raise GithubNetwork::Error, "#{row[:repo]}##{name}: 404 — no such PR, or the token cannot see the repo" unless pr
 
-        pr = page.body
         { number: pr["number"], url: pr["html_url"], state: state(pr) }
+      end
+
+      # one conditional GET → the PR's KEEP fields (a 304 = the stored ones, its cache entry marked read now); 404 → nil
+      def get(url)
+        key = "#{PAGE}#{url}"
+        cached = @pages.page(key)
+        cached = nil unless cached&.dig(:items)
+        page = @client.get(url, etag: cached&.dig(:etag), missing_ok: true)
+        if page.not_modified?
+          @db[:gh_pages].where(url: key).update(at: @clock.call)
+          return JSON.parse(cached[:items])
+        end
+        return nil if page.status == 404
+
+        body = page.body.slice(*KEEP)
+        @pages.save_page(key, page.etag, @clock.call, items: body)
+        body
       end
 
       def state(pr)

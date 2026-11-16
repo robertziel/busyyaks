@@ -19,6 +19,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - CI audits `main` daily; a red run opens the issue "Daily CI red on main".
 - **Breaking:** `.env` requires `TEST_WORKERS` (every `docker compose` command reads it); `scripts/ci/test.sh audit` requires `CI_GITHUB_CACHE_DIR`.
 - **Breaking:** `scripts/ci/test.sh flake` (and so `all`) requires `CI_BASE_REF`; `ruby`, `ruby-pg`, `frontend` and `flake` require a Docker host with at least `CI_RUNNER_CPUS` (4) CPUs whose daemon applies `--cpus` (a rootless dockerd needs the cpu controller delegated); see `CONTRIBUTING.md` § Tests.
+- GitHub PR-state reads are conditional (an unchanged PR answers 304 and costs no rate limit); when the token's rate limit is used up, the CI-check and PR-state polling pauses until GitHub's reset, each waiting card says so, and `/github` shows each tick's calls, 304s, the limit left and the pause.
 
 ## [1.0.0-beta.2] - 2026-11-15
 

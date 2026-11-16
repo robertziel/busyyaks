@@ -87,7 +87,8 @@ class CiChecksTest < Minitest::Test
     @http = FakeHttp.new
     @launcher = FakeLauncher.new
     @client = client = Busyyaks::GithubNetwork::Client.new(token: "t", http: @http)
-    @poller = CK::Poller.new(db: @conn, client: client, wanted_for: 600, ci: ci_settings, clock: -> { @now })
+    @gate = Busyyaks::GithubPollers.new(db: @conn, clock: -> { @now })
+    @poller = CK::Poller.new(db: @conn, client: client, gate: @gate, wanted_for: 600, ci: ci_settings, clock: -> { @now })
     @port = CK::Port.new(db: @conn, projects: ->(s) { @conn[:projects].where(slug: s).first },
                          approvals: ->(s) { CK.steps(@kb.board_of(s)) }, launcher: @launcher,
                          stale_after: 180, wanted_for: 600, clock: -> { @now })

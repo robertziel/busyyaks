@@ -1,5 +1,5 @@
 // The /github page's pure logic: which window the URL asks for, and the collector status line.
-import type { GithubFeedRepo, GithubFeedStatus, GithubStatus } from "../types";
+import type { GithubFeedRepo, GithubFeedStatus, GithubPollers, GithubStatus } from "../types";
 import { ago, at } from "./format";
 
 export const WINDOWS = [
@@ -39,6 +39,22 @@ export function statusLine(s: GithubStatus, now: number): StatusLine {
   }
   const parts = [`collected ${ago(s.last_run_at, now)} ago`];
   if (cost) parts.push(cost);
+  if (rate) parts.push(rate);
+  return { tone: "ok", parts };
+}
+
+// The PR pollers' line (CI checks + PR states): their last tick, its cost, the limit left — or the pause and until when.
+export function pollersLine(p: GithubPollers | null, now: number): StatusLine {
+  if (p == null) return { tone: "warn", parts: ["PR pollers: no tick yet"] };
+  const rate =
+    p.rate_remaining != null && p.rate_limit != null ? `${n(p.rate_remaining)}/${n(p.rate_limit)} API left` : null;
+  if (p.paused_until != null) {
+    const parts = [`PR pollers paused until ${at(p.paused_until)} (${ago(now, p.paused_until)})`];
+    if (p.error) parts.push(p.error);
+    if (rate) parts.push(rate);
+    return { tone: "bad", parts };
+  }
+  const parts = [`PR pollers ran ${ago(p.ran_at, now)} ago`, `${p.calls} calls · ${p.not_modified} × 304`];
   if (rate) parts.push(rate);
   return { tone: "ok", parts };
 }

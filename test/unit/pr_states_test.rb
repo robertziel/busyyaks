@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "digest"
 require "busyyaks/pr_states"
 
 # PR flags — Poller (github side) + Reader (web side) over gh_pr_states, and the links they flag.
@@ -9,12 +10,16 @@ class PrStatesTest < Minitest::Test
   PS = Busyyaks::PrStates
 
   class FakeHttp
-    attr_accessor :pulls, :requests, :fail
+    attr_accessor :pulls, :requests, :fail, :limited
     def initialize = (@requests = []; @pulls = [])
     def get(url, headers)
       raise "no token" unless headers["Authorization"]
       @requests << url
       return [401, {}, "{\"message\":\"Bad credentials\"}"] if @fail
+      if @limited # the token's limit used up: x-ratelimit-reset = @limited
+        return [403, { "x-ratelimit-remaining" => "0", "x-ratelimit-reset" => @limited.to_s },
+                "{\"message\":\"API rate limit exceeded for user\"}",]
+      end
 
       body = case url
              when %r{/pulls\?state=all&head=([^&]+)}
@@ -24,7 +29,11 @@ class PrStatesTest < Minitest::Test
              end
       return [404, {}, "{\"message\":\"Not Found\"}"] if body.nil?
 
-      [200, {}, JSON.generate(body)]
+      json = JSON.generate(body)
+      etag = "\"#{Digest::SHA1.hexdigest(json)}\""
+      return [304, {}, ""] if headers["If-None-Match"] == etag # GitHub: unchanged since that ETag, not rate-counted
+
+      [200, { "etag" => etag }, json]
     end
   end
 
@@ -38,8 +47,9 @@ class PrStatesTest < Minitest::Test
     @db = Hanami.app["db.gateway"].connection
     @now = 1_000_000
     @http = FakeHttp.new
-    client = Busyyaks::GithubNetwork::Client.new(token: "t", http: @http)
-    @poller = PS::Poller.new(db: @db, client: client, wanted_for: 600, clock: -> { @now })
+    @client = client = Busyyaks::GithubNetwork::Client.new(token: "t", http: @http)
+    @gate = Busyyaks::GithubPollers.new(db: @db, clock: -> { @now })
+    @poller = PS::Poller.new(db: @db, client: client, gate: @gate, wanted_for: 600, clock: -> { @now })
     @reader = PS::Reader.new(db: @db, stale_after: 180, wanted_for: 600, clock: -> { @now })
     @flags = PS::Flags.new(@reader)
   end
@@ -55,6 +65,58 @@ class PrStatesTest < Minitest::Test
     @http.requests.clear
     assert_equal 3, @poller.run, "merged is final"
     refute @http.requests.any? { |u| u.end_with?("/pulls/3") }
+  end
+
+  # a rate limit is the token's, never a PR's state — it pauses the pollers until the reset (the rest of the batch says
+  # so, nothing more is sent); the PRs are read after it
+  def test_a_rate_limit_pauses_the_gate_until_the_reset
+    @http.pulls = [pr(5, "o/m"), pr(6, "o/m")]
+    @http.limited = @now + 900
+    @reader.lookup("o/m", "pr:5")
+    @reader.lookup("o/m", "pr:6")
+    @poller.run
+    assert_match(/\Apolling paused until .*rate limit/, @gate.paused)
+    @db[:gh_pr_states].order(:ref).select_map(%i[ref state error]).each do |ref, state, error|
+      assert_nil state, "#{ref}: no state stored"
+      assert_match(/\Apolling paused until /, error, ref)
+    end
+    assert_equal 1, @http.requests.size, "pr:5 refused: pr:6 not sent"
+    @http.requests.clear
+    @poller.run
+    assert_empty @http.requests, "paused: nothing sent"
+    @now += 901
+    @http.limited = nil
+    %w[pr:5 pr:6].each { |r| @reader.lookup("o/m", r) } # still wanted after the pause
+    @poller.run
+    assert_equal %w[open open], %w[pr:5 pr:6].map { |r| @reader.lookup("o/m", r)[:state] }
+  end
+
+  # a wanted PR is read every minute; while it stands still each read is a 304 (no rate limit), and only the fields the
+  # state needs are cached, pruned once nobody asked for the PR for wanted_for
+  def test_an_unchanged_pr_state_costs_no_rate_limit
+    @http.pulls = [pr(1, "o/m")]
+    @reader.lookup("o/m", "pr:1")
+    @poller.run
+    assert_equal 1, @client.calls
+    30.times do
+      @now += 60
+      @reader.lookup("o/m", "pr:1")
+      @poller.run
+    end
+    assert_equal 1, @client.calls, "30 polls later: every read a 304"
+    assert_equal 30, @client.not_modified
+    assert_equal "open", @reader.lookup("o/m", "pr:1")[:state]
+    assert_equal @now, @reader.lookup("o/m", "pr:1")[:checked_at], "a 304 is a fresh read"
+    @http.pulls = [pr(1, "o/m", draft: true)]
+    @now += 60
+    @poller.run
+    assert_equal 2, @client.calls, "the change is read"
+    assert_equal "draft", @reader.lookup("o/m", "pr:1")[:state]
+    page = @db[:gh_pages].where(url: "pr:/repos/o/m/pulls/1").first
+    assert_equal %w[draft html_url merged_at number state], JSON.parse(page[:items]).keys.sort
+    @now += 601
+    @poller.run
+    assert_nil @db[:gh_pages].where(url: "pr:/repos/o/m/pulls/1").first, "nobody asked for 10 min: pruned"
   end
 
   # only PRs assigned to cards are read — a head: ref (the old branch lookup) is an error on its row
