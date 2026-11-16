@@ -1,5 +1,5 @@
 // The "waiting for you" widget's data (GET /api/waiting, the engine's Api#waiting) and the pure bits the view shows.
-import type { LaunchFailure } from "../vendor/agents_kanban";
+import type { LaunchFailure, LeadEnd } from "../vendor/agents_kanban";
 import { projectPath } from "./format";
 
 // kind: "ask" = flagged needs_operator (a question, in whatever column) · "review" = in a gate column (work to check, a
@@ -22,8 +22,10 @@ export type WaitingCard = {
 export type WaitingProject = { slug: string; icon: string | null; count: number; cards: WaitingCard[] };
 // projects: the cards waiting for the operator (total = their sum). held: gate cards CI holds (not approvable now);
 // external: blocked_external cards (waiting for the world) — neither counts as waiting for you.
-// launch_failures: the sessions whose start failed in the last day (a launch or a spawn: claude never came up) — the
-// layout's LaunchFailureAlert opens a modal for the ones this viewer has not dismissed
+// launch_failures: the sessions whose start failed in the last day (a launch or a lead's spawn: claude never came
+// up); lead_ends: the boards whose lead ended on its own (gone from the host — never the operator's stop; nothing
+// relaunches it: press Launch) — the layout's LaunchFailureAlert opens a modal for the ones this viewer has
+// not dismissed
 export type Waiting = {
   waiting_columns: string[];
   total: number;
@@ -31,6 +33,7 @@ export type Waiting = {
   held: WaitingProject[];
   external: WaitingProject[];
   launch_failures: LaunchFailure[];
+  lead_ends: LeadEnd[];
 };
 
 export const cardHref = (slug: string, id: number) => `${projectPath(slug)}?tab=board&card=${id}`;

@@ -23,6 +23,9 @@ module Busyyaks
   module Kanban
     Invalid = AgentsKanban::Invalid
     Denied = AgentsKanban::Denied
+    # the newest agent settings revision is refused by the engine (a type that runs under no lead, …): every
+    # caller of `config` fails with this reason — never an older revision instead
+    class Unrunnable < StandardError; end
     # the host config file: KANBAN_CONFIG (compose: /app/config/kanban.yml, the deployment's copy of config/kanban.example.yml;
     # the test suite: the example itself). Required — no default path.
     CONFIG_PATH = ENV.fetch("KANBAN_CONFIG")
@@ -102,7 +105,12 @@ module Busyyaks
       MEMO.synchronize do
         if @config.nil? || @config_rev != rev
           cur = AgentSettings.current(conn)
-          @config = AgentSettings.host(file_config, cur[:doc])
+          @config = begin
+            AgentSettings.host(file_config, cur[:doc])
+          rescue AgentsKanban::ConfigError, AgentsKanban::Invalid => e
+            raise Unrunnable, "agent settings revision #{cur[:id]} does not run: #{e.message} — save a fixed one on " \
+                              "Settings → Agents & launchers"
+          end
           @config_rev = cur[:id]
           REVISIONS[@config] = { id: cur[:id], doc: cur[:doc] }.freeze
         end
@@ -154,7 +162,9 @@ module Busyyaks
     def tools(st = default, sessions: nil)
       AgentsKanban::Tools.new(store: st, attachments: attachments(st), projects: method(:project), backlog: method(:backlog),
                               sessions: sessions || -> { LauncherClient.session_names }, grace: grace,
-                              card_url: ->(slug, id) { card_url(slug, id) }) # each card's `url` (Links rule)
+                              card_url: ->(slug, id) { card_url(slug, id) }, # each card's `url` (Links rule)
+                              # kanban_spawn (the lead starts a worker): the same LAUNCH port as the Launch bar
+                              launcher: LauncherClient::LaunchPort.new(revision_of(st.config)))
     end
 
     # config/kanban.yml session_boards' slug prefix (nil = session boards off).
@@ -181,12 +191,11 @@ module Busyyaks
                             press: ->(**kw) { LauncherClient.answer(**kw) }, **extras)
     end
 
-    # The notifier: deliver + watch + the spawn pass (a To do card gets its own worker session through the same launch
-    # path as the Launch button: Api#spawn_pass).
+    # The notifier: deliver + watch. It starts NO session (lead-first boards): the lead takes ownerless cards
+    # and starts its workers with kanban_spawn; a lead that is gone is on the waiting list, never relaunched.
     def notifier(grace: self.grace)
       st = default
-      a = api(st)
-      AgentsKanban::Notifier.new(st, client: LauncherClient, grace: grace, spawner: -> { a.spawn_pass }, ci: ci_port(st.db))
+      AgentsKanban::Notifier.new(st, client: LauncherClient, grace: grace, ci: ci_port(st.db))
     end
 
     # Card #511: the cards the operator can Approve whose step reads a request the github service no longer polls

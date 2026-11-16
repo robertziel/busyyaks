@@ -10,8 +10,9 @@ class KanbanConfigTest < Minitest::Test
   def test_committed_config_loads_with_the_vendored_engine
     cfg = Busyyaks::Kanban.config # the file + the suite's agent settings revision (test/fixtures/agents.yml)
     assert_equal %w[lead worker team plain], cfg.agent_type_keys
-    assert_equal %w[gate], cfg.agent_type("lead").takes
-    assert_equal %w[queued working review gate], cfg.agent_type("worker").spawns_for
+    assert_equal %w[queued working review gate], cfg.agent_type("lead").takes
+    assert_equal "lead", cfg.agent_type("worker").under
+    assert cfg.agent_type("plain").standalone
     assert_equal 24, cfg.flags.reminder_hours
     assert_equal [3, "unresolved", "red", %w[local_agent_review public_agent_review]], cfg.review_loop.to_a
     # subagent roles' colours, a person's picture, and every agent type + role a colour of its own

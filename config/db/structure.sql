@@ -309,28 +309,6 @@ CREATE INDEX `gh_events_login_created_at_index` ON `gh_events`(
   `login`,
   `created_at`
 );
-CREATE TABLE `agent_sessions`(
-  `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
-  `session` varchar(255) NOT NULL,
-  `socket` varchar(255) NOT NULL,
-  `project_slug` varchar(255) NOT NULL,
-  `type_key` varchar(255) NOT NULL,
-  `launcher_key` varchar(255) NOT NULL,
-  `agent_name` varchar(255) NOT NULL,
-  `launched_by` varchar(255) NOT NULL,
-  `launched_at` integer NOT NULL,
-  `last_seen_at` integer,
-  `ended_at` integer,
-  `end_reason` text
-);
-CREATE INDEX `agent_sessions_session_ended_at_index` ON `agent_sessions`(
-  `session`,
-  `ended_at`
-);
-CREATE INDEX `agent_sessions_project_slug_ended_at_index` ON `agent_sessions`(
-  `project_slug`,
-  `ended_at`
-);
 CREATE TABLE `ci_watches`(
   `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
   `card_id` integer NOT NULL,
@@ -450,6 +428,32 @@ CREATE TABLE `setup_completions`(
   `author` varchar(255) NOT NULL,
   `created_at` integer NOT NULL
 );
+CREATE TABLE `agent_sessions`(
+  `id` INTEGER DEFAULT(NULL) NOT NULL PRIMARY KEY AUTOINCREMENT,
+  `session` varchar(255) DEFAULT(NULL) NOT NULL,
+  `socket` varchar(255) DEFAULT(NULL) NOT NULL,
+  `project_slug` varchar(255) DEFAULT(NULL) NOT NULL,
+  `type_key` varchar(255) DEFAULT(NULL) NOT NULL,
+  `launcher_key` varchar(255) DEFAULT(NULL) NOT NULL,
+  `agent_name` varchar(255) DEFAULT(NULL) NOT NULL,
+  `launched_by` varchar(255) DEFAULT(NULL) NOT NULL,
+  `launched_at` INTEGER DEFAULT(NULL) NOT NULL,
+  `last_seen_at` INTEGER DEFAULT(NULL) NULL,
+  `ended_at` INTEGER DEFAULT(NULL) NULL,
+  `end_reason` TEXT DEFAULT(NULL) NULL,
+  `lead_id` INTEGER DEFAULT(NULL) NULL,
+  `needs_lead` INTEGER DEFAULT(0) NOT NULL,
+  `lead_key_digest` varchar(255) DEFAULT(NULL) NULL,
+  CONSTRAINT `agent_sessions_lead_required` CHECK(needs_lead = 0 OR lead_id IS NOT NULL)
+);
+CREATE INDEX `agent_sessions_project_slug_ended_at_index` ON `agent_sessions`(
+  `project_slug`,
+  `ended_at`
+);
+CREATE INDEX `agent_sessions_session_ended_at_index` ON `agent_sessions`(
+  `session`,
+  `ended_at`
+);
 CREATE TABLE `gh_pollers`(
   `name` varchar(255) NOT NULL PRIMARY KEY,
   `ran_at` integer NOT NULL,
@@ -498,6 +502,7 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261204000000_daily_report_settings.rb'),
 ('20261205000000_setup_completions.rb'),
 ('20261206000000_agents_kanban_session_boards.rb'),
+('20261207463000_lead_first_boards.rb'),
 ('20261207470000_gh_pr_checks_builds.rb'),
 ('20261208000000_gh_pollers.rb'),
 ('20261208046700_pr_closed_reason.rb');

@@ -75,8 +75,12 @@ class LaunchTest < Minitest::Test
 
       { ok: true, session: req["session"], type: req["type"], launcher: req["launcher"],
         prompt: !req["prompt_template"].nil?, **@remote_control, }
+    when "lead_key"
+      k = (@lead_keys || {})[req["session"]]
+      k ? { ok: true, key: k } : { ok: false, status: 422, error: "#{req['session']}: no lead this launcher started" }
     when "sessions"
-      { ok: true, sessions: [{ name: "group_repo", project_path: "/projects/group/repo", created: 1, attached: false }] }
+      names = ["group_repo", *@live_extra]
+      { ok: true, sessions: names.map { |n| { name: n, project_path: "/projects/group/repo", created: 1, attached: false } } }
     when "jobs"
       { ok: true, jobs: [{ url: "https://github.com/o/r.git", path: "/projects/r", status: "failed", exit: 128,
                            tail: ["fatal: nope"], }], }
@@ -559,6 +563,7 @@ mtime: Busyyaks::Clock.now.to_f, }],
     orphan = k.create(slug: "group/repo", title: "left over after the reboot", by: "op", column: "human_check")
     j = api(:post, "/api/launch", { slug: "group/repo", type: "lead", launcher: "localclaude" })
     assert_equal 201, last_response.status
+    lead_body = last_response.body
     assert_equal ["group_repo_teamlead", "lead", "localclaude", "claude-group_repo_teamlead", [orphan]],
                  j.values_at("session", "type", "launcher", "agent").push(j["adopted"].map { |c| c["id"] })
     assert_equal({ "ok" => true, "session" => "group_repo_teamlead", "type" => "lead", "launcher" => "localclaude",
@@ -587,26 +592,45 @@ mtime: Busyyaks::Clock.now.to_f, }],
     # the lead runs localclaude → a sub team and a worker for this board run it too, with no --model (it
     # would override the gateway's); the Launch bar locks the menu to it; another launcher asked for is refused
     l = api(:get, "/api/projects/group/repo")["launches"]
-    assert_equal "lead", l["types"].find { |t| t["key"] == "team" }["launcher_follows"]
+    assert_equal "lead", l["types"].find { |t| t["key"] == "team" }["under"]
     assert_equal [%w[group_repo_teamlead lead localclaude group/repo]],
                  l["concurrency"]["sessions"].map { |s| s.values_at("session", "type", "launcher", "project") },
                  "the page's sessions name the lead's launcher: the Launch bar locks the follower's menu to it (launchesFor)"
     j = api(:post, "/api/launch", { slug: "group/repo", type: "team", launcher: "fullclaude" })
     assert_equal 422, last_response.status
-    assert_match(/team sessions of group\/repo run localclaude while the lead session group_repo_teamlead does/, j["error"])
+    assert_match(/team sessions of group\/repo run localclaude, the launcher of their lead session group_repo_teamlead/,
+                 j["error"])
     j = api(:post, "/api/launch", { slug: "group/repo", type: "team", launcher: "localclaude" })
     assert_equal [201, "localclaude"], [last_response.status, j["launcher"]]
-    assert_equal ["bash", "-ic", "localclaude --remote-control #{j['session']}"],
-                 @requests.reverse.find { |r| r["op"] == "launch" }["argv"]
+    team_req = @requests.reverse.find { |r| r["op"] == "launch" }
+    assert_equal ["bash", "-ic", "localclaude --remote-control #{j['session']}"], team_req["argv"]
+    assert_equal [nil, "group_repo_teamlead"], team_req.values_at("lead_key", "lead"), "under the lead, no key"
+    # lead-first: the lead's key went to bin/launcher's start only (it keeps it) — never into an answer
+    lead_req = @requests.find { |r| r["op"] == "launch" && r["type"] == "lead" }
+    key = lead_req.fetch("lead_key")
+    assert_match(/\A\h{64}\z/, key)
+    assert_nil lead_req["lead"]
+    refute_includes lead_body, key
+    # an ownerless To do card is the lead's; the lead starts its worker with kanban_spawn (nothing else starts one)
     todo = k.create(slug: "group/repo", title: "new work", by: "op", column: "todo")
-    api_spawn = Busyyaks::Kanban.api
-    assert_equal [todo], api_spawn.spawn_pass
+    @live_extra = %w[group_repo_teamlead]
+    assert_equal [todo], Busyyaks::Kanban.default.adopt_ownerless(live: Busyyaks::LauncherClient.session_names, grace: 60)
+    assert_equal "group_repo_teamlead", k.card(todo)[:owner_session]
+    @lead_keys = { "group_repo_teamlead" => key } # what bin/launcher's lead_key op answers for the lead it started
+    spawn = { "id" => todo, "type" => "worker", "tmux_session" => "group_repo_teamlead",
+              "author" => "claude-group_repo_teamlead", }
+    out = JSON.parse(Busyyaks::Kanban.tools.call("kanban_spawn", spawn))
     req = @requests.reverse.find { |r| r["op"] == "launch" }
-    assert_equal %w[worker localclaude], req.values_at("type", "launcher")
+    assert_equal %w[worker localclaude group_repo_teamlead], req.values_at("type", "launcher", "lead")
     assert_equal ["bash", "-ic", "localclaude --remote-control #{req['session']}"], req["argv"]
+    assert_equal [out["session"], nil], [k.card(todo)[:owner_session], req["lead_key"]]
+    refute_includes JSON.generate(out), key, "the spawn answer carries no key"
+    @lead_keys = { "group_repo_teamlead" => "0" * 64 } # a key that is not the registration's
+    assert_raises(AgentsKanban::Denied) { Busyyaks::Kanban.tools.call("kanban_spawn", spawn.merge("id" => todo)) }
+    @lead_keys = {}
+    @live_extra = nil
     j = api(:post, "/api/launch", { slug: "group/repo", type: "plain" })
-    refused = "agent type plain runs fullclaude, localclaude and none was named — name the launcher, or set " \
-              "agent_types[plain].spawn_launcher"
+    refused = "agent type plain runs fullclaude, localclaude — name the launcher this session was started with"
     assert_equal [422, refused], [last_response.status, j["error"]], "never the first one"
     # claude never came up (bin/launcher refuses the launch and kills the session): 422 with the launcher's reason,
     # the registration ended — never a 201 with a registered owner nobody runs
@@ -617,13 +641,6 @@ mtime: Busyyaks::Clock.now.to_f, }],
     assert_equal [422, @launch_refused[:error]], [last_response.status, j["error"]]
     reg = Busyyaks::Kanban.store.sessions_t.where(session: "group_repo").order(:id).last
     refute_nil reg[:ended_at], "the refused start's registration is ended"
-    # a spawn for a card the same way: released, the reason on the card as its owner note (retried later)
-    lost = k.create(slug: "group/repo", title: "spawn me", by: "op", column: "todo")
-    assert_equal [], api_spawn.spawn_pass(only: lost)
-    card = Busyyaks::Kanban.store.card(lost)
-    assert_nil card[:owner_session]
-    note = Busyyaks::Kanban.store.activity_t.where(card_id: lost, kind: "owner").order(:id).last[:body]
-    assert_equal "spawn failed: #{@launch_refused[:error]}", note
 
   end
 
@@ -650,10 +667,28 @@ mtime: Busyyaks::Clock.now.to_f, }],
     j = api(:post, "/api/launch", { slug: "group/repo", type: "boss" })
     assert_equal 422, last_response.status
     assert_match(/no agent type "boss" \(lead, worker, team, plain\)/, j["error"])
-    j = api(:post, "/api/launch", { slug: "group/repo", type: "team", launcher: "nope" })
+    j = api(:post, "/api/launch", { slug: "group/repo", type: "plain", launcher: "nope" })
     assert_equal 422, last_response.status
-    assert_match(/agent type team does not run launcher "nope"/, j["error"])
+    assert_match(/agent type plain does not run launcher "nope"/, j["error"])
+    j = api(:post, "/api/launch", { slug: "group/repo", type: "team", launcher: "fullclaude" })
+    assert_equal 422, last_response.status
+    assert_match(%r{no lead session runs for group/repo: a team session runs only under the board's lead — launch the lead},
+                 j["error"])
     assert_nil @requests.find { |r| r["op"] == "launch" }
+  end
+
+  # review round 1 (blocker): a stored revision with a worker under no lead launches nothing — 503 with the reason
+  def test_a_stored_revision_with_a_type_under_no_lead_launches_nothing
+    fake_launcher
+    d = JSON.parse(JSON.generate(AgentSettingsFixture::DOC))
+    d["agent_types"].find { |t| t["key"] == "worker" }.delete("under")
+    Hanami.app["db.gateway"].connection[:agent_settings].insert(doc: JSON.generate(d), author: "by hand", created_at: 1)
+    j = api(:post, "/api/launch", { slug: "group/repo", type: "worker", launcher: "fullclaude" })
+    assert_equal 503, last_response.status
+    assert_match(/does not run: agent_types\[worker\] runs without a lead/, j["error"])
+    assert_nil @requests.find { |r| r["op"] == "launch" }, "nothing reached the launcher"
+  ensure
+    AgentSettingsFixture.install!
   end
 
   def test_launch_without_csrf_token_is_refused_and_signs_out

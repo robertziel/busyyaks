@@ -23,9 +23,8 @@ export type AgentType = {
   takes: string[];
   max: number | null;
   max_per_project: number | null;
-  spawns_for?: string[];
-  launcher_follows?: string | null;
-  spawn_launcher?: string | null;
+  // lead-first boards: the lead type a session of this type runs under (only while it runs, on its launcher)
+  under?: string | null;
 };
 // one host-allowlisted invocation: a launcher must equal one of them (its key and label are the dashboard's)
 export type Invocation = { kind: string; command: string; args: string[]; via_shell: boolean };
@@ -41,17 +40,15 @@ export type AgentSettingsData = {
   error: string | null; // why the CURRENT revision does not run, or null
 };
 
-// the engine's FIXED column types (agents_kanban ColumnTypes): what `takes` / `spawns_for` name
+// the engine's FIXED column types (agents_kanban ColumnTypes): what `takes` names
 export const COLUMN_TYPES = ["parked", "queued", "working", "review", "gate", "done", "cancelled"] as const;
 
 // In the form a type's model is always one field per launcher it runs ("" = Claude Code's own choice).
-export type TypeDraft = Omit<AgentType, "model" | "prompt" | "spawns_for" | "launcher_follows" | "spawn_launcher"> & {
+export type TypeDraft = Omit<AgentType, "model" | "prompt" | "under"> & {
   models: Record<string, string>;
   hasPrompt: boolean;
   prompt: string;
-  spawns_for: string[];
-  launcher_follows: string; // "" = none
-  spawn_launcher: string; // "" = none
+  under: string; // "" = runs on its own
 };
 export type Draft = { launchers: Launcher[]; types: TypeDraft[] };
 
@@ -76,9 +73,7 @@ export function toDraft(doc: AgentDoc): Draft {
       takes: [...t.takes],
       max: t.max,
       max_per_project: t.max_per_project,
-      spawns_for: [...(t.spawns_for ?? [])],
-      launcher_follows: t.launcher_follows ?? "",
-      spawn_launcher: t.spawn_launcher ?? "",
+      under: t.under ?? "",
     })),
   };
 }
@@ -113,23 +108,20 @@ export function fromDraft(d: Draft): AgentDoc {
         max: t.max,
         max_per_project: t.max_per_project,
       };
-      if (t.spawns_for.length) out.spawns_for = [...t.spawns_for];
-      if (t.launcher_follows) out.launcher_follows = t.launcher_follows;
-      if (t.spawn_launcher) out.spawn_launcher = t.spawn_launcher;
+      if (t.under) out.under = t.under;
       return out;
     }),
   };
 }
 
-// Toggle a launcher on a type: its model field and spawn_launcher follow (a launcher the type no longer runs keeps no
-// model and cannot be its spawn launcher).
+// Toggle a launcher on a type: its model field follows (a launcher the type no longer runs keeps no model).
 export function toggleLauncher(t: TypeDraft, key: string, on: boolean): TypeDraft {
   const launchers = on ? [...t.launchers.filter((k) => k !== key), key] : t.launchers.filter((k) => k !== key);
   const models = Object.fromEntries(launchers.map((l) => [l, t.models[l] ?? ""]));
-  return { ...t, launchers, models, spawn_launcher: launchers.includes(t.spawn_launcher) ? t.spawn_launcher : "" };
+  return { ...t, launchers, models };
 }
 
-// Renaming a launcher key renames it in every type that runs it (its model and spawn_launcher too).
+// Renaming a launcher key renames it in every type that runs it (its model too).
 export function renameLauncher(d: Draft, i: number, key: string): Draft {
   const old = d.launchers[i]!.key;
   const launchers = d.launchers.map((l, j) => (j === i ? { ...l, key } : l));
@@ -137,7 +129,7 @@ export function renameLauncher(d: Draft, i: number, key: string): Draft {
     if (!t.launchers.includes(old)) return t;
     const ls = t.launchers.map((k) => (k === old ? key : k));
     const models = Object.fromEntries(ls.map((l) => [l, l === key ? (t.models[old] ?? "") : (t.models[l] ?? "")]));
-    return { ...t, launchers: ls, models, spawn_launcher: t.spawn_launcher === old ? key : t.spawn_launcher };
+    return { ...t, launchers: ls, models };
   });
   return { launchers, types };
 }
@@ -189,9 +181,7 @@ export const newType = (launchers: Launcher[]): TypeDraft => ({
   takes: [],
   max: 0,
   max_per_project: 0,
-  spawns_for: [],
-  launcher_follows: "",
-  spawn_launcher: "",
+  under: "",
 });
 
 export const sameDoc = (a: AgentDoc, b: AgentDoc) => JSON.stringify(a) === JSON.stringify(b);

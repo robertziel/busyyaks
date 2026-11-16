@@ -52,9 +52,7 @@ const doc: AgentDoc = {
       takes: [],
       max: 0,
       max_per_project: 0,
-      spawns_for: ["queued", "working"],
-      launcher_follows: "lead",
-      spawn_launcher: "fullclaude",
+      under: "lead",
     },
   ],
 };
@@ -81,21 +79,16 @@ describe("agent settings form", () => {
   it("a prompt switched off is null; optional keys are left out when unset", () => {
     const d = toDraft(doc);
     d.types[0]!.hasPrompt = false;
-    d.types[1]!.launcher_follows = "";
-    d.types[1]!.spawn_launcher = "";
-    d.types[1]!.spawns_for = [];
+    d.types[1]!.under = "";
     const out = fromDraft(d).agent_types;
     expect(out[0]!.prompt).toBeNull();
-    expect(Object.keys(out[1]!)).not.toContain("launcher_follows");
-    expect(Object.keys(out[1]!)).not.toContain("spawn_launcher");
-    expect(Object.keys(out[1]!)).not.toContain("spawns_for");
+    expect(Object.keys(out[1]!)).not.toContain("under");
   });
 
-  it("unticking a launcher drops its model and a spawn_launcher naming it", () => {
+  it("unticking a launcher drops its model", () => {
     const t = toggleLauncher(toDraft(doc).types[1]!, "fullclaude", false);
     expect(t.launchers).toEqual(["local"]);
     expect(t.models).toEqual({ local: "" });
-    expect(t.spawn_launcher).toBe("");
     expect(toggleLauncher(t, "fullclaude", true).launchers).toEqual(["local", "fullclaude"]);
   });
 
@@ -104,7 +97,6 @@ describe("agent settings form", () => {
     expect(r.launchers[0]!.key).toBe("claude");
     expect(r.types[1]!.launchers).toEqual(["claude", "local"]);
     expect(r.types[1]!.models).toEqual({ claude: "opus", local: "" });
-    expect(r.types[1]!.spawn_launcher).toBe("claude");
     const x = removeLauncher(toDraft(doc), 1);
     expect(x.launchers.map((l) => l.key)).toEqual(["fullclaude"]);
     expect(x.types.map((t) => t.launchers)).toEqual([["fullclaude"], ["fullclaude"]]);

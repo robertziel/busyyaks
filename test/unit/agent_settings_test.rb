@@ -68,7 +68,7 @@ class AgentSettingsTest < Minitest::Test
     client.define_method(:call) { |req| sent << req and { "ok" => true } }
     begin
       api.instance_variable_get(:@launcher).start(session: "s", project: { path: "/p" }, type: "lead", launcher: "fullclaude",
-                                                  argv: [], prompt_template: nil, vars: {})
+                                                  argv: [], prompt_template: nil, vars: {}, lead_key: nil, lead: nil)
     ensure
       client.alias_method(:call, :call_unstubbed)
       client.remove_method(:call_unstubbed)
@@ -85,6 +85,24 @@ class AgentSettingsTest < Minitest::Test
     assert_equal 409, status
     assert_match(/revision #{old} is not the newest/, body[:error])
     assert_equal 2, db[:agent_settings].count
+  end
+
+  # review round 1 (blocker): a revision with a worker / sub team under no lead is refused when saved, and a stored one
+  # (written before the check, or by hand) when loaded — every caller of Kanban.config, the MCP tools included
+  def test_a_revision_with_a_type_under_no_lead_is_refused_on_save_and_on_load
+    d = doc
+    d["agent_types"].find { |t| t["key"] == "worker" }.delete("under")
+    n = db[:agent_settings].count
+    status, body = save(d)
+    assert_equal 422, status
+    assert_match(/agent_types\[worker\] runs without a lead: give it `under: <lead type>`/, body[:error])
+    assert_equal n, db[:agent_settings].count, "nothing written"
+    db[:agent_settings].insert(doc: JSON.generate(d), author: "by hand", created_at: 1)
+    e = assert_raises(Busyyaks::Kanban::Unrunnable) { Busyyaks::Kanban.config }
+    assert_match(/agent settings revision \d+ does not run: agent_types\[worker\] runs without a lead/, e.message)
+    assert_raises(Busyyaks::Kanban::Unrunnable) { Busyyaks::Kanban.tools }
+  ensure
+    AgentSettingsFixture.install!(db)
   end
 
   def test_a_command_off_the_allowlist_or_a_value_the_engine_refuses_is_422_and_writes_nothing
@@ -160,5 +178,54 @@ class AgentSettingsTest < Minitest::Test
     refute st.success?
     assert_includes err, "launcher localclaude (claude_code: sh (via shell)): not an invocation"
     assert_match(/422: launcher fullclaude \(claude_code: sh /, err)
+  end
+
+  # a revision written before lead-first boards, in today's shape — what migration 20261207463000 writes
+  def test_lead_first_converts_a_pre_463_revision_and_leaves_a_new_one_alone
+    old = { "launchers" => [], "agent_types" => [
+      { "key" => "lead", "takes" => ["gate"], "spawn_launcher" => "fullclaude" },
+      { "key" => "worker", "takes" => [], "launcher_follows" => "lead", "spawn_launcher" => "fullclaude",
+        "spawns_for" => %w[queued working review gate], },
+      { "key" => "team", "takes" => [], "launcher_follows" => "lead", "spawn_launcher" => "fullclaude" },
+      { "key" => "plain", "takes" => [], "spawn_launcher" => "fullclaude" },
+    ], }
+    out = Busyyaks::AgentSettings.lead_first(old)["agent_types"]
+    assert_equal [%w[gate queued working review], [], [], []], out.map { |t| t["takes"] }
+    assert_equal [nil, "lead", "lead", nil], out.map { |t| t["under"] }
+    assert_equal [nil, nil, nil, true], out.map { |t| t["standalone"] }, "plain runs without a lead: standalone"
+    assert(out.none? { |t| t.keys.intersect?(Busyyaks::AgentSettings::PRE_LEAD_FIRST) })
+    assert_nil Busyyaks::AgentSettings.lead_first({ "launchers" => [], "agent_types" => out }), "already lead-first"
+    assert_nil Busyyaks::AgentSettings.lead_first(AgentSettingsFixture::DOC), "the suite's revision is lead-first"
+    leaderless = { "launchers" => [], "agent_types" => [{ "key" => "w", "takes" => [], "spawns_for" => ["queued"] }] }
+    e = assert_raises(Busyyaks::AgentSettings::Error) { Busyyaks::AgentSettings.lead_first(leaderless) }
+    assert_match(/cannot convert to lead-first boards — 0 followed types/, e.message)
+    two = { "launchers" => [], "agent_types" => [{ "key" => "a", "takes" => [], "launcher_follows" => "x" },
+                                                 { "key" => "b", "takes" => [], "launcher_follows" => "y" },], }
+    assert_raises(Busyyaks::AgentSettings::Error) { Busyyaks::AgentSettings.lead_first(two) }
+    only_spawn_launcher = { "launchers" => [], "agent_types" => [{ "key" => "p", "takes" => [], "spawn_launcher" => "c" }] }
+    assert_equal [{ "key" => "p", "takes" => [], "standalone" => true }],
+                 Busyyaks::AgentSettings.lead_first(only_spawn_launcher)["agent_types"]
+    reviewer = { "key" => "r", "takes" => [], "prompt" => "review", "spawn_launcher" => "c" }
+    told = { "launchers" => [], "agent_types" => [reviewer] }
+    e = assert_raises(Busyyaks::AgentSettings::Error) { Busyyaks::AgentSettings.lead_first(told) }
+    assert_match(/agent type r would run under no lead/, e.message)
+  end
+
+  # the live deployment's revision (stored before lead-first boards) converts to one the engine accepts with the suite's file
+  def test_the_converted_revision_loads_on_the_engine
+    raw = YAML.safe_load_file(File.expand_path("../fixtures/agents.yml", __dir__))
+    old = raw.merge("agent_types" => raw["agent_types"].map do |t|
+      case t["key"]
+      when "lead" then t.merge("takes" => ["gate"])
+      when "worker" then t.except("under").merge("launcher_follows" => "lead", "spawn_launcher" => "fullclaude",
+                                                 "spawns_for" => %w[queued working review gate])
+      when "team" then t.except("under").merge("launcher_follows" => "lead")
+      else t
+      end
+    end)
+    doc = Busyyaks::AgentSettings.lead_first(old)
+    cfg = Busyyaks::AgentSettings.host(Busyyaks::AgentSettings.file_hash(ENV.fetch("KANBAN_CONFIG")), doc)
+    assert_equal %w[gate queued working review], cfg.agent_type("lead").takes
+    assert_equal %w[lead lead], [cfg.agent_type("worker").under, cfg.agent_type("team").under]
   end
 end

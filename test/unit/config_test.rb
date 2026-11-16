@@ -274,10 +274,26 @@ class ConfigTest < Minitest::Test
     [1, 600].each { |v| assert_equal v, Busyyaks::Config.new(OK.merge("launch" => LAUNCH_CLAUDE.merge("start_seconds" => v))).launch_start_seconds }
   end
 
+  # launch.scopes: a required key — null, or the lead's oomd preference + the sessions' memory cap
+  def test_launch_scopes_is_required_and_validated
+    assert_nil Busyyaks::Config.new(OK).launch_scopes
+    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.merge("launch" => LAUNCH_CLAUDE.except("scopes"))) }
+    assert_match(/launch.scopes is required/, e.message)
+    good = { "lead_oomd" => "avoid", "session_memory_max" => "16G" }
+    assert_equal good, Busyyaks::Config.new(OK.merge("launch" => LAUNCH_CLAUDE.merge("scopes" => good))).launch_scopes
+    [{}, good.merge("x" => 1), good.merge("lead_oomd" => "omit"), good.merge("session_memory_max" => "16 GB"),
+     good.merge("session_memory_max" => 16), "avoid",].each do |v|
+      e = assert_raises(Busyyaks::Config::Invalid, v.inspect) do
+        Busyyaks::Config.new(OK.merge("launch" => LAUNCH_CLAUDE.merge("scopes" => v)))
+      end
+      assert_match(/launch.scopes/, e.message)
+    end
+  end
+
   # launch.commands: the host allowlist of whole launcher invocations {kind, command, args, via_shell} —
   # required, non-empty, every key, unique; a bare command name is not an entry
   def test_launch_commands_are_required_and_validated
-    trusted = { "trusted_paths" => [], "start_seconds" => 30 }
+    trusted = { "trusted_paths" => [], "start_seconds" => 30, "scopes" => nil }
     claude = { "kind" => "claude_code", "command" => "claude", "args" => [], "via_shell" => false }
     bad = [nil, [], "claude", %w[claude], [claude, claude], [claude.except("args")], [claude.merge("kind" => "codex")],
            [claude.merge("command" => "claude; rm")], [claude.merge("args" => "--yolo")], [claude.merge("via_shell" => "no")],

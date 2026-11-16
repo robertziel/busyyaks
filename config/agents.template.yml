@@ -18,15 +18,20 @@ launchers:
   - { key: claude, label: claude, kind: claude_code, command: claude, args: [], via_shell: false }
 # the agent types the Launch bar offers (one split pill each; the menu = the type's launchers). A launch registers
 # the session with the engine BEFORE tmux starts it: a `lead` adopts the project's ownerless cards in the columns of
-# the TYPES in `takes` (gate = the columns that wait for the operator; the work types are the worker's spawns_for) by
-# rule — no prompt asks it to claim; the prompt's {cards} tells it what it owns. A question for the operator is the
+# the TYPES in `takes` (every work type and the gates) by rule — no prompt asks it to claim; the prompt's {cards} tells
+# it what it owns. LEAD-FIRST: a board starts with its lead, and only the lead starts its team — a type
+# `under: lead` runs only while the board's lead runs (from the Launch bar, or the lead's kanban_spawn — the agent
+# handles no key: bin/launcher keeps it; a guard against cooperative agents, not authentication — one MCP bearer can
+# name any tmux session), on the lead's launcher; `plain` is `standalone` (a plain session: no prompt,
+# adopts nothing). Every type is the lead, under it, or standalone. Busyyaks starts nothing on its own: with
+# no lead an ownerless card waits and the board says "no lead: press Launch". A question for the operator is the
 # card's needs_operator FLAG (kanban_ask), never a column — the card keeps its place.
 # Per type:
-#   launchers       the launcher keys it may run. A start busyyaks performs that names none (a spawned worker with
-#                   no lead to follow, POST /api/launch without `launcher`) runs `spawn_launcher`, or the type's only
-#                   launcher; a type listing several with no spawn_launcher refuses such a start (the card says why) —
-#                   e.g. with a second launcher: `launchers: [claude, localclaude]` + `spawn_launcher: claude`. A
-#                   session started by hand registers with kanban_register(..., launcher) unless its type has one
+#   launchers       the launcher keys it may run. A start names one (the Launch bar always does) or the type has only
+#                   one — nothing picks one of several. A session started by hand registers with
+#                   kanban_register(..., launcher) unless its type has one
+#   under           (optional) the lead type a session of this type runs under: only while the board's lead runs, on
+#                   its launcher (another one asked for → 422)
 #   model           null = Claude Code's own model choice; or `--model <id>` for every launcher; or a map launcher key
 #                   → id / null (null under a gateway launcher: a --model would override the gateway's model — Claude
 #                   Code takes the LAST --model)
@@ -46,25 +51,23 @@ agent_types:
       Every card you create with mcp__busyyaks__kanban_create is owned by your session when author is {agent} (or pass tmux_session "{session}").
       Whenever you need my answer about a card (a question, a choice, a go-ahead): mcp__busyyaks__kanban_ask(id, question, author "{agent}", options) on that card, then end your turn — never ask it only in this chat. The card keeps its column and is flagged needs_operator until my comment answers; never move a card to ask. A question about no card: create one, then kanban_ask on it. Waiting for CI or a third party: kanban_block(id, reason, url), kanban_unblock when it clears.
       Every comment you post starts with the header `[Team Lead] · <STATUS> · round <n> · severity: <blocker|major|minor|nit> · category: <correctness|security|perf|tests|style|design>` (STATUS one of OPEN, FIXED, DISAGREE, RESOLVED, NEEDS_HUMAN).
+      You lead this board's team: an ownerless card becomes yours (a ping says so); give a card its own worker with mcp__busyyaks__kanban_spawn(id, type "worker", tmux_session "{session}", author "{agent}") — nothing else starts one.
       Never poll the board or a card (no sleep / re-read loops): comments and moves on your cards arrive in this session as pings.
       Reply with one line: the card ids you own (or "none"). Then wait.
     agent_name: "claude-{session}"
     session_name: "{slug}_teamlead"
-    takes: [gate]
+    takes: [queued, working, review, gate]
     max: 0
     # ONE lead per board, always: two leads adopt the same cards. Not a capacity cap.
     max_per_project: 1
-  # ONE session per card: a card ownerless in a work column — entering the queued column, or LOST later (its owner
-  # gone: a watchdog release, the operator's Approve landing it in a review column with nobody left to carry on) — gets
-  # a new worker session started for it alone by the engine (spawns_for, by column TYPE). A flagged card
-  # (needs_operator / blocked_external) waits for the answer first. The lead never takes these (it takes the gates).
-  # Caps below; a full cap = the card waits, its note says why.
+  # ONE session per card, started by the board's LEAD (kanban_spawn) for a card it owns or nobody owns: the new worker
+  # owns that card from its start. Under the lead: no lead running → no worker, from the Launch bar either.
   - key: worker
     label: Worker
     launchers: [claude]
     model: null
-    # the board's running lead decides the launcher (a lead started on another launcher → its workers run that one)
-    launcher_follows: lead
+    # runs under the board's lead, on its launcher (a lead started on another launcher → its workers run that one)
+    under: lead
     prompt: |
       Worker session for {slug} ({dir}). Your tmux session is {session}; on the board you are {agent} ({type}) — the AUTHOR AGENT of these cards.
       You were started for exactly these cards: {cards}. Read each with mcp__busyyaks__kanban_card — its description, its activity (a card may have been started by a session that is gone: resume from where it stopped) and its `transitions` (where an agent may move it next) — and mcp__busyyaks__kanban_workflow (the board's columns, their types, its review loop). Do the work the card asks; move the card only along the transitions kanban_card lists for agents (kanban_move with `transition`, author "{agent}"). Follow the repo's CLAUDE.md / AGENTS.md rules. Work ONLY on these cards.
@@ -78,14 +81,13 @@ agent_types:
     agent_name: "worker-{session}"
     session_name: "{slug}_worker"
     takes: []
-    spawns_for: [queued, working, review, gate]   # gate: only an APPROVED card
     max: 0
     max_per_project: 0
   - key: team
     label: Sub team
     launchers: [claude]
     model: null
-    launcher_follows: lead   # a sub team runs the board's lead's launcher; another one asked for → 422
+    under: lead   # a sub team runs only while the board's lead runs, on its launcher; another one asked for → 422
     prompt: |
       Busyyaks sub team for {slug} ({dir}). Dispatch subagents IN PARALLEL (one per area: recent commits, uncommitted work, open/unmerged branches) to review this repo, read-only. Then record the result with mcp__busyyaks__add_note (project "{slug}", author "{agent}"): compact tables, shas, max 5 "act on" bullets. Do not modify, commit or push anything unless I ask in this session.
       Your tmux session is {session}; on the board you are {agent}: a card you create with mcp__busyyaks__kanban_create (author "{agent}") is owned by this session; a card you take over: mcp__busyyaks__kanban_claim with tmux_session "{session}".
@@ -106,3 +108,4 @@ agent_types:
     takes: []
     max: 0
     max_per_project: 0
+    standalone: true   # a plain session runs without a lead: no prompt, adopts nothing

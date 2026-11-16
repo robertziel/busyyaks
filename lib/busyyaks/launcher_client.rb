@@ -112,10 +112,19 @@ module Busyyaks
 
       def name(project:, base:) = LauncherClient.call(op: "name", base: base)["session"]
 
-      def start(session:, project:, type:, launcher:, argv:, prompt_template:, vars:)
+      # lead_key: a lead's key (lead-first boards) — bin/launcher KEEPS it in its own state dir (never the tmux
+      # session's environment, a log or an answer), nil otherwise · lead: the lead's tmux session a session under a lead
+      # runs under (bin/launcher refuses the start unless it started that lead for this project and it runs), or nil.
+      def start(session:, project:, type:, launcher:, argv:, prompt_template:, vars:, lead_key:, lead:)
         LauncherClient.call(op: "launch", path: project[:path], session: session, type: type, launcher: launcher, argv: argv,
-                            prompt_template: prompt_template, vars: vars, settings: @revision)
+                            prompt_template: prompt_template, vars: vars, settings: @revision, lead_key: lead_key,
+                            lead: lead)
       end
+
+      # The key bin/launcher keeps for a lead it started, while that tmux session runs (kanban_spawn / kanban_register:
+      # the engine compares its digest; the agent handles no key). Refused for any other session. A guard against
+      # cooperative agents, not authentication: one MCP bearer can name any tmux session.
+      def lead_key(session:) = LauncherClient.call(op: "lead_key", session: session)["key"]
     end
 
     def call(req)

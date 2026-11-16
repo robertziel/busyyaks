@@ -75,11 +75,9 @@ class NoKanbanCodeTest < Minitest::Test
     assert_equal %w[lead worker team plain], cfg["agent_types"].map { |t| t["key"] }, "the Launch bar's types"
     assert_equal [true, true, true, false], cfg["agent_types"].map { |t| !t["prompt"].nil? },
                  "Launch / Sub team = a prompt, Plain = none"
-    assert_equal [%w[gate], [], [], []], cfg["agent_types"].map { |t| t["takes"] },
-                 "a lead adopts only the cards waiting for the operator (the gates, by column type)"
-    assert_equal [[], %w[queued working review gate], [], []], cfg["agent_types"].map { |t| t["spawns_for"] || [] },
-                 "an ownerless card in any work column — or approved in a gate — gets its own worker session (lost " \
-                 "cards never sit unowned)"
+    assert_equal [%w[queued working review gate], [], [], []], cfg["agent_types"].map { |t| t["takes"] },
+                 "lead-first: an ownerless card in any work column or a gate is the lead's; it starts the " \
+                 "worker (kanban_spawn)"
     assert_equal [1, 0, 0, 0], cfg["agent_types"].map { |t| t["max_per_project"] },
                  "one lead per board; nothing else capped"
     assert_equal [0, 0, 0, 0], cfg["agent_types"].map { |t| t["max"] }
@@ -94,12 +92,11 @@ class NoKanbanCodeTest < Minitest::Test
     kc.agent_types.each do |t|
       (t.launchers & shell).each { |k| assert_nil t.model_for(k), "#{t.key} on #{k}: --model would override its gateway model" }
     end
-    # a worker / sub team runs the launcher of the board's running lead (localclaude lead → localclaude
-    # sessions)
-    assert_equal [nil, "lead", "lead", nil], cfg["agent_types"].map { |t| t["launcher_follows"] }
+    # a worker / sub team runs only under the board's running lead, on its launcher (localclaude lead → localclaude
+    # sessions); nothing picks a launcher (no spawn_launcher)
+    assert_equal [nil, "lead", "lead", nil], cfg["agent_types"].map { |t| t["under"] }
     assert_equal [%w[fullclaude localclaude]] * 4, cfg["agent_types"].map { |t| t["launchers"] }
-    # no lead to follow → the configured spawn_launcher (no code default); lead, team and plain name theirs at the start
-    assert_equal [nil, "fullclaude", nil, nil], cfg["agent_types"].map { |t| t["spawn_launcher"] }
+    assert(cfg["agent_types"].none? { |t| t.key?("spawn_launcher") || t.key?("spawns_for") })
     assert_equal "", cfg["table_prefix"], "busyyaks's tables keep their names"
     refute_empty cfg["theme"]
   end

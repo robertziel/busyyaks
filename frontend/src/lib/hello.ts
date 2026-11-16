@@ -48,11 +48,11 @@ export function rowsFrom(doc: AgentDoc, commands: Invocation[]): Row[] {
   return rows;
 }
 
-// The default launcher today: the lead's spawn launcher, else its first one, else the first launcher in use.
+// The default launcher today: the lead's first one (its Launch menu's first entry), else the first launcher in use.
 export function defaultFrom(doc: AgentDoc, rows: Row[]): string {
   const used = rows.filter((r) => r.use).map((r) => r.key);
   const lead = doc.agent_types.find((t) => t.key === "lead") ?? doc.agent_types[0];
-  const pick = [lead?.spawn_launcher, lead?.launchers[0]].find((k): k is string => !!k && used.includes(k));
+  const pick = [lead?.launchers[0]].find((k): k is string => !!k && used.includes(k));
   return pick ?? used[0] ?? "";
 }
 
@@ -76,8 +76,9 @@ function modelFor(m: Model, keys: string[]): Model {
 }
 
 // The rows + the default → the new agent settings. Every type keeps the launchers it ran that are still in use, gets
-// the newly added ones, and runs the default first (the Launch menu's first entry) — as its spawn launcher when it has
-// several (or named one before). Everything else of a type (prompt, caps, takes, follows) is kept.
+// the newly added ones, and runs the default first (the Launch menu's first entry). Everything else of a type (prompt,
+// caps, takes, the lead it runs under) is kept. Nothing picks a launcher at a start (lead-first boards): the
+// Launch bar names one, a session under a lead runs the lead's.
 export function applyRows(doc: AgentDoc, commands: Invocation[], rows: Row[], def: string): AgentDoc {
   const used = rows.filter((r) => r.use && r.at >= 0);
   const launchers: Launcher[] = used.map((r) => {
@@ -96,13 +97,7 @@ export function applyRows(doc: AgentDoc, commands: Invocation[], rows: Row[], de
   const agent_types: AgentType[] = doc.agent_types.map((t) => {
     const kept = t.launchers.filter((k) => keys.includes(k) && k !== def);
     const ls = [def, ...kept, ...added.filter((k) => k !== def && !kept.includes(k))];
-    const out: AgentType = { ...t, launchers: ls, model: modelFor(t.model, ls) };
-    // the spawn launcher only matters with a choice to make: several launchers, or one the type already named. A type
-    // running its one launcher with none set keeps none (the engine runs its only launcher) — an untouched page saves
-    // exactly what is stored
-    if (ls.length > 1 || t.spawn_launcher) out.spawn_launcher = def;
-    else delete out.spawn_launcher;
-    return out;
+    return { ...t, launchers: ls, model: modelFor(t.model, ls) };
   });
   return { launchers, agent_types };
 }
@@ -119,17 +114,15 @@ export function agentPrompt(p: SetupData["projects"], commands: Invocation[], or
   ].join("\n");
 }
 
-// What a save changes per agent type: its launcher list (the Launch menu order) and its spawn launcher, before → after.
-// Shown beside Save so no type is rewritten unseen; an unchanged type is not listed.
-export type TypeChange = { type: string; label: string; launchers: [string[], string[]]; spawn: [string, string] };
+// What a save changes per agent type: its launcher list (the Launch menu order), before → after. Shown beside Save so
+// no type is rewritten unseen; an unchanged type is not listed.
+export type TypeChange = { type: string; label: string; launchers: [string[], string[]] };
 
 export function typeChanges(before: AgentDoc, after: AgentDoc): TypeChange[] {
   return after.agent_types.flatMap((t) => {
     const was = before.agent_types.find((b) => b.key === t.key);
     if (!was) return [];
     const ls: [string[], string[]] = [was.launchers, t.launchers];
-    const spawn: [string, string] = [was.spawn_launcher ?? "", t.spawn_launcher ?? ""];
-    const same = ls[0].join(",") === ls[1].join(",") && spawn[0] === spawn[1];
-    return same ? [] : [{ type: t.key, label: t.label, launchers: ls, spawn }];
+    return ls[0].join(",") === ls[1].join(",") ? [] : [{ type: t.key, label: t.label, launchers: ls }];
   });
 }

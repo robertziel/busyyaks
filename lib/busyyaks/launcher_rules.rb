@@ -2,6 +2,8 @@
 
 require "fileutils"
 require "pathname"
+require "json"
+require "tempfile"
 
 module Busyyaks
   # The checks bin/launcher (and deploy/install-launcher.sh) run on what a container or .env hands it, as functions it
@@ -25,6 +27,123 @@ module Busyyaks
 
       raise Invalid, "launch.start_seconds must be an integer #{START_SECONDS.min}..#{START_SECONDS.max} " \
                      "(seconds bin/launcher waits for a started agent to come up; got #{value.inspect})"
+    end
+
+    # config/busyyaks.yml `launch.scopes` (required key): null = this host runs no systemd user manager, every
+    # session stays in the scope tmux gives its pane; or {lead_oomd: avoid | none, session_memory_max: "<n>K|M|G" | null}
+    # — each session runs in its own systemd user scope `busyyaks-<session>` (systemd-run --user --scope): a LEAD's
+    # scope carries ManagedOOMPreference=<lead_oomd> (avoid: the scope is MARKED avoid — `user.oomd_avoid=1` on its
+    # cgroup, seen on this host — and per systemd.resource-control(5) oomd prefers other candidates; NOT verified under
+    # real memory pressure), every other session's MemoryMax=<session_memory_max> (null = no cap; enforced by the
+    # kernel's memory controller). 2026-11-15: oomd killed a lead's pane at 108 G.
+    SCOPE_KEYS = %w[lead_oomd session_memory_max].freeze
+    OOMD = %w[avoid none].freeze
+    MEMORY = /\A[1-9][0-9]{0,6}[KMG]\z/
+
+    def scopes!(value)
+      return nil if value.nil?
+      unless value.is_a?(Hash) && value.keys.sort == SCOPE_KEYS.sort
+        raise Invalid, "launch.scopes must be null (no systemd user manager on this host) or {lead_oomd: avoid|none, " \
+                       "session_memory_max: <n>K|M|G or null} (got #{value.inspect})"
+      end
+      raise Invalid, "launch.scopes.lead_oomd must be one of #{OOMD.join(', ')}" unless OOMD.include?(value["lead_oomd"])
+      mem = value["session_memory_max"]
+      unless mem.nil? || (mem.is_a?(String) && mem.match?(MEMORY))
+        raise Invalid, "launch.scopes.session_memory_max must be null or <n>K|M|G (got #{mem.inspect})"
+      end
+
+      value.slice(*SCOPE_KEYS).freeze
+    end
+
+    # The argv a session runs: `argv` itself (no scopes), or wrapped in its own systemd user scope — a lead with the
+    # oomd preference, anything else with its memory cap. systemd-run execs the command inside the scope, so the
+    # launcher's start check (claude --remote-control <session> in the pane's tree) still finds it.
+    def scoped(argv, scopes:, session:, lead:)
+      return argv if scopes.nil?
+
+      props = if lead
+                scopes["lead_oomd"] == "none" ? [] : ["-p", "ManagedOOMPreference=#{scopes['lead_oomd']}"]
+              else
+                scopes["session_memory_max"] ? ["-p", "MemoryMax=#{scopes['session_memory_max']}"] : []
+              end
+      ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit=busyyaks-#{session}", *props, "--", *argv]
+    end
+
+    # The leads THIS launcher started (lead-first boards): .env LAUNCHER_STATE_DIR/leads.json (the
+    # launcher's own dir, 0700, outside every container mount), one {session, type, dir, key} per lead — the key the
+    # engine minted for it (only its SHA-256 is in the database). A worker / sub team starts only under a lead recorded
+    # here for the SAME repo dir and the lead type it runs under, whose tmux session runs; kanban_spawn's lead check
+    # asks for the key (`lead_key` op) and the engine compares digests. The key is never put into the tmux session,
+    # a log line or an answer other than that op's. Entries whose tmux session is gone are dropped on every write.
+    class Leads
+      KEY = /\A\h{64}\z/
+      FIELDS = %w[dir key session type].freeze
+
+      def initialize(dir)
+        @dir = dir
+        @file = File.join(dir, "leads.json")
+        @lock = Mutex.new
+        @lock.synchronize { read } # a corrupt file stops the start
+      end
+
+      def record(session:, type:, dir:, key:, alive:)
+        raise Invalid, "lead key must be 64 hex characters" unless key.is_a?(String) && key.match?(KEY)
+
+        @lock.synchronize do
+          keep = read.reject { |e| e["session"] == session || !alive.call(e["session"]) }
+          write(keep + [{ "session" => session, "type" => type, "dir" => dir, "key" => key }])
+        end
+      end
+
+      def find(session) = @lock.synchronize { read.find { |e| e["session"] == session } }
+
+      # The lead a session of `type` (under `lead_type`) may start under in `dir`: recorded by this launcher for that
+      # dir and type, and running — else Invalid with what is missing.
+      def under!(session, lead_type:, dir:, alive:)
+        e = find(session)
+        raise Invalid, "#{session} is no lead this launcher started: launch the #{lead_type} first" unless e
+        unless e["type"] == lead_type
+          raise Invalid, "#{session} is a #{e['type']}, not the #{lead_type} this session runs under"
+        end
+        raise Invalid, "#{session} leads #{e['dir']}, not #{dir}: a session runs under its own board's lead" \
+          unless e["dir"] == dir
+        raise Invalid, "the #{lead_type} session #{session} is not running: launch the #{lead_type} first" \
+          unless alive.call(session)
+
+        e
+      end
+
+      private
+
+      def write(list)
+        f = Tempfile.create(["leads", ".json.tmp"], @dir)
+        begin
+          f.write(JSON.generate(list))
+          f.close
+          File.rename(f.path, @file)
+        ensure
+          f.close unless f.closed?
+          FileUtils.rm_f(f.path)
+        end
+      end
+
+      def read
+        return [] unless File.exist?(@file)
+
+        list = begin
+          JSON.parse(File.read(@file))
+        rescue JSON::ParserError => e
+          # the class and the line only: the parser's message quotes the unparsed text — a key fragment (review round 2)
+          at = e.message[/line (\d+)/, 1]
+          raise Invalid, "#{@file} is not valid JSON (#{e.class}#{at ? ", line #{at}" : ''}): fix or remove it"
+        end
+        ok = list.is_a?(Array) && list.all? do |e|
+          e.is_a?(Hash) && e.keys.sort == FIELDS && e.values.all?(String) && e["key"].match?(KEY)
+        end
+        raise Invalid, "#{@file} is not a list of {session, type, dir, key}: fix or remove it" unless ok
+
+        list
+      end
     end
 
     # A launch's start clock (bin/launcher's start check): the WHOLE seconds passed since `started` (monotonic seconds,

@@ -17,6 +17,7 @@ const session = (s: string, type: string, project: string, launcher: string) => 
   last_seen: null,
   ended: null,
   end_reason: null,
+  lead_id: null,
   live: true,
   cards: 0,
 });
@@ -34,7 +35,7 @@ const t = (key: string, follows: string | null) => ({
   prompt: true,
   running: 0,
   running_here: 0,
-  launcher_follows: follows,
+  under: follows,
 });
 const all: LaunchesData = {
   types: [t("lead", null), t("team", "lead")],

@@ -9,7 +9,7 @@ require_relative "support/sign_in"
 # config/busyyaks.yml `launch` for a test Config: no trusted paths, the one plain-claude invocation
 LAUNCH_CLAUDE = {
   "trusted_paths" => [], "commands" => [{ "kind" => "claude_code", "command" => "claude", "args" => [], "via_shell" => false }],
-  "start_seconds" => 30,
+  "start_seconds" => 30, "scopes" => nil,
 }.freeze
 # config/busyyaks.yml `terminal` for a test Config: not through PUBLIC_HOST, 4 open at once
 TERMINAL_DENY = { "public_host" => "deny", "max_open" => 4 }.freeze

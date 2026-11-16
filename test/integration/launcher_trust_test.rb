@@ -19,6 +19,8 @@ require "yaml"
 class LauncherTrustTest < Minitest::Test
   # the agent settings revision a launch carries: the suite's, test/fixtures/agents.yml
   AGENTS = YAML.safe_load_file(File.expand_path("../fixtures/agents.yml", __dir__))
+  # a lead's start carries its key: bin/launcher keeps it in its state dir, never in the session
+  LEAD_KEY = "ab" * 32
   # the host allowlist (launch.commands): the fixture's two launchers + a hermes one
   INVOCATIONS = [*YAML.safe_load_file(File.expand_path("../fixtures/busyyaks.yml", __dir__)).dig("launch", "commands"),
                  { "kind" => "hermes", "command" => "hermes", "args" => ["chat"], "via_shell" => false },].freeze
@@ -77,7 +79,8 @@ class LauncherTrustTest < Minitest::Test
           echo $! >> #{@pids}; echo $! > #{@base}/pane.pid; date +%s.%N > #{@base}/started_at; exit 0 ;;
         list-panes) [ -e #{@base}/pane.pid ] && cat #{@base}/pane.pid && exit 0; exit 1 ;;
         kill-session) [ -e #{@base}/nokill ] && echo "server busy" >&2 && exit 1; exit 0 ;;
-        has-session) [ -e #{@base}/nokill ] && [ -e #{@base}/pane.pid ] && exit 0; exit 1 ;;
+        has-session) grep -qx -- "$3" #{@base}/alive 2>/dev/null && exit 0
+          [ -e #{@base}/nokill ] && [ -e #{@base}/pane.pid ] && exit 0; exit 1 ;;
         ls|display-message) exit 1 ;;
         capture-pane)
           if [ -e #{@dialog} ]; then printf '%s\\n' "Do you want to proceed?" "❯ 1. Yes" "Enter to confirm · Esc to cancel"
@@ -113,6 +116,7 @@ class LauncherTrustTest < Minitest::Test
 
   def write_config(start_seconds)
     launch = { "trusted_paths" => [], "commands" => INVOCATIONS, "start_seconds" => start_seconds }.compact
+    launch["scopes"] = nil # no systemd user manager in the sandbox
     File.write(File.join(@co, "config/busyyaks.yml"), YAML.dump(
       "roots" => [{ "path" => "/projects", "prefix" => "" }], "search_depth" => 2,
       "owner_remotes" => ["github.com/you/"], "author_emails" => ["you@example.com"], "window_days" => 7,
@@ -171,7 +175,7 @@ class LauncherTrustTest < Minitest::Test
 
   def launch(name)
     ask("op" => "launch", "path" => "/projects/#{name}", "session" => "#{name}_s", "type" => "lead",
-        "launcher" => "fullclaude", "settings" => { "id" => 1, "doc" => AGENTS },
+        "launcher" => "fullclaude", "lead_key" => LEAD_KEY, "settings" => { "id" => 1, "doc" => AGENTS },
         "vars" => { "slug" => name, "session" => "#{name}_s", "agent" => "a", "type" => "lead", "cards" => "-" })
   end
 
@@ -282,6 +286,7 @@ class LauncherTrustTest < Minitest::Test
     launchers = AGENTS["launchers"].map { |l| l["key"] == "fullclaude" ? l.merge("command" => "bash") : l }
     doc = AGENTS.merge("launchers" => launchers)
     r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "lead", "launcher" => "fullclaude",
+            "lead_key" => LEAD_KEY,
             "settings" => { "id" => 7, "doc" => doc },
             "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
     refute r["ok"], r.inspect
@@ -289,11 +294,13 @@ class LauncherTrustTest < Minitest::Test
                                   "(claude_code: bash --permission-mode bypassPermissions): not an invocation on this " \
                                   "host's allowlist config/busyyaks.yml launch.commands"), r["error"]
     r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "lead", "launcher" => "fullclaude",
+            "lead_key" => LEAD_KEY,
             "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
     assert_match(/settings \{id, doc\} are required/, r["error"])
     # a prompt starting with "-" (an option of the allowlisted command) is refused before tmux too
     types = AGENTS["agent_types"].map { |t| t["key"] == "lead" ? t.merge("prompt" => "--mcp-config=/tmp/x {slug}") : t }
     r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "lead", "launcher" => "fullclaude",
+            "lead_key" => LEAD_KEY,
             "settings" => { "id" => 8, "doc" => AGENTS.merge("agent_types" => types) },
             "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
     assert_match(/agent settings revision 8: agent_types\[lead\].prompt must not start with "-"/, r["error"])
@@ -307,16 +314,16 @@ class LauncherTrustTest < Minitest::Test
     FileUtils.touch(@hermes)
     hermes = { "key" => "hermes", "label" => "hermes", "kind" => "hermes", "command" => "hermes", "args" => ["chat"],
                "via_shell" => false, }
+    # the lead on hermes (a prompted type; a standalone one has no prompt): every type under it runs hermes too
     types = AGENTS["agent_types"].map do |t|
-      next t unless t["key"] == "plain" # no type follows plain's launcher
-
-      t.merge("launchers" => t["launchers"] + ["hermes"], "prompt" => "work on {slug}",
-              "model" => t["model"].is_a?(Hash) ? t["model"].merge("hermes" => nil) : t["model"])
+      n = t.merge("launchers" => t["launchers"] + ["hermes"],
+                  "model" => t["model"].is_a?(Hash) ? t["model"].merge("hermes" => nil) : t["model"])
+      t["key"] == "lead" ? n.merge("prompt" => "work on {slug}") : n
     end
     doc = AGENTS.merge("launchers" => AGENTS["launchers"] + [hermes], "agent_types" => types)
-    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "plain", "launcher" => "hermes",
-            "settings" => { "id" => 3, "doc" => doc },
-            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "plain", "cards" => "-" })
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "lead", "launcher" => "hermes",
+            "lead_key" => LEAD_KEY, "settings" => { "id" => 3, "doc" => doc },
+            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
     assert_equal [true, "hermes", "on", "hermes"], r.values_at("ok", "kind", "process", "process_name"), r.inspect
     refute r.key?("remote_control"), r.inspect
     started = tmux_calls.lines.find { |l| l.start_with?("new-session") }
@@ -391,6 +398,48 @@ class LauncherTrustTest < Minitest::Test
     assert_match(/\Adlg_s did not start: the command exited after \d+s, no claude --remote-control dlg_s: /, r["error"])
     assert_match(/: Do you want to proceed/, r["error"])
     assert_match(/kill-session -t =dlg_s/, tmux_calls)
+  end
+
+  # lead-first boards, checked by the launcher itself: a lead's key is kept in the launcher's state
+  # (leads.json, with its session, type and repo dir) — never in the tmux session, the log or an answer but the
+  # lead_key op's; a worker starts only under a lead THIS launcher started for the same repo dir, while it runs
+  def test_the_launcher_keeps_the_lead_key_and_a_worker_needs_its_own_boards_running_lead
+    %w[fresh other].each { |n| ask("op" => "create", "root" => "/projects", "name" => n, "url" => "") }
+    r = launch("fresh")
+    assert r["ok"], r.inspect
+    refute_includes tmux_calls, LEAD_KEY, "never in the tmux session (no -e, no env)"
+    refute_includes File.read(@log), LEAD_KEY, "never logged"
+    refute_includes JSON.generate(r), LEAD_KEY, "never answered"
+    leads = JSON.parse(File.read(File.join(@base, "state/leads.json")))
+    assert_equal [["fresh_s", "lead", File.realpath(File.join(@projects, "fresh")), LEAD_KEY]],
+                 leads.map { |e| e.values_at("session", "type", "dir", "key") }
+    assert_equal "600", format("%o", File.stat(File.join(@base, "state/leads.json")).mode & 0o777)
+    assert_match(/fresh_s: its tmux session is not running/, ask("op" => "lead_key", "session" => "fresh_s")["error"])
+    File.write(File.join(@base, "alive"), "=fresh_s\n")
+    assert_equal [true, LEAD_KEY], ask("op" => "lead_key", "session" => "fresh_s").values_at("ok", "key")
+    assert_match(/nobody: no lead this launcher started/, ask("op" => "lead_key", "session" => "nobody")["error"])
+    File.write(@tmux_log, "")
+    vars = ->(dir, s, t) { { "slug" => dir, "session" => s, "agent" => "a", "type" => t, "cards" => "-" } }
+    req = lambda do |dir, s, t, over = {}|
+      ask({ "op" => "launch", "path" => "/projects/#{dir}", "launcher" => "fullclaude", "session" => s, "type" => t,
+            "settings" => { "id" => 1, "doc" => AGENTS }, "vars" => vars.(dir, s, t), }.merge(over))
+    end
+    assert_match(/needs its lead key/, req.("fresh", "l2", "lead")["error"])
+    assert_match(/needs its lead key/, req.("fresh", "l2", "lead", "lead_key" => "x")["error"])
+    assert_match(/runs under no lead/, req.("fresh", "l2", "lead", "lead_key" => LEAD_KEY, "lead" => "fresh_s")["error"])
+    assert_match(/runs under the board's lead: no lead session given/, req.("fresh", "w1", "worker")["error"])
+    assert_match(/gone_s is no lead this launcher started/, req.("fresh", "w1", "worker", "lead" => "gone_s")["error"])
+    assert_match(%r{fresh_s leads .*/fresh, not .*/other: a session runs under its own board's lead},
+                 req.("other", "w1", "worker", "lead" => "fresh_s")["error"])
+    assert_match(/a plain session gets no lead key/, req.("fresh", "p1", "plain", "lead_key" => LEAD_KEY)["error"])
+    # a revision with a worker under no lead does not even load (review round 1, blocker)
+    leaderless = AGENTS.merge("agent_types" => AGENTS["agent_types"].map { |t| t["key"] == "worker" ? t.except("under") : t })
+    r = req.("fresh", "w1", "worker", "lead" => "fresh_s", "settings" => { "id" => 9, "doc" => leaderless })
+    assert_match(/agent settings revision 9: .*agent_types\[worker\] runs without a lead/, r["error"])
+    refute_includes tmux_calls, "new-session", "nothing was started"
+    r = req.("fresh", "w1", "worker", "lead" => "fresh_s")
+    assert r["ok"], r.inspect
+    refute_includes tmux_calls, LEAD_KEY
   end
 
   # launch.start_seconds is required: the launcher refuses to start without it, or with one out of 1..600

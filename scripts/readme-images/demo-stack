@@ -104,6 +104,7 @@ ci:
 launch:
   trusted_paths: []
   start_seconds: 30
+  scopes: null # the stage's launcher container runs no systemd user manager
   commands:
     # the stand-in agent (scripts/readme-images/agent, readme-agent on the launcher image's PATH): seed.js makes it
     # every agent type's launcher, so the real bin/launcher starts the board's lead and its workers through Launch

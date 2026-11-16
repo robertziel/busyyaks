@@ -39,6 +39,7 @@ const card = (id: number, kind: string, extra: Partial<WaitingCard> = {}): Waiti
 const data: Waiting = {
   waiting_columns: ["check_col"],
   launch_failures: [],
+  lead_ends: [],
   total: 4,
   projects: [
     {
@@ -82,6 +83,7 @@ const empty: Waiting = {
   held: [],
   external: [],
   launch_failures: [],
+  lead_ends: [],
 };
 type Props = Parameters<typeof WaitingView>[0];
 const render = (p: Omit<Props, "at">) =>

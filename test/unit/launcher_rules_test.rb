@@ -221,4 +221,41 @@ class LauncherRulesTest < Minitest::Test
                          "*Busyyaks::LaunchTrust.clone_argv(url, dir),"
     refute_includes src, "Open3.capture3(env, *git,"
   end
+
+  # launch.scopes: each session in its own systemd user scope — the lead with the oomd preference, every
+  # other session with its memory cap; null = no systemd user manager: the argv as is
+  def test_scopes_wrap_a_session_in_its_own_user_scope
+    r = Busyyaks::LauncherRules
+    argv = %w[claude --remote-control s1]
+    assert_equal argv, r.scoped(argv, scopes: nil, session: "s1", lead: true)
+    sc = r.scopes!("lead_oomd" => "avoid", "session_memory_max" => "16G")
+    base = %w[systemd-run --user --scope --quiet --collect --unit=busyyaks-s1]
+    assert_equal [*base, "-p", "ManagedOOMPreference=avoid", "--", *argv], r.scoped(argv, scopes: sc, session: "s1", lead: true)
+    assert_equal [*base, "-p", "MemoryMax=16G", "--", *argv], r.scoped(argv, scopes: sc, session: "s1", lead: false)
+    off = r.scopes!("lead_oomd" => "none", "session_memory_max" => nil)
+    assert_equal [*base, "--", *argv], r.scoped(argv, scopes: off, session: "s1", lead: true)
+    assert_equal [*base, "--", *argv], r.scoped(argv, scopes: off, session: "s1", lead: false)
+    assert_nil r.scopes!(nil)
+    [{}, { "lead_oomd" => "omit", "session_memory_max" => nil }, { "lead_oomd" => "avoid", "session_memory_max" => "1T" },
+     { "lead_oomd" => "avoid", "session_memory_max" => "0G" }, { "lead_oomd" => "avoid" }, "avoid",].each do |v|
+      assert_raises(Busyyaks::LauncherRules::Invalid, v.inspect) { r.scopes!(v) }
+    end
+  end
+
+  # a corrupt leads.json is refused naming the file, the error class and the line — never the
+  # parser's quote of the text, which would carry a key fragment
+  def test_a_corrupt_leads_file_is_refused_without_quoting_it
+    key = "c0ffee" * 10 + "abcd"
+    Dir.mktmpdir("leads") do |dir|
+      file = File.join(dir, "leads.json")
+      File.write(file, "[{\"session\":\"l\",\"type\":\"lead\",\"dir\":\"/d\",\"key\":\"#{key}\"\n")
+      e = assert_raises(Busyyaks::LauncherRules::Invalid) { Busyyaks::LauncherRules::Leads.new(dir) }
+      refused = /\A#{Regexp.escape(file)} is not valid JSON \(JSON::ParserError(, line \d+)?\): fix or remove it\z/
+      assert_match(refused, e.message)
+      [key, key[0, 12], key[-12, 12]].each { |k| refute_includes e.message, k }
+      File.write(file, JSON.generate([{ "session" => "l", "type" => "lead", "dir" => "/d", "key" => "nope #{key}" }]))
+      e = assert_raises(Busyyaks::LauncherRules::Invalid) { Busyyaks::LauncherRules::Leads.new(dir) }
+      refute_includes e.message, key
+    end
+  end
 end

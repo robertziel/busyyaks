@@ -36,8 +36,8 @@ const doc = (): AgentDoc => ({
     { key: "old", label: "old", kind: "claude_code", command: "gone", args: [], via_shell: false },
   ],
   agent_types: [
-    type("lead", { launchers: ["claude", "old"], model: { claude: "opus", old: null }, spawn_launcher: "claude" }),
-    type("worker", { launcher_follows: "lead" }),
+    type("lead", { launchers: ["claude", "old"], model: { claude: "opus", old: null } }),
+    type("worker", { under: "lead" }),
   ],
 });
 
@@ -70,7 +70,7 @@ describe("rowsFrom", () => {
 });
 
 describe("defaultFrom", () => {
-  it("the lead's spawn launcher while it is in use, else the first in use", () => {
+  it("the lead's first launcher while it is in use, else the first in use", () => {
     const rows = rowsFrom(doc(), commands);
     expect(defaultFrom(doc(), rows)).toBe("claude");
     const off = rows.map((r) =>
@@ -107,7 +107,7 @@ describe("rowsError", () => {
 });
 
 describe("applyRows", () => {
-  it("drops the launcher on no allowlist entry, adds the picked commands, the default first and spawned", () => {
+  it("drops the launcher on no allowlist entry, adds the picked commands, the default first", () => {
     const rows = rowsFrom(doc(), commands).map((r) => (r.key === "hermes" ? { ...r, use: true, label: "Hermes" } : r));
     const out = applyRows(doc(), commands, rows, "hermes");
     expect(out.launchers).toEqual([
@@ -116,12 +116,12 @@ describe("applyRows", () => {
     ]);
     const lead = out.agent_types[0]!;
     expect(lead.launchers).toEqual(["hermes", "claude"]);
-    expect(lead.spawn_launcher).toBe("hermes");
+    expect("spawn_launcher" in lead).toBe(false);
     expect(lead.model).toEqual({ hermes: null, claude: "opus" });
     expect(lead.prompt).toBe("p");
     const worker = out.agent_types[1]!;
     expect(worker.launchers).toEqual(["hermes", "claude"]);
-    expect(worker.launcher_follows).toBe("lead");
+    expect(worker.under).toBe("lead");
     expect(worker.model).toBeNull();
   });
 
@@ -161,7 +161,7 @@ describe("agentPrompt", () => {
 });
 
 describe("typeChanges", () => {
-  it("lists each type whose launchers or spawn launcher a save changes, before → after", () => {
+  it("lists each type whose launchers a save changes, before → after", () => {
     const d = doc();
     const rows = rowsFrom(d, commands).map((r) => (r.key === "hermes" ? { ...r, use: true } : r));
     expect(typeChanges(d, applyRows(d, commands, rows, "hermes"))).toEqual([
@@ -172,28 +172,26 @@ describe("typeChanges", () => {
           ["claude", "old"],
           ["hermes", "claude"],
         ],
-        spawn: ["claude", "hermes"],
       },
-      { type: "worker", label: "worker", launchers: [["claude"], ["hermes", "claude"]], spawn: ["", "hermes"] },
+      { type: "worker", label: "worker", launchers: [["claude"], ["hermes", "claude"]] },
     ]);
   });
 
-  it("an untouched page changes nothing: one launcher and no spawn launcher stay so", () => {
+  it("an untouched page changes nothing", () => {
     const d: AgentDoc = {
       launchers: [{ key: "claude", label: "claude", ...claude }],
-      agent_types: [type("lead"), type("worker", { launcher_follows: "lead" })],
+      agent_types: [type("lead"), type("worker", { under: "lead" })],
     };
     const rows = rowsFrom(d, commands);
     const out = applyRows(d, commands, rows, defaultFrom(d, rows));
     expect(typeChanges(d, out)).toEqual([]);
     expect(out).toEqual(d);
-    expect("spawn_launcher" in out.agent_types[0]!).toBe(false);
   });
 
   it("an unchanged type is not listed", () => {
     const d = doc();
     d.launchers = [d.launchers[0]!];
-    d.agent_types = [type("lead", { spawn_launcher: "claude" })];
+    d.agent_types = [type("lead")];
     expect(typeChanges(d, applyRows(d, commands, rowsFrom(d, commands), "claude"))).toEqual([]);
   });
 });
