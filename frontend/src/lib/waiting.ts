@@ -3,7 +3,7 @@ import type { LaunchFailure } from "../vendor/agents_kanban";
 import { projectPath } from "./format";
 
 // kind: "ask" = flagged needs_operator (a question, in whatever column) · "review" = in a gate column (work to check, a
-// PR to merge) · else the column key. A card only blocked_external waits for the world, not for you: never listed
+// PR to merge) · else the column key. `held` / `external` cards carry kind "held" / "external".
 export type WaitingCard = {
   id: number;
   title: string;
@@ -16,125 +16,93 @@ export type WaitingCard = {
   question_first_line: string | null;
   blocked_first_line?: string | null;
   handoff_first_line?: string | null;
+  gate_hold?: string | null;
   owner_session: string | null;
 };
 export type WaitingProject = { slug: string; icon: string | null; count: number; cards: WaitingCard[] };
+// projects: the cards waiting for the operator (total = their sum). held: gate cards CI holds (not approvable now);
+// external: blocked_external cards (waiting for the world) — neither counts as waiting for you.
 // launch_failures: the sessions whose start failed in the last day (a launch or a spawn: claude never came up) — the
 // layout's LaunchFailureAlert opens a modal for the ones this viewer has not dismissed
 export type Waiting = {
   waiting_columns: string[];
   total: number;
   projects: WaitingProject[];
+  held: WaitingProject[];
+  external: WaitingProject[];
   launch_failures: LaunchFailure[];
 };
 
 export const cardHref = (slug: string, id: number) => `${projectPath(slug)}?tab=board&card=${id}`;
 
-// "3 waiting"
-export const pillTotal = (w: Waiting) => `${w.total} waiting`;
+// The widget's three segments, by what each asks of the operator, most important first: a question to
+// answer · work to review (every other waiting card: ask + review = total) · waiting on CI or the world (held +
+// external: shown, never counted as waiting for you, never in the dock badge).
+export type Kind = "ask" | "review" | "external";
+export const KINDS: readonly Kind[] = ["ask", "review", "external"];
+export const KIND_LABEL: Record<Kind, string> = { ask: "to answer", review: "to review", external: "external" };
+export type KindProject = { slug: string; name: string; icon: string | null; count: number };
+export type KindRow = { slug: string; name: string; icon: string | null; card: WaitingCard };
+export type KindGroup = { kind: Kind; count: number; projects: KindProject[]; rows: KindRow[] };
 
-// The round project bubbles on the pill, as the agents sidebar colours them: "ask" (needs input, red) ·
-// "review" (a PR to merge, amber) · "other". Ordered by importance, then by the latest card's time — left to right,
-// so the most important and most recent always sits on the right. An unknown time counts as the oldest.
-export type BubbleLevel = "ask" | "review" | "other";
-const RANK: Record<BubbleLevel, number> = { other: 0, review: 1, ask: 2 };
-// the badge: how many cards of the bubble's top status (the tooltip has every count)
-export const topCount = (b: { level: BubbleLevel; asks: number; reviews: number; others: number }) =>
-  b.level === "ask" ? b.asks : b.level === "review" ? b.reviews : b.others;
-export type Bubble = {
-  slug: string;
-  name: string;
-  icon: string | null;
-  count: number;
-  asks: number;
-  reviews: number;
-  others: number;
-  level: BubbleLevel;
-  latest: number | null;
-  title: string;
-};
+const shortName = (slug: string) => slug.split("/").pop() || slug;
 
-// The colour of each status, by what it asks of the operator: needs input = red (an agent is stopped on
-// you) · PR to merge = amber (work done, waiting for your check) · any other waiting column = neutral. CSS tokens only.
-export const LEVEL_COLOR: Record<BubbleLevel, string> = {
-  ask: "var(--ww-c-ask)",
-  review: "var(--ww-c-review)",
-  other: "var(--ww-c-other)",
-};
-export const LEVEL_LABEL: Record<BubbleLevel, string> = { ask: "needs input", review: "to merge", other: "other" };
-
-// A multicolour ring: one conic segment per status, sized by count, most important first from 12 o'clock, a 2° gap
-// between segments (a mixed ring reads as parts without its colours). "needs input" never shrinks below 20 % of a mixed
-// ring, so one question among many merges is still seen (colour critic).
-const GAP = 100 / 180; // 2° in %
-export function ring(counts: { asks: number; reviews: number; others: number }): string {
-  const parts: [BubbleLevel, number][] = (
-    [
-      ["ask", counts.asks],
-      ["review", counts.reviews],
-      ["other", counts.others],
-    ] as [BubbleLevel, number][]
-  ).filter(([, n]) => n > 0);
-  const total = parts.reduce((a, [, n]) => a + n, 0);
-  if (!total) return LEVEL_COLOR.other;
-  const only = parts.length === 1 ? parts[0] : undefined;
-  if (only) return LEVEL_COLOR[only[0]];
-  // shares in %, ask floored at 20 and the rest scaled into what is left
-  const askShare = counts.asks ? Math.max((counts.asks / total) * 100, 20) : 0;
-  const restTotal = total - counts.asks;
-  const share = (lv: BubbleLevel, n: number) => (lv === "ask" ? askShare : (n / restTotal) * (100 - askShare));
-  let at = 0;
-  const stops = parts.flatMap(([lv, n]) => {
-    const from = at;
-    at += share(lv, n);
-    return [
-      `${LEVEL_COLOR[lv]} ${from.toFixed(2)}% ${(at - GAP).toFixed(2)}%`,
-      `transparent ${(at - GAP).toFixed(2)}% ${at.toFixed(2)}%`,
-    ];
-  });
-  return `conic-gradient(${stops.join(", ")})`;
+function group(kind: Kind, sources: WaitingProject[], pick: (c: WaitingCard) => boolean): KindGroup {
+  // oldest first (the longest wait on top), an unknown time last, then by card id
+  const at = (c: WaitingCard) => (c.since ? Date.parse(c.since) : NaN);
+  const rows: KindRow[] = sources
+    .flatMap((p) => p.cards.filter(pick).map((card) => ({ slug: p.slug, name: shortName(p.slug), icon: p.icon, card })))
+    .sort((a, b) => {
+      const x = at(a.card);
+      const y = at(b.card);
+      if (Number.isNaN(x) !== Number.isNaN(y)) return Number.isNaN(x) ? 1 : -1;
+      return (Number.isNaN(x) ? 0 : x - y) || a.card.id - b.card.id;
+    });
+  const per = new Map<string, KindProject>();
+  for (const r of rows) {
+    const e = per.get(r.slug) ?? { slug: r.slug, name: r.name, icon: r.icon, count: 0 };
+    e.count += 1;
+    per.set(r.slug, e);
+  }
+  // the project with the most cards of this kind first (its avatar leads the stack)
+  const projects = [...per.values()].sort((a, b) => b.count - a.count || a.slug.localeCompare(b.slug));
+  return { kind, count: rows.length, projects, rows };
 }
 
-export const totals = (w: Waiting) => {
-  const cards = w.projects.flatMap((p) => p.cards);
-  const asks = cards.filter((c) => c.kind === "ask").length;
-  const reviews = cards.filter((c) => c.kind === "review").length;
-  return { asks, reviews, others: cards.length - asks - reviews };
-};
+export function byKind(w: Waiting): Record<Kind, KindGroup> {
+  return {
+    ask: group("ask", w.projects, (c) => c.kind === "ask"),
+    review: group("review", w.projects, (c) => c.kind !== "ask"),
+    external: group("external", [...w.external, ...w.held], () => true),
+  };
+}
 
-export function bubbles(w: Waiting): Bubble[] {
-  return w.projects
-    .map((p) => {
-      const asks = p.cards.filter((c) => c.kind === "ask").length;
-      const reviews = p.cards.filter((c) => c.kind === "review").length;
-      const level: BubbleLevel = asks > 0 ? "ask" : reviews > 0 ? "review" : "other";
-      const times = p.cards.map((c) => (c.since ? Date.parse(c.since) : NaN)).filter((t) => !Number.isNaN(t));
-      const latest = times.length ? Math.max(...times) : null;
-      const name = p.slug.split("/").pop() || p.slug;
-      const parts = [
-        asks > 0 && `${asks} needs input`,
-        reviews > 0 && `${reviews} to merge`,
-        p.count - asks - reviews > 0 && `${p.count - asks - reviews} other`,
-      ].filter(Boolean);
-      return {
-        slug: p.slug,
-        name,
-        icon: p.icon,
-        count: p.count,
-        asks,
-        reviews,
-        others: p.count - asks - reviews,
-        level,
-        latest,
-        title: `${p.slug} · ${parts.join(" · ")}`,
-      };
-    })
-    .sort(
-      (a, b) =>
-        RANK[a.level] - RANK[b.level] ||
-        (a.latest ?? -Infinity) - (b.latest ?? -Infinity) ||
-        a.slug.localeCompare(b.slug),
-    );
+// "4 to answer · gadgets, widgets" — a segment's accessible name and hover title
+export const segmentLabel = (g: KindGroup) =>
+  `${g.count} ${KIND_LABEL[g.kind]}${g.projects.length ? ` · ${g.projects.map((p) => p.slug).join(", ")}` : ""}`;
+
+// the tab list's arrow keys (roving focus): ←/→ wrap, Home/End jump; anything else → null (not ours)
+const STEP: Record<Kind, { next: Kind; prev: Kind }> = {
+  ask: { next: "review", prev: "external" },
+  review: { next: "external", prev: "ask" },
+  external: { next: "ask", prev: "review" },
+};
+export function nextKind(current: Kind, key: string): Kind | null {
+  if (key === "ArrowRight") return STEP[current].next;
+  if (key === "ArrowLeft") return STEP[current].prev;
+  if (key === "Home") return "ask";
+  if (key === "End") return "external";
+  return null;
+}
+
+// the sheet's rows (↑/↓ move focus between them, no wrap; Home/End jump): the index to focus, or null (not ours)
+export function nextRow(current: number, count: number, key: string): number | null {
+  if (count === 0) return null;
+  if (key === "ArrowDown") return current < 0 ? 0 : Math.min(current + 1, count - 1);
+  if (key === "ArrowUp") return current < 0 ? count - 1 : Math.max(current - 1, 0);
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  return null;
 }
 
 // age of an ISO time against `at` (epoch seconds): 42s · 7m · 3h · 2d; unknown → "—" (never guessed)

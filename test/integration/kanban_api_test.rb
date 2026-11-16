@@ -172,6 +172,14 @@ class KanbanApiTest < Minitest::Test
     assert_equal [0, [[id, "no PR whose checks could be read"]]], [w["total"], w["held"][0]["cards"].map { |c|
  c.values_at("id", "gate_hold") },],
                  "card #248: a gate card that cannot be approved now waits for CI, not for you"
+    assert_equal [["held"], true], [w["held"][0]["cards"].map { |c| c["kind"] }, w["held"][0].key?("icon")],
+                 "the widget's external segment reads held cards with their kind and project icon"
+    kb.set_owner(id, session: "worker_2", by: "lead")
+    held = api(:get, "/api/waiting")["held"][0]["cards"][0]
+    assert_equal ["worker_2", nil], held.values_at("owner_session", "since"), "no hand-off yet: its age is unknown"
+    Hanami.app["db.gateway"].connection[:cards].where(id: id).update(handoff_at: 1_700_000_000)
+    assert_equal Time.at(1_700_000_000).iso8601, api(:get, "/api/waiting")["held"][0]["cards"][0]["since"],
+                 "a held card is as old as its hand-off"
     t = Busyyaks::Clock.epoch # its PR, read green by the github service
     Hanami.app["db.gateway"].connection[:gh_pr_checks].insert(repo: "o/r", ref: "pr:3", requested_at: t, checked_at: t,
                                                              number: 3, state: "success", finished_at: t)
@@ -194,11 +202,14 @@ class KanbanApiTest < Minitest::Test
     kb.block(gate_blocked, reason: "deploy host offline", url: "https://status.example.com", by: "agent")
     w = api(:get, "/api/waiting")
     kinds = w["projects"][0]["cards"].to_h { |c| [c["id"], c.values_at("kind", "owner_session")] }
-    assert_equal({ ask => %w[ask lead_1], id => ["review", nil] }, kinds, "a blocked card is no review, no ask")
+    assert_equal({ ask => %w[ask lead_1], id => %w[review worker_2] }, kinds, "a blocked card is no review, no ask")
     assert_equal 2, w["total"]
     ext = w["external"][0]["cards"]
     assert_equal [[blocked, false, true, "runner offline"], [gate_blocked, false, true, "deploy host offline"]],
                  ext.map { |c| c.values_at("id", "needs_operator", "blocked", "blocked_first_line") }
+    assert_equal [%w[external external], true], [ext.map { |c| c["kind"] }, w["external"][0].key?("icon")]
+    kb.set_owner(blocked, session: "worker_1", by: "lead")
+    assert_equal ["worker_1", nil], api(:get, "/api/waiting")["external"][0]["cards"].map { |c| c.fetch("owner_session") }
     clear_cookies
     get "/api/waiting", nil, "HTTP_ACCEPT" => "application/json"
     assert_equal 401, last_response.status
