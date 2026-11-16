@@ -355,6 +355,7 @@ CREATE TABLE `gh_pr_checks`(
   `error` text,
   `detail` text,
   `head` varchar(255),
+  `builds` text,
   UNIQUE(`repo`, `ref`)
 );
 CREATE TABLE `boards`(
@@ -483,4 +484,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261203000000_cards_assigned_prs.rb'),
 ('20261204000000_daily_report_settings.rb'),
 ('20261205000000_setup_completions.rb'),
-('20261206000000_agents_kanban_session_boards.rb');
+('20261206000000_agents_kanban_session_boards.rb'),
+('20261207470000_gh_pr_checks_builds.rb');

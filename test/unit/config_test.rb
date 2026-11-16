@@ -9,7 +9,7 @@ class ConfigTest < Minitest::Test
   OK = { "roots" => [{ "path" => "/p", "prefix" => "" }], "search_depth" => 2, "owner_remotes" => ["github.com/me/"],
          "author_emails" => ["Me@x.io"], "window_days" => 7, "reap_protect" => [], "auth" => { "provider" => "none" },
          "agents" => { "collector" => "none" }, "dictation" => "none",
-         "terminal" => TERMINAL_DENY, "launch" => LAUNCH_CLAUDE, }.freeze
+         "terminal" => TERMINAL_DENY, "ci" => CI_SETTINGS, "launch" => LAUNCH_CLAUDE, }.freeze
 
   def test_valid = assert_equal ["me@x.io"], Busyyaks::Config.new(OK).author_emails
 
@@ -22,6 +22,25 @@ class ConfigTest < Minitest::Test
     assert_match(/missing keys: dictation/, e.message)
     e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.merge("dictation" => on.except("model"))) }
     assert_match(/dictation must be `none` or a mapping with exactly/, e.message)
+  end
+
+  # card #470: how the github service reads CI is stated — the stuck limit + the contexts that gate per repo, no default
+  def test_ci_is_required_with_the_stuck_limit_and_the_required_contexts
+    ci = Busyyaks::Config.new(OK).ci
+    assert_equal [3600, ["jenkins/ci"], ["jenkins/ci"], nil],
+                 [ci.max_pending_seconds, ci.required_for("o/r"), ci.required_for("O/R"), ci.required_for("o/x")]
+    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.except("ci")) }
+    assert_match(/missing keys: ci/, e.message)
+    [nil, "60", {}, { "max_pending_minutes" => 60 }, CI_SETTINGS.merge("x" => 1),
+     CI_SETTINGS.merge("max_pending_minutes" => 0), CI_SETTINGS.merge("max_pending_minutes" => 1441),
+     CI_SETTINGS.merge("max_pending_minutes" => 1.5), CI_SETTINGS.merge("required" => {}),
+     CI_SETTINGS.merge("required" => { "o/r" => [] }), CI_SETTINGS.merge("required" => { "o/r" => "jenkins/ci" }),
+     CI_SETTINGS.merge("required" => { "o/r" => [" "] }), CI_SETTINGS.merge("required" => { "r" => ["jenkins/ci"] }),
+     CI_SETTINGS.merge("required" => { "o/r" => %w[a a] }),
+     CI_SETTINGS.merge("required" => { "o/r" => ["a"], "O/r" => ["a"] }),].each do |bad|
+      e = assert_raises(Busyyaks::Config::Invalid, bad.inspect) { Busyyaks::Config.new(OK.merge("ci" => bad)) }
+      assert_match(/\Aci/, e.message)
+    end
   end
 
   # the terminal is stated — public_host allow|deny + max_open 1..64 (Busyyaks::Terminal.parse!)

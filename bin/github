@@ -17,14 +17,20 @@ login = ENV.fetch("GITHUB_LOGIN")
 token = ENV.fetch("GITHUB_TOKEN")
 data = Busyyaks::GithubNetwork::Data.default
 ci_interval = Integer(ENV.fetch("GITHUB_CI_INTERVAL_SECONDS"))
-window_days = Busyyaks::Config.load.window_days # the home page's range (/api/today reads the same key)
+config = Busyyaks::Config.load
+window_days = config.window_days # the home page's range (/api/today reads the same key)
 $stdout.sync = true
 # PR check status for the kanban idle watch (config/kanban.yml idle_watch): answers the rows the notifier asked for
 # (gh_pr_checks), on its own faster cadence. A failed poll is stored on the row; the notifier says it, never guesses.
 # Same cadence: the PR state behind the card links' flags (gh_pr_states), asked for by the web.
+# an enrolled project's repo missing from ci.required is said on /github and refused on that card's gate — never a
+# reason to stop polling every other project's PRs
+missing = Busyyaks::CiChecks.unlisted(data.db, config.ci)
+puts "ci.required does not list #{missing.join(', ')}: their cards' CI is refused until it does" if missing.any?
 Thread.new do
   client = Busyyaks::GithubNetwork::Client.new(token: token)
-  poller = Busyyaks::CiChecks::Poller.new(db: data.db, client: client, wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval))
+  poller = Busyyaks::CiChecks::Poller.new(db: data.db, client: client, wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval),
+                                          ci: config.ci) # config ci: the contexts that gate per repo + the stuck limit
   states = Busyyaks::PrStates::Poller.new(db: data.db, client: client, wanted_for: Busyyaks::PrStates.wanted_for(ci_interval))
   loop do
     begin

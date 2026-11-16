@@ -1,6 +1,6 @@
 # Copy to config/busyyaks.yml (gitignored). An unknown key is an error.
 # Required (a missing one stops boot): roots, search_depth, owner_remotes, author_emails, window_days, auth,
-#   reap_protect, agents, launch, dictation.
+#   reap_protect, agents, launch, dictation, terminal, ci.
 # Optional: engines (absent = only config/engines.yml), daily_report_runners (absent = no daily report runner allowed).
 #
 # roots:          {path, prefix}: directories INSIDE the container whose children are git repos
@@ -71,6 +71,18 @@ dictation: none
 #                  127.0.0.1 / localhost on WEB_HOST_PORT (an ssh -L forward included) always may.
 #                max_open: 1..64 — terminals open at once (each holds a thread of the web process); one more → 503.
 terminal: { public_host: deny, max_open: 8 }
+# ci:            how the github service reads a card's PR checks for the approval gate (docs/DEPLOY.md § CI checks).
+#                max_pending_minutes: 1..1440 — a required check pending longer than this (since it was posted / started)
+#                  is `stuck`: the gate says so and pings the card's owner once, instead of "CI is still running" forever.
+#                required: per repo (owner/name, as on github.com), the status contexts / check-run names that gate
+#                  (Jenkins posts `jenkins/ci`). Every other check on the commit is informational — named when it fails,
+#                  never a refusal. Every repo whose PRs cards are assigned must be listed: one that is not is refused
+#                  with that reason on its card, never guessed. A handoff's ci_url must be the build URL a required
+#                  check names for the head it hands over.
+ci:
+  max_pending_minutes: 60
+  required:
+    your-user/your-repo: [jenkins/ci]
 # launch:        which repos bin/launcher answers Claude Code's folder-trust prompt for ("Yes, I trust this folder"),
 #                which lets the repo's own .claude settings, hooks and .mcp.json run. Never decided from the repo
 #                itself (its origin or config: whoever wrote the repo wrote those). Trusted are only:

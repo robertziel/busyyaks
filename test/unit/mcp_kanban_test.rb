@@ -110,7 +110,8 @@ class McpKanbanTest < Minitest::Test
     assert_match(/CI not read yet .*; hand off once CI is green\z/, err("kanban_handoff", **hand)) # card #247
     now = Time.now.to_i # the github service answers the request the refusal registered: green
     Hanami.app["db.gateway"].connection[:gh_pr_checks].where(repo: "o/r", ref: "pr:7")
-                                                    .update(checked_at: now, number: 7, state: "success", finished_at: now)
+                                                    .update(checked_at: now, number: 7, state: "success", finished_at: now,
+                                                            builds: JSON.generate([hand[:ci_url]])) # its build (card #470)
     ok("kanban_handoff", **hand)
 
     board = ok("kanban_board", project: "g/r")
