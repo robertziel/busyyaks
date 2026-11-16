@@ -10,15 +10,34 @@ class PrStatesTest < Minitest::Test
   PS = Busyyaks::PrStates
 
   class FakeHttp
-    attr_accessor :pulls, :requests, :fail, :limited
-    def initialize = (@requests = []; @pulls = [])
+    attr_accessor :pulls, :requests, :fail, :limited, :events, :events_limited
+    attr_reader :etags_sent
+
+    def initialize = (@requests = []; @pulls = []; @events = {})
     def get(url, headers)
       raise "no token" unless headers["Authorization"]
       @requests << url
+      (@etags_sent ||= []) << headers["If-None-Match"] if url.include?("/pulls/")
       return [401, {}, "{\"message\":\"Bad credentials\"}"] if @fail
       if @limited # the token's limit used up: x-ratelimit-reset = @limited
         return [403, { "x-ratelimit-remaining" => "0", "x-ratelimit-reset" => @limited.to_s },
                 "{\"message\":\"API rate limit exceeded for user\"}",]
+      end
+
+      # a PR's issue events: @events[n] = its pages (each an array, oldest first); a closed PR with none set was
+      # closed by octo
+      m = url.match(%r{/issues/(\d+)/events\?per_page=100(?:&page=(\d+))?\z})
+      if m && @events_limited # the token's limit used up on the events read
+        return [403, { "x-ratelimit-remaining" => "0", "x-ratelimit-reset" => @events_limited.to_s },
+                "{\"message\":\"API rate limit exceeded for user\"}",]
+      end
+      return [500, {}, "{\"message\":\"Server Error\"}"] if m && @events == :fail
+      if m
+        n = m[1].to_i
+        pages = @events.fetch(n) { [[{ "event" => "closed", "actor" => { "login" => "octo" } }]] }
+        i = (m[2] || 1).to_i
+        link = i < pages.size ? { "link" => "<https://api.github.com/repos/x/issues/#{n}/events?per_page=100&page=#{i + 1}>; rel=\"next\"" } : {}
+        return [200, link, JSON.generate(pages[i - 1])]
       end
 
       body = case url
@@ -37,9 +56,162 @@ class PrStatesTest < Minitest::Test
     end
   end
 
-  def pr(n, repo, state: "open", draft: false, merged: nil, head: nil)
+  def pr(n, repo, state: "open", draft: false, merged: nil, head: nil, closed: "2026-11-16T23:06:57Z")
     { "number" => n, "state" => state, "draft" => draft, "merged_at" => merged,
+      "closed_at" => state == "closed" ? merged || closed : nil,
       "html_url" => "https://github.com/#{repo}/pull/#{n}", "head_label" => head, }
+  end
+
+  def ev(kind, login = "robertziel") = { "event" => kind, "actor" => { "login" => login } }
+
+  # busyyaks PR #43 — its base branch was deleted by a ship (GitHub closes, never retargets)
+  def test_closed_by_a_deleted_base_says_why
+    @http.pulls = [pr(43, "o/m", state: "closed")]
+    @http.events = { 43 => [[ev("base_ref_force_pushed"), ev("base_ref_deleted")], [ev("closed")]] } # two pages
+    @reader.lookup("o/m", "pr:43")
+    @poller.run
+    st = @reader.lookup("o/m", "pr:43")
+    assert_equal ["closed", "base deleted", Time.iso8601("2026-11-16T23:06:57Z").to_i],
+                 st.values_at(:state, :reason, :closed_at)
+    @now += 60
+    @http.requests.clear
+    @poller.run
+    assert_equal ["/repos/o/m/pulls/43"], @http.requests.map { |u| u.delete_prefix("https://api.github.com") },
+                 "the reason is read once per close"
+    link = links_for({ slug: "g/m", local_mode: nil }, [],
+                     metadata: { "prs" => { "pr" => "https://github.com/o/m/pull/43" } }).first
+    assert_equal ["#43 [closed: base deleted]"], shown([link])
+    assert_equal "base deleted", detail(link)["Why closed"]
+    assert_equal "closed without merging", detail(link)["State"]
+  end
+
+  # the real GitHub answer for busyyaks PR #43 (gh api repos/robertziel/busyyaks/issues/43/events, 2026-11-16):
+  # base_ref_deleted and closed in the same second
+  def test_the_recorded_pr_43_events_say_base_deleted
+    @http.pulls = [pr(43, "o/m", state: "closed", closed: "2026-11-15T23:06:57Z")]
+    @http.events = { 43 => [JSON.parse(File.read(File.expand_path("../fixtures/github/issue_43_events.json", __dir__)))] }
+    @reader.lookup("o/m", "pr:43")
+    @poller.run
+    assert_equal "base deleted", @reader.lookup("o/m", "pr:43")[:reason]
+  end
+
+  # the deletion written in the close's own second but AFTER it is still why; one a minute later is a cleanup
+  def test_a_deleted_branch_in_the_closes_second_after_it_is_why_a_later_one_is_not
+    at = "2026-11-15T23:06:57Z"
+    { [ev("closed").merge("created_at" => at), ev("head_ref_deleted").merge("created_at" => at)] => "head deleted",
+      [ev("closed").merge("created_at" => at), ev("base_ref_deleted").merge("created_at" => at)] => "base deleted",
+      [ev("closed", "ann").merge("created_at" => at),
+       ev("head_ref_deleted").merge("created_at" => "2026-11-15T23:07:58Z"),] => "by ann", }.each_with_index do |(evs, why), i|
+      n = 60 + i
+      @http.pulls = [pr(n, "o/m", state: "closed")]
+      @http.events = { n => [evs] }
+      @reader.lookup("o/m", "pr:#{n}")
+      @poller.run
+      assert_equal why, @reader.lookup("o/m", "pr:#{n}")[:reason], evs.map { |e| e["event"] }.inspect
+    end
+  end
+
+  # a closed PR GitHub gave no closed_at: stored closed, the reason says so (the PR watch says it as the PR's error,
+  # never told under a made-up time)
+  def test_a_closed_pr_with_no_closed_at_is_stored_with_an_unknown_reason
+    @http.pulls = [pr(6, "o/m", state: "closed").merge("closed_at" => nil)]
+    @reader.lookup("o/m", "pr:6")
+    @poller.run
+    st = @reader.lookup("o/m", "pr:6")
+    assert_equal ["closed", nil, "unknown: GitHub gave o/m#6 no closed_at"], st.values_at(:state, :closed_at, :reason)
+  end
+
+  def test_closed_by_a_deleted_head_says_why
+    @http.pulls = [pr(7, "o/m", state: "closed")]
+    # closed by hand and reopened earlier; the last close came from the head branch's deletion
+    @http.events = { 7 => [[ev("closed", "ann"), ev("reopened"), ev("head_ref_deleted"), ev("closed")]] }
+    @reader.lookup("o/m", "pr:7")
+    @poller.run
+    assert_equal "head deleted", @reader.lookup("o/m", "pr:7")[:reason]
+  end
+
+  def test_closed_by_hand_names_who_and_a_head_deleted_after_the_close_is_not_the_reason
+    @http.pulls = [pr(8, "o/m", state: "closed")]
+    @http.events = { 8 => [[ev("closed", "ann").merge("created_at" => "2026-11-15T10:00:00Z"),
+                            ev("head_ref_deleted").merge("created_at" => "2026-11-15T10:05:00Z"),]] }
+    @reader.lookup("o/m", "pr:8")
+    @poller.run
+    assert_equal "by ann", @reader.lookup("o/m", "pr:8")[:reason]
+  end
+
+  def test_a_reopened_pr_closed_again_reads_its_new_reason
+    @http.pulls = [pr(9, "o/m", state: "closed")]
+    @reader.lookup("o/m", "pr:9")
+    @poller.run
+    assert_equal "by octo", @reader.lookup("o/m", "pr:9")[:reason]
+    @http.pulls = [pr(9, "o/m", state: "closed", closed: "2026-11-17T08:00:00Z")]
+    @http.events = { 9 => [[ev("closed", "octo"), ev("reopened"), ev("base_ref_deleted"), ev("closed")]] }
+    @now += 60
+    @poller.run
+    assert_equal ["base deleted", Time.iso8601("2026-11-17T08:00:00Z").to_i],
+                 @reader.lookup("o/m", "pr:9").values_at(:reason, :closed_at)
+    @http.pulls = [pr(9, "o/m")]
+    @now += 60
+    @poller.run
+    refute @reader.lookup("o/m", "pr:9").key?(:reason), "an open PR carries no close"
+  end
+
+  # GitHub has no reason for the close (no closed event): stored as "unknown: …" for that close, never re-read
+  def test_a_closed_pr_github_gives_no_reason_for_is_closed_with_an_unknown_reason_read_once
+    @http.pulls = [pr(5, "o/m", state: "closed")]
+    @http.events = { 5 => [[ev("labeled")]] }
+    @reader.lookup("o/m", "pr:5")
+    @poller.run
+    st = @reader.lookup("o/m", "pr:5")
+    assert_equal "closed", st[:state]
+    assert_equal "unknown: o/m#5 is closed but its issue events have no closed event", st[:reason]
+    link = links_for({ slug: "g/m", local_mode: nil }, [],
+                     metadata: { "prs" => { "pr" => "https://github.com/o/m/pull/5" } }).first
+    assert_equal ["#5 [closed: why unknown]"], shown([link])
+    @http.requests.clear
+    @now += 60
+    @poller.run
+    refute(@http.requests.any? { |u| u.include?("/events") }, "the same close's reason is not read again")
+    assert_equal st[:reason], @reader.lookup("o/m", "pr:5")[:reason]
+  end
+
+  # a failed events read is the row's error, never the close's reason: read again next poll, the reason stored then
+  def test_a_failed_reason_read_is_the_rows_error_and_is_read_again
+    @http.pulls = [pr(5, "o/m", state: "closed")]
+    @http.events = :fail
+    @reader.lookup("o/m", "pr:5")
+    @poller.run
+    row = @db[:gh_pr_states].first
+    assert_nil row[:reason], "never an unknown reason from a failed read"
+    assert_match(/GitHub 500/, row[:error])
+    assert_match(/\AGitHub read failed: GitHub 500/, @reader.lookup("o/m", "pr:5")[:error])
+    @http.events = { 5 => [[ev("base_ref_deleted"), ev("closed")]] }
+    @now += 60
+    @poller.run
+    assert_equal ["closed", "base deleted"], @reader.lookup("o/m", "pr:5").values_at(:state, :reason)
+  end
+
+  def test_a_closed_event_with_no_actor_is_closed_by_an_unknown_account
+    @http.pulls = [pr(5, "o/m", state: "closed")]
+    @http.events = { 5 => [[ev("closed").merge("actor" => nil)]] }
+    @reader.lookup("o/m", "pr:5")
+    @poller.run
+    assert_equal "by an unknown account", @reader.lookup("o/m", "pr:5")[:reason]
+  end
+
+  # a row polled as closed before closed_at / reason existed: read as closed with no reason until the poller re-reads
+  # it, then it has both
+  def test_a_closed_row_polled_before_the_reason_existed_gets_it_on_the_next_poll
+    @db[:gh_pr_states].insert(repo: "o/m", ref: "pr:5", number: 5, state: "closed", checked_at: @now,
+                              requested_at: @now)
+    assert_equal [nil, nil], @reader.lookup("o/m", "pr:5").values_at(:closed_at, :reason)
+    @http.pulls = [pr(5, "o/m", state: "closed")]
+    @http.events = { 5 => [[ev("closed", "ann")]] }
+    @now += 60
+    @poller.run
+    st = @reader.lookup("o/m", "pr:5")
+    assert_equal "by ann", st[:reason]
+    assert_kind_of Integer, st[:closed_at]
   end
 
   def setup
@@ -91,6 +263,74 @@ class PrStatesTest < Minitest::Test
     assert_equal %w[open open], %w[pr:5 pr:6].map { |r| @reader.lookup("o/m", r)[:state] }
   end
 
+  # a rate limit on a close's issue-events read is the token's, never the close's reason — it pauses
+  # the pollers until the reset (the rest of the batch says so, nothing more is sent); the close is read after it
+  def test_a_rate_limit_on_the_issue_events_read_pauses_the_gate
+    @http.pulls = [pr(5, "o/m", state: "closed"), pr(6, "o/m")]
+    @http.events_limited = @now + 900
+    @reader.lookup("o/m", "pr:5")
+    @reader.lookup("o/m", "pr:6")
+    @poller.run
+    assert_match(/\Apolling paused until .*rate limit/, @gate.paused)
+    errors = @db[:gh_pr_states].order(:ref).select_map(%i[ref state reason error])
+    errors.each do |ref, state, reason, error|
+      assert_nil state, "#{ref}: no state stored"
+      assert_nil reason, "#{ref}: never an unknown reason"
+      assert_match(/\Apolling paused until /, error, ref)
+    end
+    assert_equal 2, @http.requests.size, "the PR, then its events: pr:6 not sent"
+    @http.requests.clear
+    @poller.run
+    assert_empty @http.requests, "paused: nothing sent"
+    @now += 901
+    @http.events_limited = nil
+    %w[pr:5 pr:6].each { |r| @reader.lookup("o/m", r) } # still wanted after the pause
+    @poller.run
+    assert_equal ["closed", "by octo"], @reader.lookup("o/m", "pr:5").values_at(:state, :reason)
+  end
+
+  # a closed PR's state survives a 304 — closed_at comes from the cached fields, so the close (and its
+  # reason, read once) is kept and the events are not read again
+  # an upgrade that adds a KEEP field: a cache entry written with the old field set — under main's plain `pr:<url>` key or
+  # a digest of another set — is never read and its ETag never sent, so the next read is a full 200 that stores
+  # closed_at; a closed PR polled before the upgrade is told once, with its real time and reason
+  def test_a_cache_entry_written_with_another_field_set_is_not_used
+    url = "/repos/o/m/pulls/5"
+    old = { "number" => 5, "html_url" => "https://github.com/o/m/pull/5", "state" => "closed", "draft" => false,
+            "merged_at" => nil, }
+    ["pr:#{url}", Busyyaks::GithubNetwork.cache_key("pr:", PS::Poller::KEEP - ["closed_at"], url)].each do |key|
+      @db[:gh_pages].insert(url: key, etag: "\"old\"", items: JSON.generate(old), at: @now)
+    end
+    @db[:gh_pr_states].insert(repo: "o/m", ref: "pr:5", number: 5, state: "closed", checked_at: @now - 60,
+                              requested_at: @now)
+    @http.pulls = [pr(5, "o/m", state: "closed")]
+    @http.events = { 5 => [[ev("closed", "ann")]] }
+    @poller.run
+    assert_equal [nil], @http.etags_sent, "no If-None-Match: a full read"
+    assert_equal 0, @client.not_modified
+    st = @reader.lookup("o/m", "pr:5")
+    assert_equal [Time.iso8601("2026-11-16T23:06:57Z").to_i, "by ann"], st.values_at(:closed_at, :reason)
+    assert_includes JSON.parse(@db[:gh_pages].where(url: PS::Poller.cache_key(url)).get(:items)).keys, "closed_at"
+    refute_equal PS::Poller.cache_key(url), Busyyaks::GithubNetwork.cache_key("pr:", PS::Poller::KEEP - ["draft"], url)
+  end
+
+  def test_an_unchanged_closed_pr_keeps_its_closed_at_on_a_304
+    @http.pulls = [pr(7, "o/m", state: "closed")]
+    @reader.lookup("o/m", "pr:7")
+    @poller.run
+    first = @db[:gh_pr_states].where(ref: "pr:7").first
+    @now += 60
+    @http.requests.clear
+    @reader.lookup("o/m", "pr:7")
+    @poller.run
+    assert_equal 1, @client.not_modified, "the second read is a 304"
+    assert_equal ["/repos/o/m/pulls/7"], @http.requests.map { |u| u.delete_prefix("https://api.github.com") },
+                 "one conditional read, no events"
+    row = @db[:gh_pr_states].where(ref: "pr:7").first
+    assert_equal Time.iso8601("2026-11-16T23:06:57Z").to_i, row[:closed_at], "closed_at from the 304's cached fields"
+    assert_equal [first[:closed_at], "by octo", "closed", nil], row.values_at(:closed_at, :reason, :state, :error)
+  end
+
   # a wanted PR is read every minute; while it stands still each read is a 304 (no rate limit), and only the fields the
   # state needs are cached, pruned once nobody asked for the PR for wanted_for
   def test_an_unchanged_pr_state_costs_no_rate_limit
@@ -112,11 +352,11 @@ class PrStatesTest < Minitest::Test
     @poller.run
     assert_equal 2, @client.calls, "the change is read"
     assert_equal "draft", @reader.lookup("o/m", "pr:1")[:state]
-    page = @db[:gh_pages].where(url: "pr:/repos/o/m/pulls/1").first
-    assert_equal %w[draft html_url merged_at number state], JSON.parse(page[:items]).keys.sort
+    page = @db[:gh_pages].where(url: PS::Poller.cache_key("/repos/o/m/pulls/1")).first
+    assert_equal %w[closed_at draft html_url merged_at number state], JSON.parse(page[:items]).keys.sort
     @now += 601
     @poller.run
-    assert_nil @db[:gh_pages].where(url: "pr:/repos/o/m/pulls/1").first, "nobody asked for 10 min: pruned"
+    assert_nil @db[:gh_pages].where(url: PS::Poller.cache_key("/repos/o/m/pulls/1")).first, "nobody asked for 10 min: pruned"
   end
 
   # only PRs assigned to cards are read — a head: ref (the old branch lookup) is an error on its row
