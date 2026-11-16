@@ -1,0 +1,59 @@
+/* the server badge + connection state in the header, the "down" banner */
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+  color: var(--ink-faint);
+}
+.conn i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.conn-remote {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--ink);
+}
+.conn-remote b {
+  color: var(--accent);
+  font-weight: 600;
+}
+.conn-reconnecting i {
+  background: var(--warn);
+}
+.conn-down {
+  border-color: var(--bad);
+}
+.conn-down i {
+  background: var(--bad);
+}
+.conn-banner {
+  position: fixed;
+  left: 50%;
+  top: calc(var(--top-h, 56px) + 8px);
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: calc(100vw - 32px);
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--bad);
+  color: #fff;
+  font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+body.conn-down .shell {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+@media (max-width: 640px) {
+  .conn span {
+    display: none;
+  }
+}

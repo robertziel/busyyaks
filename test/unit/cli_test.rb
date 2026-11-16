@@ -187,8 +187,9 @@ class CliTest < Minitest::Test
     assert_includes err, 'WEB_HOST_PORT="0" is not a port'
   end
 
-  # `yaks desktop`: an Applications entry opening the dashboard in a window of its own
+  # `yaks desktop`: an Applications entry opening a window of its own — the server chooser
   def desktop_env = { "PATH" => "/usr/bin", "HOME" => @home }
+  def chooser(exe) = "#{RbConfig.ruby} #{@home}/bin/yaks desktop open --browser #{exe}"
   def entry_file = File.join(@home, ".local/share/applications/busyyaks.desktop")
 
   def with_icon
@@ -204,7 +205,7 @@ class CliTest < Minitest::Test
     assert_includes out, "installed #{entry_file}"
     body = File.read(entry_file)
     assert_includes body, "[Desktop Entry]\nType=Application\nName=busyyaks\n"
-    assert_includes body, "\nExec=/usr/bin/google-chrome --app=http://127.0.0.1:8080\n"
+    assert_includes body, "\nExec=#{chooser('/usr/bin/google-chrome')}\n"
     assert_includes body, "\nIcon=#{@home}/public/static/icon-512.png\n"
     assert_includes body, "\nTerminal=false\n"
     assert_includes body, "\nX-Busyyaks-Checkout=#{@home}\n"
@@ -218,12 +219,13 @@ class CliTest < Minitest::Test
     assert_includes err, "not installed: no #{entry_file}"
   end
 
-  def test_desktop_install_uses_the_public_host
+  # the entry needs no .env: the chooser reads it (Local) each time it opens, a laptop with no stack still lists servers
+  def test_desktop_install_needs_no_local_stack
     with_icon
     @runner = FakeRunner.new(tools: %w[chromium])
-    File.write(File.join(@home, ".env"), format(ENV_FILE, run: @run).sub("PUBLIC_HOST=", "PUBLIC_HOST=dash.example.com"))
+    FileUtils.rm_f(File.join(@home, ".env"))
     assert_equal 0, yaks("desktop", "install", "--browser", "chromium", env: desktop_env).first
-    assert_includes File.read(entry_file), "Exec=/usr/bin/chromium --app=https://dash.example.com\n"
+    assert_includes File.read(entry_file), "Exec=#{chooser('/usr/bin/chromium')}\n"
   end
 
   def test_desktop_install_refusals
@@ -273,8 +275,7 @@ class CliTest < Minitest::Test
 
   def test_desktop_install_on_macos_writes_an_app_bundle
     with_icon
-    args_file = File.join(@home, "chrome-args")
-    exe = mac_browser(script: "#!/bin/sh\nprintf '%s\\n' \"$@\" > '#{args_file}'\n")
+    exe = mac_browser
     code, out, = yaks("desktop", "install", "--browser", "google-chrome", os: "Darwin", env: desktop_env)
     assert_equal 0, code
     assert_includes out, "installed #{bundle}"
@@ -289,9 +290,8 @@ class CliTest < Minitest::Test
     assert_equal "png", icns[16..]
     launcher = File.join(bundle, "Contents/MacOS/busyyaks")
     assert File.executable?(launcher)
-    assert_equal "#!/bin/sh\nexec '#{exe}' '--app=http://127.0.0.1:8080'\n", File.read(launcher)
-    assert system(launcher), "the bundle's executable runs"
-    assert_equal "--app=http://127.0.0.1:8080\n", File.read(args_file)
+    want = [RbConfig.ruby, "#{@home}/bin/yaks", "desktop", "open", "--browser", exe].map { "'#{_1}'" }.join(" ")
+    assert_equal "#!/bin/sh\nexec #{want}\n", File.read(launcher)
     assert_equal 0, yaks("desktop", "install", "--browser", "google-chrome", os: "Darwin", env: desktop_env).first
     code, out, = yaks("desktop", "uninstall", os: "Darwin", env: desktop_env)
     assert_equal [0, "removed #{bundle}\n"], [code, out]
@@ -381,12 +381,12 @@ class CliTest < Minitest::Test
     d = CLI::Desktop
     assert_equal "/usr/bin/chromium", d.exec_arg("/usr/bin/chromium")
     assert_equal %q("/opt/my \"b\" \$x"), d.exec_arg(%q(/opt/my "b" $x))
-    body = d.entry("/opt/my chrome", "http://127.0.0.1:8080", "/home/a b/i%.png", "/home/a\\b")
-    assert_includes body, %q(Exec="/opt/my chrome" --app=http://127.0.0.1:8080) + "\n"
+    body = d.entry(["/opt/my chrome", "--browser", "/x"], "/home/a b/i%.png", "/home/a\\b")
+    assert_includes body, %q(Exec="/opt/my chrome" --browser /x) + "\n"
     assert_includes body, "Icon=/home/a b/i%.png\n"
     assert_includes body, "X-Busyyaks-Checkout=/home/a\\\\b\n"
     assert_equal "/home/a\\b", d.unescape("/home/a\\\\b")
-    assert_includes d.entry("/x/100%", "http://h", "/i", "/h"), "Exec=/x/100%% --app=http://h\n"
+    assert_includes d.entry(["/x/100%", "open"], "/i", "/h"), "Exec=/x/100%% open\n"
     assert_raises(CLI::Refused) { d.string("a\nb") }
   end
 

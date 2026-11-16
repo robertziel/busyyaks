@@ -51,8 +51,8 @@ NODE_IMAGE=node:22-bookworm-slim     # the Dockerfile's frontend stage
 GITLEAKS_IMAGE=zricethezav/gitleaks:v8.30.1
 HOST_RUBY_IMAGE=ruby:3.2.3-slim      # Busyyaks::CLI::MIN_RUBY's version (test/unit/cli_test.rb asserts they agree)
 # the standalone tests of what runs on the host (none requires test_helper: no app, no gems)
-HOST_TESTS=(test/unit/cli_test.rb test/integration/yaks_test.rb test/unit/env_file_test.rb test/unit/launcher_rules_test.rb
-            test/unit/deploy_template_test.rb test/unit/install_launcher_test.rb test/unit/deploy_units_test.rb)
+HOST_TESTS=(test/unit/cli_test.rb test/unit/cli_remote_test.rb test/unit/cli_chooser_test.rb test/integration/yaks_test.rb test/unit/env_file_test.rb
+            test/unit/launcher_rules_test.rb test/unit/deploy_template_test.rb test/unit/install_launcher_test.rb test/unit/deploy_units_test.rb)
 
 # Bind mounts are resolved by the Docker DAEMON. Under Jenkins this script runs inside the controller's container,
 # talking to the host's daemon, so it needs the checkout's path on the HOST: the source of the container mount that

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "etc"
+require "json"
 require "optparse"
 require_relative "../lib/busyyaks/env_file"
 require_relative "../lib/busyyaks/deploy_template"
@@ -28,7 +30,7 @@ module Busyyaks
 
     # home: the checkout · env: the process env (PATH, HOME) · runner: what spawns (Runner; a recording fake in tests)
     # os: `uname -s` · ruby: the running Ruby's version · http: Http (a fake in tests)
-    Context = Data.define(:home, :env, :runner, :out, :err, :os, :ruby, :http) do
+    Context = Data.define(:home, :env, :runner, :out, :err, :os, :ruby, :http, :stdin) do
       # .env of this checkout (the one reader); a missing or malformed file → Refused naming it
       def dotenv
         EnvFile.read(File.join(home, ".env"))
@@ -55,18 +57,26 @@ module Busyyaks
       ["server status", "every service, /up, MCP tools/list, the launcher unit and its socket; exit 1 if any is down"],
       ["server logs [SERVICE] [-f]", "docker compose logs of the stack (or of one service); -f follows"],
       ["panel [--print]", "open the dashboard in the browser (xdg-open); --print prints its URL instead"],
-      ["desktop install --browser NAME", "busyyaks in the app menu: the dashboard in its own window (Linux, BSD, macOS)"],
+      ["desktop install --browser NAME", "busyyaks in the app menu: the server chooser in its own window (Linux, BSD, macOS)"],
+      ["desktop open --browser NAME", "the chooser now: Local (the default) and the saved servers, each in its own window"],
       ["desktop uninstall", "remove that entry"],
       ["env KEY...", "`export KEY='value'` lines from .env, for eval (bin/env)"],
+      ["env --ports", "this server's host name and ports as JSON (what `yaks remote connect` asks over ssh)"],
+      ["remote add|remove TARGET", "save / forget a busyyaks server reached over ssh (a Host alias or user@host)"],
+      ["remote list", "the saved servers (connects to nothing)"],
+      ["remote connect TARGET [--mcp]", "forward its dashboard (and MCP) to this machine over ssh, until ssh ends"],
+      ["remote attach TARGET SESSION", "an agent's terminal on that server, here, over ssh"],
+      ["remote --stdio", "server side of attach: ssh's stdin/stdout ↔ the launcher socket"],
       ["doctor", "every host tool the stack needs, per feature; exit 1 if one is missing"],
       ["help", "this list"],
     ].freeze
 
     module_function
 
-    def run(argv, home:, env:, out: $stdout, err: $stderr, os: Host.os, ruby: RUBY_VERSION, runner: nil, http: Http)
+    def run(argv, home:, env:, out: $stdout, err: $stderr, os: Host.os, ruby: RUBY_VERSION, runner: nil, http: Http,
+            stdin: $stdin)
       ctx = Context.new(home: home, env: env, runner: runner || Runner.new(env), out: out, err: err, os: os, ruby: ruby,
-                        http: http)
+                        http: http, stdin: stdin)
       Host.check!(ctx)
       dispatch(ctx, argv.dup)
     rescue Usage => e
@@ -85,6 +95,7 @@ module Busyyaks
       when "server" then Server.run(ctx, args)
       when "panel" then Panel.run(ctx, args)
       when "desktop" then Desktop.run(ctx, args)
+      when "remote" then Remote.run(ctx, args)
       when "env" then env(ctx, args)
       when "doctor" then Doctor.run(ctx, args)
       when "help", "-h", "--help" then ctx.out.puts(usage) || 0
@@ -94,12 +105,23 @@ module Busyyaks
     end
 
     def env(ctx, keys)
+      return ports(ctx, keys.drop(1)) if keys.first == "--ports"
       raise Usage, "env needs at least one KEY" if keys.empty?
 
       ctx.out.puts EnvFile.shell_exports(ctx.dotenv, keys)
       0
     rescue EnvFile::Invalid => e
       raise Refused, e.message
+    end
+
+    # `env --ports`: what a remote `yaks remote connect` forwards — this machine's name and the loopback ports
+    # web and MCP are published on. No secret: the MCP bearer stays here.
+    def ports(ctx, args)
+      no_more!(args)
+      env = ctx.dotenv_values("WEB_HOST_PORT", "MCP_HOST", "MCP_HOST_PORT")
+      ctx.out.puts JSON.generate(host: Etc.uname.fetch(:nodename), web_port: Integer(env["WEB_HOST_PORT"]),
+                                 mcp_host: env["MCP_HOST"], mcp_port: Integer(env["MCP_HOST_PORT"]))
+      0
     end
 
     # Parses `args` with `opts` (an OptionParser); an unknown flag is a usage error naming it.
@@ -140,4 +162,6 @@ require_relative "yaks/http"
 require_relative "yaks/server"
 require_relative "yaks/panel"
 require_relative "yaks/desktop"
+require_relative "yaks/remote"
+require_relative "yaks/chooser"
 require_relative "yaks/doctor"
