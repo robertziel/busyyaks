@@ -80,7 +80,8 @@ pipeline {
         stage('Ruby suite') { steps { gate('ruby') } }
         stage('Ruby suite (PostgreSQL)') { steps { gate('ruby-pg') } }
         stage('Frontend')   { steps { gate('frontend') } }
-        stage('Audit')      { steps { gate('audit') } }
+        // the libgit2 audit reads GitHub authenticated: github-pat as CI_GITHUB_READ_TOKEN, by name
+        stage('Audit')      { steps { withCredentials([string(credentialsId: 'github-pat', variable: 'CI_GITHUB_READ_TOKEN')]) { gate('audit') } } }
         stage('Secrets')    { steps { gate('secrets') } }
         stage('Host Ruby')  { steps { gate('host') } }
       }

@@ -45,8 +45,9 @@ class CiGatesTest < Minitest::Test
 
   def teardown = FileUtils.rm_rf(@dir)
 
-  def env(path: "#{@bin}:#{ENV.fetch('PATH')}", fail: nil, code: 1, mount: @dir)
-    { "PATH" => path, "DOCKER_LOG" => @log, "STUB_MOUNT" => mount, "DOCKER_FAIL" => fail.to_s, "DOCKER_EXIT" => code.to_s,
+  def env(path: "#{@bin}:#{ENV.fetch('PATH')}", fail: nil, code: 1, mount: @dir, token: "stub-read-token")
+    { "PATH" => path, "CI_GITHUB_READ_TOKEN" => token,
+      "DOCKER_LOG" => @log, "STUB_MOUNT" => mount, "DOCKER_FAIL" => fail.to_s, "DOCKER_EXIT" => code.to_s,
       "GIT_AUTHOR_NAME" => "ci", "GIT_AUTHOR_EMAIL" => "ci@example.invalid",
       "GIT_COMMITTER_NAME" => "ci", "GIT_COMMITTER_EMAIL" => "ci@example.invalid",
       "GIT_CONFIG_GLOBAL" => "/dev/null", "GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_INDEX_FILE" => nil,
@@ -184,6 +185,34 @@ class CiGatesTest < Minitest::Test
       assert_equal code, status.exitstatus, "#{fail.inspect}: #{err}"
       assert_equal 3, docker_runs.size, "every check runs even when one fails: #{docker_runs}"
     end
+  end
+
+  # the libgit2 audit asks GitHub authenticated only; the token reaches the container by name, never in argv
+  def test_audit_passes_the_token_by_name_and_refuses_without_one
+    dir = full_ci_repo
+    _out, err, status = run_in(dir, "scripts/ci/test.sh", "audit")
+
+    assert_predicate status, :success?, err
+    libgit2 = docker_runs.find { _1.include?("libgit2-audit.rb") }
+    assert_includes libgit2, "-e CI_GITHUB_READ_TOKEN "
+    refute docker_calls.any? { _1.include?("stub-read-token") }, "the token value is never on a command line"
+
+    FileUtils.rm_f(@log)
+    _out, err, status = run_in(dir, "scripts/ci/test.sh", "audit", token: nil)
+
+    assert_equal 1, status.exitstatus
+    assert_match "audit: CI_GITHUB_READ_TOKEN is not set", err
+    refute docker_runs.any? { _1.include?("libgit2-audit.rb") }, "no anonymous request is started"
+    assert_equal 2, docker_runs.size, "the other two checks still run: #{docker_runs}"
+  end
+
+  def test_the_libgit2_audit_script_refuses_without_a_token
+    _out, err, status = Open3.capture3({ "CI_GITHUB_READ_TOKEN" => nil }, RbConfig.ruby,
+                                       File.expand_path("../../scripts/ci/libgit2-audit.rb", __dir__),
+                                       File.expand_path("../../Dockerfile", __dir__))
+
+    assert_equal 1, status.exitstatus
+    assert_match "libgit2-audit: CI_GITHUB_READ_TOKEN is not set", err
   end
 
   def test_all_runs_every_stage_and_fails_when_one_fails

@@ -41,3 +41,6 @@ jobs:
           persist-credentials: false
       - name: scripts/ci/test.sh all
         run: scripts/ci/test.sh all
+        env:
+          # the libgit2 audit reads GitHub authenticated: the run's own read-only token, never anonymous
+          CI_GITHUB_READ_TOKEN: ${{ github.token }}

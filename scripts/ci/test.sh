@@ -240,9 +240,15 @@ audit_suite() {
   tag=$(scripts/lint/image)
   docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$HOST_SRC:/src:ro" --entrypoint bundle "$tag" \
     exec bundle-audit check --update /src || status=1
-  # the image's libgit2 (Dockerfile ARG) against libgit2's security releases: not in any advisory db
-  docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$HOST_SRC:/src:ro" --entrypoint ruby "$tag" \
-    /src/scripts/ci/libgit2-audit.rb /src/Dockerfile || status=1
+  # the image's libgit2 (Dockerfile ARG) against libgit2's security releases: not in any advisory db. Authenticated
+  # only: CI_GITHUB_READ_TOKEN reaches the container by NAME (-e VAR), never on a command line.
+  if [ -z "${CI_GITHUB_READ_TOKEN:-}" ]; then
+    echo "audit: CI_GITHUB_READ_TOKEN is not set — the libgit2 audit never asks GitHub anonymously" >&2
+    status=1
+  else
+    docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e CI_GITHUB_READ_TOKEN -v "$HOST_SRC:/src:ro" --entrypoint ruby "$tag" \
+      /src/scripts/ci/libgit2-audit.rb /src/Dockerfile || status=1
+  fi
   # the lockfile alone is audited: nothing installed, nothing written to the checkout
   docker run --rm -v "$HOST_SRC/frontend:/src:ro" "$NODE_IMAGE" sh -euc '
     mkdir /w && cp /src/package.json /src/package-lock.json /w && cd /w
