@@ -270,7 +270,7 @@ exit 1. The jq · curl · flock · timeout rows appear only when `config/busyyak
 | **Project** `/projects/<slug>` | **Board** (below) and **Overview**: the branch, commits and notes. A [Backlog.md](https://github.com/MrLesk/Backlog.md) `backlog/` folder shows its tasks on the board, read-only |
 | **Reports** `/reports` | the daily reports and anything an agent posted with `post_report`; `/reports/components` is the block library |
 | **GitHub** `/github` | the people you follow: their stars and new follows over 24h · 7d · 30d; your github.com feed summarised |
-| **Agents** sidebar | every tmux session running a coding agent, by project, worst first: blocked (a dialog or a question) · review · working · finished · idle; links to its terminal and its Claude Code Remote Control session |
+| **Agents** sidebar | every tmux session running a coding agent, by project, worst first: blocked (a dialog or a question) · review · working · finished · idle; links to its terminal and its Claude Code Remote Control session; **Open terminal** shows its live screen in the page, read-only until **Take control** ([Terminals](docs/DEPLOY.md#terminals-an-agents-live-screen)) |
 
 Two skins (light by default, dark, or follow the system), Trello-style keyboard shortcuts on the board (`?`), and a search
 over projects, cards, commits and reports (`⌘K`).

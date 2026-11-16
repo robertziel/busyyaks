@@ -2,12 +2,13 @@
 // its KanbanApi port over api.ts (session cookie + X-CSRF-Token, docs/API-kanban.md routes), the open card / panel /
 // archived flag in the URL (?card=&panel=&archived=), the router for same-origin links in rendered markdown, and the
 // /api/boards cache invalidated after every write; the comment box's mic over /api/dictation when the config turns it
-// on (<meta name="dictation">). No board logic lives here (test/unit/no_kanban_code_test.rb).
+// on (<meta name="dictation">); the card dialog's Terminals section (CardTerminals). No board logic lives here (test/unit/no_kanban_code_test.rb).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { apiDelete, apiGet, apiPost, apiPostForm, apiUpload, dictationOn, invalidate, userEmail } from "../api";
 import { projectPath } from "../lib/format";
 import { pickYak } from "./YakLoader";
+import { cardTerminals } from "./CardTerminals";
 import { CHANGED as SHORTCUT_CHANGED, readShortcut } from "../lib/dictationShortcut";
 import {
   Board as KanbanBoard,
@@ -128,6 +129,7 @@ export function ProjectBoard({ slug }: { slug: string }) {
         cardHref={(s, id) => `${projectPath(s)}?tab=board&card=${id}`}
         onChanged={() => invalidate("/api/boards")}
         dictation={dictation}
+        cardTerminals={cardTerminals}
       />
     </div>
   );

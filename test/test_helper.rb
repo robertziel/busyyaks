@@ -11,6 +11,8 @@ LAUNCH_CLAUDE = {
   "trusted_paths" => [], "commands" => [{ "kind" => "claude_code", "command" => "claude", "args" => [], "via_shell" => false }],
   "start_seconds" => 30,
 }.freeze
+# config/busyyaks.yml `terminal` for a test Config: not through PUBLIC_HOST, 4 open at once
+TERMINAL_DENY = { "public_host" => "deny", "max_open" => 4 }.freeze
 
 # The agent settings the suite runs on (test/fixtures/agents.yml: two launchers) as the newest revision — written once
 # here and again before every DBReset test (a test may save revisions of its own).

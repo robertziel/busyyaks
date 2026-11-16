@@ -19,6 +19,8 @@
 #   {"op":"dialog","session","socket"}              → the dialog on its screen now (SessionDialog.parse) or null
 #   {"op":"git","session","socket"}                  → {"ok":true,"path"} the session's working dir, relative to PROJECTS_ROOT
 #   {"op":"answer","session","socket","hash","key"} → press that option key (digit / esc) ONLY while the same dialog shows
+#   {"op":"attach","session","socket"}              → the session's live terminal: {ok,session,cols,rows,screen}, then the
+#                                                    connection stays open, JSON lines both ways (Busyyaks::Terminal)
 # agents · agent_tasks · reap_preview · reap · notify read the agent-session collector (AgentCollector::OPS); with
 # config/busyyaks.yml agents.collector: none each answers {ok:false, unsupported:true, error: AgentCollector::OFF, status: 422}.
 # Only an agent type + launcher key from config/kanban.yml (the board config's `agent_types` / `launchers`, built
@@ -33,6 +35,9 @@ require "shellwords"
 require "fileutils"
 require "time"
 require "tmpdir"
+require "pty"
+require "io/console"
+require "base64"
 # the engine files the host side loads: the dialog parser (the same the container runs, so both compute the same
 # dialog hash) and the host config + Launch (how a session is started — config/kanban.yml's launchers and agent types)
 require_relative "../vendor/agents_kanban/ruby/lib/agents_kanban/session_dialog"
@@ -48,6 +53,8 @@ require_relative "../lib/busyyaks/private_socket"
 require_relative "../lib/busyyaks/launcher_rules"
 require_relative "../lib/busyyaks/launch_trust"
 require_relative "../lib/busyyaks/agent_settings"
+# the live terminal's stream: its frames, names and limits — the same file the web relays it with
+require_relative "../lib/busyyaks/terminal"
 
 $stdout.sync = true
 ROOT = File.expand_path("..", __dir__)
@@ -268,8 +275,13 @@ def host_dir(container_path)
   Busyyaks::LauncherRules.host_dir(container_path, container_root: CONTAINER_ROOT, projects_root: PROJECTS_ROOT)
 end
 
+# tmux without $TMUX / $TMUX_PANE: a launcher started from inside a tmux pane (by hand, or a test) must never resolve a
+# command's default target to the session it was started from (a tmux call with no -t once acted on that
+# session). Every call names its target anyway.
+TMUX_ENV = { "TMUX" => nil, "TMUX_PANE" => nil }.freeze
+
 def tmux(*args)
-  out, err, st = Open3.capture3("tmux", *args)
+  out, err, st = Open3.capture3(TMUX_ENV, "tmux", *args)
   [out, err, st.success?]
 end
 
@@ -761,6 +773,193 @@ def answer_op(req)
   ok ? { ok: true, pressed: key } : { ok: false, error: "tmux: #{err.strip}", status: 500 }
 end
 
+# ── attach: a session's live terminal ───────────────────────────────────────────────────────────────────────────────
+# The screen AND the keys leave the host, to the web's operator-only /api/terminal (and an ssh --stdio relay): an
+# explicit reversal of "only the verdict leaves the host" (pane_screen), the operator's call — docs/DEPLOY.md
+# § Terminals. A tmux CLIENT of the session in a PTY of ours, `attach-session -f ignore-size,read-only`, for the whole
+# stream: the viewer never resizes the agent's window and the client takes no key, ever — a key written into a client
+# goes through its key tables (the prefix, `:` + run-shell, new-window, choose-tree: a host shell or another session,
+# past every check here). Control is this op's own flag; a key in control is `send-keys -H` (its bytes, in hex) to the
+# session's pane, in ONE tmux command after `copy-mode -q` (a pane in a mode — copy mode, choose-tree — hands even literal keys to that
+# mode's key table, where a binding may run-shell): the mode is cancelled, then the agent reads the bytes typed.
+# Refused here while not in control, not only by the web. The client showing any other session (the session ended and
+# tmux moved it) ends the stream.
+# Only a running session with an agent in its pane (claude, or an allowlisted launch command) is attached, and taking
+# control checks that again.
+ATTACH_POLL_S = 2 # how often the window's size is read (a resize is sent as {"size"})
+
+def attach_refusal(error, status) = { ok: false, error: error, status: status }
+
+def attach_base(sock) = sock == "default" ? [] : ["-L", sock]
+
+def agent_pane?(base, name)
+  out, _e, ok = tmux(*base, "display-message", "-p", "-t", "=#{name}:", "\#{pane_pid}")
+  return false unless ok
+
+  names = ["claude", *COMMANDS.map { |c| c["command"] }].uniq
+  tree(out.strip.to_i).any? do |pid|
+    argv = (File.read("/proc/#{pid}/cmdline") rescue "").split("\0")
+    argv.first(2).any? { |a| names.include?(File.basename(a)) }
+  end
+end
+
+# The size a client of the session's window has: the window plus its status line(s) (a client of another size would
+# make tmux redraw the window cropped or padded — and, the only client, resize it).
+def window_size(base, name)
+  out, _e, ok = tmux(*base, "display-message", "-p", "-t", "=#{name}:", "\#{window_width} \#{window_height} \#{status}")
+  cols, rows, status = out.split
+  lines = { "on" => 1, "off" => 0 }.fetch(status.to_s) { status.to_i }
+  ok && cols.to_i.positive? && rows.to_i.positive? ? [cols.to_i, rows.to_i + lines] : nil
+end
+
+def attach_check(req)
+  name, sock = Busyyaks::Terminal.session!(req["session"], req["socket"] || "default")
+  base = attach_base(sock)
+  _o, _e, ok = tmux(*base, "has-session", "-t", "=#{name}")
+  return attach_refusal("session #{name} is not running", 404) unless ok
+  return attach_refusal("session #{name} runs no agent in its pane (claude or a launch command): not attached", 403) \
+    unless agent_pane?(base, name)
+
+  size = window_size(base, name) or return attach_refusal("session #{name}: its window size is unreadable", 500)
+  [name, sock, base, size]
+rescue Busyyaks::Terminal::Invalid => e
+  attach_refusal(e.message, 400)
+end
+
+def attach_op(io, req)
+  checked = attach_check(req)
+  return io.puts(JSON.generate(checked)) if checked.is_a?(Hash)
+
+  name, sock, base, (cols, rows) = checked
+  screen, = tmux(*base, "capture-pane", "-e", "-p", "-t", "=#{name}:")
+  master, slave = PTY.open
+  tty = slave.path
+  master.winsize = [rows, cols]
+  pid = Process.spawn(TMUX_ENV.merge("TERM" => "xterm-256color"), "tmux", *base, "attach-session", "-f", "ignore-size,read-only",
+                      "-t", "=#{name}", in: slave, out: slave, err: slave, pgroup: true)
+  slave.close
+  io.puts(JSON.generate(ok: true, session: name, cols: cols, rows: rows,
+                        screen: Base64.strict_encode64(screen.to_s.gsub(/\r?\n/, "\r\n"))))
+  puts "#{Time.now.iso8601} attach #{name}: opened (read-only)"
+  out = Thread.new { attach_output(io, master, base, name, [cols, rows], tty) }
+  attach_input(io, base, name)
+ensure
+  Process.kill("TERM", pid) rescue nil if pid
+  Process.wait(pid) rescue nil if pid
+  out&.join(5)
+  master&.close unless master&.closed?
+  puts "#{Time.now.iso8601} attach #{name}: closed" if pid
+end
+
+def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+# our client still shows this session, or the stream ends here: detached, logged, EOFError (nothing more is sent)
+def attach_on_session!(base, name, tty)
+  shown = client_session(base, tty)
+  return if shown == name
+
+  tmux(*base, "detach-client", "-t", tty) if shown
+  puts "#{Time.now.iso8601} attach #{name}: the client showed #{(shown || 'no session').inspect}, detached"
+  raise EOFError
+end
+
+# the session our client (by its tty) shows now, nil when it is gone
+def client_session(base, tty)
+  out, = tmux(*base, "list-clients", "-F", "\#{client_tty} \#{client_session}")
+  out.lines.map(&:split).find { |l| l.first == tty }&.last
+end
+
+# the tmux client's output → {"o"}; the window resized → {"size"}; the client gone, or showing another session
+# (tmux moves a client when its session is destroyed, detach-on-destroy off) → {"exit"}, the stream ends. The client's
+# session is asked before EVERY chunk is sent (one list-clients each): no byte of another session leaves; the size
+# every ATTACH_POLL_S whatever the output (a session that redraws all the time must not starve it).
+def attach_output(io, master, base, name, size, tty)
+  checked = monotonic
+  loop do
+    if IO.select([master], nil, nil, ATTACH_POLL_S)
+      chunk = master.readpartial(16_384)
+      # asked AFTER the read, before the write: tmux moves the client (and redraws the other session) before any byte
+      # of that session reaches us, so a chunk read while the client still shows this session is this session's
+      attach_on_session!(base, name, tty)
+      io.write(Busyyaks::Terminal.output(chunk))
+    end
+    next if monotonic - checked < ATTACH_POLL_S
+
+    checked = monotonic
+    attach_on_session!(base, name, tty)
+    if (now = window_size(base, name)) && now != size
+      size = now
+      master.winsize = [size[1], size[0]]
+      io.write(Busyyaks::Terminal.line(size: { cols: size[0], rows: size[1] }))
+    end
+  end
+rescue EOFError, Errno::EIO
+  io.write(Busyyaks::Terminal.line(exit: "the tmux client ended: the session is gone or the client detached")) rescue nil
+  io.close_write rescue nil
+rescue IOError, SystemCallError
+  nil
+end
+
+# the client's frames: keys only in control, typed into the pane (attach_keys); the tmux client never gets one
+def attach_input(io, base, name)
+  control = false
+  while (line = io.gets("\n", Busyyaks::Terminal::MAX_LINE))
+    begin
+      kind, value = Busyyaks::Terminal.client_frame(line)
+    rescue Busyyaks::Terminal::Invalid => e
+      io.write(Busyyaks::Terminal.refused(e.message))
+      next
+    end
+    if kind == :input
+      next io.write(Busyyaks::Terminal.refused(Busyyaks::Terminal::NOT_IN_CONTROL)) unless control
+
+      attach_keys(io, base, name, value)
+    else
+      control = attach_control(io, base, name, control, value)
+    end
+  end
+rescue IOError, SystemCallError
+  nil
+end
+
+# keys → the session's pane: `copy-mode -q ; send-keys -H <hex>…` in one tmux command — any mode of the pane cancelled
+# first (a mode's key table would take the keys), then each byte as a hex key: no key-name lookup, no client and so no
+# client key table, and no argument tmux could read as its own (a trailing ";" ends a tmux command — `-l` lost it,
+# silently). Any byte goes as typed, NUL and UTF-8 alike. tmux refuses a command over 16 KB (its message size) and a
+# hex key costs 3 bytes there, so a frame (a paste, MAX_INPUT 64 KB) goes in ATTACH_KEYS_CHUNK pieces, in order, each
+# with its own mode cancel; a piece tmux refuses stops the rest, and the refusal says how much was typed.
+ATTACH_KEYS_CHUNK = 4096 # × 3 bytes + the two commands with a 100-character session name ≈ 12.6 KB of tmux's 16 KB
+
+def attach_keys(io, base, name, keys)
+  target = "=#{name}:"
+  bytes = keys.b
+  (0...bytes.bytesize).step(ATTACH_KEYS_CHUNK) do |at|
+    hex = bytes.byteslice(at, ATTACH_KEYS_CHUNK).unpack("C*").map { |b| format("%02x", b) }
+    _o, err, ok = tmux(*base, "copy-mode", "-q", "-t", target, ";", "send-keys", "-t", target, "-H", *hex)
+    next if ok
+
+    return io.write(Busyyaks::Terminal.refused("tmux send-keys failed after #{at} of #{bytes.bytesize} bytes: #{err.strip}"))
+  end
+end
+
+# Take control: the session is still running with an agent in its pane (as at attach) — else refused, control stays
+# off. Release: always. Nothing is asked of tmux's client: it stays read-only.
+def attach_control(io, base, name, control, want)
+  if want && !control
+    _o, _e, up = tmux(*base, "has-session", "-t", "=#{name}")
+    why = if !up then "session #{name} is not running"
+          elsif !agent_pane?(base, name) then "session #{name} runs no agent in its pane"
+          end
+    if why
+      io.write(Busyyaks::Terminal.refused("#{why}: control stays off"))
+      return false
+    end
+  end
+  puts "#{Time.now.iso8601} attach #{name}: control #{want ? 'taken' : 'released'}" if want != control
+  io.write(Busyyaks::Terminal.line(control: want))
+  want
+end
+
 def collector(req)
   line = UNIXSocket.open(COLLECTOR.read_socket) do |u|
     u.puts(JSON.generate(req))
@@ -832,6 +1031,14 @@ loop do
   client = server.accept
   Thread.new(client) do |c|
     line = c.gets
+    req = begin
+      line && JSON.parse(line)
+    rescue JSON::ParserError
+      nil
+    end
+    # attach keeps the connection: a stream, not one answer (Busyyaks::Terminal)
+    next attach_op(c, req) if req.is_a?(Hash) && req["op"] == "attach"
+
     c.puts(JSON.generate(line ? handle(line) : { ok: false, error: "empty request" }))
   ensure
     c.close
