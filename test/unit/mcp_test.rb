@@ -166,7 +166,7 @@ out.dig("config", "runner"))
     db = Hanami.app["db.gateway"].connection
     { id => [7, "success"], held => [8, "pending"] }.each do |card, (n, state)| # the github service's answers
       db[:gh_pr_checks].insert(repo: "o/a", ref: "pr:#{n}", requested_at: t, checked_at: t, number: n, state: state,
-                               finished_at: state == "success" ? t : nil)
+                               finished_at: state == "success" ? t : nil, base: "main", draft: false, merge_state: "clean")
       k.assign_pr(card, url: "https://github.com/o/a/pull/#{n}", role: "pr", by: "agent")
     end
     store.add_report(date: "2026-11-01", title: "Daily report 2026-11-01", author: "x",

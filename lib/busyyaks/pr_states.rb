@@ -59,6 +59,23 @@ module Busyyaks
       [repo || m[1], m[2].to_i]
     end
 
+    # GitHub's mergeability of an OPEN PR: each mergeable_state as GitHub names it — clean, behind,
+    # blocked (branch rules), unstable (checks failing), has_hooks, draft — except two, which name what they mean:
+    # `mergeable` null or mergeable_state "unknown" = "computing" (GitHub starts computing on this read; never guessed
+    # either way) and `mergeable` false or "dirty" = "conflicts". A value GitHub adds later = "unknown: <value>",
+    # never coerced to one of these.
+    STATES = %w[clean behind blocked unstable has_hooks draft].freeze
+
+    def merge_state(pr)
+      state = pr["mergeable_state"]
+      return "computing" if pr["mergeable"].nil? || state == "unknown"
+      return "conflicts" if pr["mergeable"] == false || state == "dirty"
+
+      return state if STATES.include?(state)
+
+      "unknown: #{state || 'none given'}"
+    end
+
     # Seconds a row stays polled after the web last asked for it (Poller and Reader share it).
     def wanted_for(interval) = 10 * interval
 
@@ -99,7 +116,8 @@ module Busyyaks
           return { error: "last GitHub read #{(now - row[:checked_at]) / 60} min ago (github service stopped?)" }
         end
 
-        out = { state: row[:state], number: row[:number], url: row[:url], checked_at: row[:checked_at] }
+        out = { state: row[:state], number: row[:number], url: row[:url], checked_at: row[:checked_at], base: row[:base],
+                merge_state: row[:merge_state], auto_merge: row[:auto_merge], }
         row[:state] == "closed" ? out.merge(closed_at: row[:closed_at], reason: row[:reason]) : out
       end
     end
@@ -110,7 +128,7 @@ module Busyyaks
     # wanted_for is deleted at the end of each run. While `gate` (GithubPollers) is paused nothing is sent and every
     # wanted row says why.
     class Poller
-      KEEP = %w[number html_url state draft merged_at closed_at].freeze
+      KEEP = %w[number html_url state draft merged_at closed_at base mergeable mergeable_state auto_merge].freeze
       PAGE = "pr:"
 
       def self.cache_key(url) = GithubNetwork.cache_key(PAGE, KEEP, url)
@@ -161,8 +179,13 @@ module Busyyaks
         pr = get("/repos/#{row[:repo]}/pulls/#{Integer(name)}")
         raise GithubNetwork::Error, "#{row[:repo]}##{name}: 404 — no such PR, or the token cannot see the repo" unless pr
 
-        out = { number: pr["number"], url: pr["html_url"], state: state(pr), closed_at: nil, reason: nil }
-        return out unless out[:state] == "closed"
+        state = state(pr)
+        out = { number: pr["number"], url: pr["html_url"], state: state, base: pr.dig("base", "ref"), closed_at: nil,
+                reason: nil, merge_state: nil, auto_merge: nil, }
+        if %w[open draft].include?(state)
+          return out.merge(merge_state: PrStates.merge_state(pr), auto_merge: !pr["auto_merge"].nil?)
+        end
+        return out unless state == "closed"
 
         closed_at = closed_at(pr)
         # the reason is read once per close: the same close already read keeps its reason (an unknown one too: GitHub
@@ -228,6 +251,7 @@ module Busyyaks
         return nil if page.status == 404
 
         body = page.body.slice(*KEEP)
+        body["base"] = body["base"]&.slice("ref") # the base branch's name only, never its repo object
         @pages.save_page(key, page.etag, @clock.call, items: body)
         body
       end
@@ -245,11 +269,18 @@ module Busyyaks
     # the text, resolved against the card's own repo, and the handoff `pr_url` — are dropped: a number in prose names
     # no repo, so it is never a row (it stays an inline link in the text); a pasted PR URL stays a plain `url` link.
     # Each row: a short label ("#5") + small tags (repo role: local · public; state: open · draft · merged · closed ·
-    # checking · unknown) + the hover details (repo, role, state, when GitHub was read, why it is unknown). No enrolment
+    # checking · unknown; `base: <ref>` when the PR is not on its side's branch, conflicts · behind ·
+    # mergeable: computing, auto-merge) + the hover details (repo, role, state, base, mergeable, when GitHub was read,
+    # why it is unknown). No enrolment
     # → no role tag. None assigned → no row; an assignment that is no PR of its repo → a row that says so. Tags and
     # details are the engine's CardLink `tags` / `detail`.
     class Flags
       TONE = { "open" => "ok", "draft" => "muted", "merged" => "done", "closed" => "bad", "checking" => "muted" }.freeze
+      # an open PR's mergeability (PrStates.merge_state): clean = no tag, draft = the draft tag already shown;
+      # a value PrStates does not know ("unknown: <value>") is tagged as it is
+      MERGE_TAGS = { "conflicts" => %w[conflicts bad], "behind" => %w[behind warn],
+                     "blocked" => ["blocked by branch rules", "warn"], "unstable" => ["checks failing", "warn"],
+                     "has_hooks" => ["hooks pending", "muted"], "computing" => ["mergeable: computing", "muted"], }.freeze
 
       def initialize(reader)
         @reader = reader
@@ -280,7 +311,9 @@ module Busyyaks
       def tag(text, tone) = { text: text, tone: tone }
       def row(label, value) = { label: label, value: value.to_s }
 
-      def flagged(url, label, repo, role, st)
+      # want_base: the branch this PR must be based on (the enrolled side's: local_base / public_base); nil = any (a
+      # plain project's `pr`) or :unknown (the enrolment does not say — `why`).
+      def flagged(url, label, repo, role, st, want_base: nil, why: nil)
         state = st[:error] ? "unknown" : st[:state]
         # a PR closed without merging says why on its tag: "closed: base deleted"
         text = if st[:reason]
@@ -292,12 +325,37 @@ module Busyyaks
         detail = [row("Repo", repo), role && row("Role", role == "local" ? "private local repo" : "public repo"),
                   row("State", state == "closed" ? "closed without merging" : state),]
         detail << row("Why", st[:error]) if st[:error]
+        pr_flags(st, want_base, why, tags, detail) unless st[:error]
         detail << row("Why closed", st[:reason]) if st[:reason]
         # an absolute time: a relative "Ns ago" changed the card JSON on every request, so the card dialog's rev poll
         # refetched the whole card every 3 s
         detail << row("Read", "#{Time.at(st[:checked_at]).strftime('%Y-%m-%d %H:%M:%S %Z')} (GitHub)") if st[:checked_at]
         detail << row("Read", "waiting for the github service") if state == "checking"
         { kind: "pr", label: label, url: url, tags: tags, detail: detail.compact }
+      end
+
+      # base · mergeability · auto-merge of a read PR → tags + hover rows. The base is shown on every read PR;
+      # a base that is not the side's branch is a `base: <ref>` warning (the gate refuses it too).
+      def pr_flags(st, want_base, why, tags, detail)
+        return unless st[:base]
+
+        detail << row("Base", st[:base])
+        if want_base == :unknown
+          tags << tag("base: #{st[:base]}", "warn")
+          detail << row("Expected base", "unknown: #{why || 'the scanner has not read the enrolment yet'}")
+        elsif want_base && st[:base] != want_base
+          tags << tag("base: #{st[:base]}", "warn")
+          detail << row("Expected base", want_base)
+        end
+        merge = MERGE_TAGS[st[:merge_state]]
+        merge ||= [st[:merge_state], "warn"] if st[:merge_state]&.start_with?("unknown: ")
+        tags << tag(*merge) if merge
+        detail << row("Mergeable", st[:merge_state]) if st[:merge_state]
+        return unless st[:auto_merge]
+
+        tags << tag("auto-merge", "warn")
+        detail << row("Auto-merge", "on: GitHub merges it once its checks pass, without the board's approval — the " \
+                                    "approval is refused until it is turned off")
       end
 
       # a plain project's `pr` PR (on whichever repo its URL names), no role tag
@@ -324,7 +382,9 @@ module Busyyaks
         return [] unless number
 
         url = "https://github.com/#{repo}/pull/#{number}"
-        [flagged(url, "##{number}", repo, role, @reader.lookup(repo, "pr:#{number}"))]
+        want = project[role == ROLES[:local] ? :local_base : :public_base] || :unknown
+        [flagged(url, "##{number}", repo, role, @reader.lookup(repo, "pr:#{number}"), want_base: want,
+                                                                                why: project[:local_error])]
       rescue PrStates::Invalid => e
         [flagged("/projects/#{project[:slug]}", role, repo, role, { error: e.message })]
       end

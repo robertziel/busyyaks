@@ -23,6 +23,7 @@ class MigrationsTest < Minitest::Test
   BEFORE_PRS = 20_261_202_000_000 # the last migration before the assigned PRs
   BEFORE_SESSION_BOARDS = 20_261_205_000_000 # the last migration before v11 (session boards: boards.archived_at)
   BEFORE_LEAD_FIRST = 20_261_206_000_000 # the last migration before v12 (lead-first boards)
+  BEFORE_PR_FLAGS = 20_261_208_467_999 # just before the PR base / merge flags: whatever lands before it stays
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -477,6 +478,24 @@ class MigrationsTest < Minitest::Test
     assert_empty @db[:gh_pr_checks].all
     migrate(BEFORE_PRS)
     assert_equal({ "prs" => { "local" => lpr } }, meta.(local), "down keeps the assignments")
+  end
+
+  # the PR base / draft / mergeable columns, and the CI poller's cached pages (read before it kept those
+  # fields) dropped so the next read is a full one; down restores the shape
+  def test_pr_flags_add_the_merge_columns_and_drop_the_old_ci_pages
+    migrate(BEFORE_PR_FLAGS)
+    @db[:gh_pages].insert(url: "ci:/repos/o/r/pulls/1", etag: "e", items: "{}", at: 1)
+    @db[:gh_pages].insert(url: "follows:me", etag: "e", items: "[]", at: 1)
+    migrate
+    assert_equal ["follows:me"], @db[:gh_pages].select_map(:url), "only the CI poller's pages"
+    cols = ->(t) { @db.schema(t, reload: true).map(&:first) }
+    assert_empty(%i[local_base public_base] - cols.(:projects))
+    assert_empty(%i[base merge_state auto_merge] - cols.(:gh_pr_states))
+    assert_empty(%i[base draft merge_state auto_merge] - cols.(:gh_pr_checks))
+    migrate(BEFORE_PR_FLAGS)
+    refute_includes cols.(:projects), :local_base
+    refute_includes cols.(:gh_pr_checks), :draft
+    refute_includes cols.(:gh_pr_states), :auto_merge
   end
 
   # config/db/structure.sql (the schema dump, edited by hand since the services migrate with --no-dump

@@ -182,7 +182,8 @@ class KanbanApiTest < Minitest::Test
                  "a held card is as old as its hand-off"
     t = Busyyaks::Clock.epoch # its PR, read green by the github service
     Hanami.app["db.gateway"].connection[:gh_pr_checks].insert(repo: "o/r", ref: "pr:3", requested_at: t, checked_at: t,
-                                                             number: 3, state: "success", finished_at: t)
+                                                             number: 3, state: "success", finished_at: t,
+                                                             base: "main", draft: false, merge_state: "clean")
     kb.assign_pr(id, url: "https://github.com/o/r/pull/3", role: "pr", by: "agent")
     w = api(:get, "/api/waiting")
     assert_equal [1, "g/r", 1], [w["total"], w["projects"][0]["slug"], w["projects"][0]["count"]]
@@ -448,7 +449,7 @@ ans.values_at("body", "author")
     db = Hanami.app["db.gateway"].connection
     now = Busyyaks::Clock.epoch
     db[:gh_pr_checks].insert(repo: "o/r", ref: "pr:9", requested_at: now, checked_at: now, number: 9, state: "success",
-                             finished_at: now)
+                             finished_at: now, base: "main", draft: false, merge_state: "clean")
     kb.assign_pr(id, url: "https://github.com/o/r/pull/9", role: "pr", by: "agent")
   end
 

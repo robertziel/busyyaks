@@ -105,21 +105,31 @@ class ScannerTest < Minitest::Test
       git(d, "remote", "add", "origin", "https://u:tok@github.com/me/widgets_local.git")
       git(d, "remote", "add", "upstream", "https://github.com/me/widgets.git")
       config = scan_config([[root, ""]], owner_remotes: ["github.com/me/"])
-      cols = %i[local_mode local_repo public_repo public_head local_error]
+      cols = %i[local_mode local_repo public_repo public_head local_base public_base local_error]
       scan = lambda do
         Busyyaks::Scanner.new(config, store).run
         store.project("widgets").values_at(*cols)
       end
-      assert_equal [nil] * 5, scan.call, "not enrolled"
+      assert_equal [nil] * 7, scan.call, "not enrolled"
       { "guard.mode" => "upstream", "guard.mirrorRemote" => "origin", "guard.upstreamRemote" => "upstream",
-        "guard.publicRemote" => "fork", }.each { |k, v| git(d, "config", k, v) }
+        "guard.publicRemote" => "fork", "guard.localBranch" => "local", "guard.publicBase" => "upstream/master", }
+        .each { |k, v| git(d, "config", k, v) }
       assert_equal ["upstream", "https://github.com/me/widgets_local.git", "https://github.com/me/widgets.git", nil,
-                    'guard.publicRemote names remote "fork", which has no URL',],
+                    "local", "master", 'guard.publicRemote names remote "fork", which has no URL',],
                    scan.call, "the known repos stay; only the fork is said missing"
       git(d, "remote", "add", "fork", "git@github.com:me/widgets_fork.git")
       assert_equal ["upstream", "https://github.com/me/widgets_local.git", "https://github.com/me/widgets.git",
-                    "git@github.com:me/widgets_fork.git", nil,],
+                    "git@github.com:me/widgets_fork.git", "local", "master", nil,],
                    scan.call
+      # the bases the PRs must be on — a publicBase of another remote, or unset keys, are said, never guessed
+      git(d, "config", "guard.publicBase", "origin/main")
+      assert_equal [nil, 'guard.publicBase "origin/main" is not a branch of guard.upstreamRemote "upstream"'],
+                   scan.call.last(2)
+      git(d, "config", "guard.publicBase", "upstream/")
+      assert_nil scan.call[-2], "a remote with no branch"
+      git(d, "config", "--unset", "guard.publicBase")
+      git(d, "config", "--unset", "guard.localBranch")
+      assert_equal [nil, nil, "guard.localBranch is not set; guard.publicBase is not set"], scan.call.last(3)
       git(d, "config", "guard.mode", "weird")
       assert_equal 'guard.mode is "weird", not own or upstream', scan.call.last
     end

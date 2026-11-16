@@ -56,10 +56,13 @@ class PrStatesTest < Minitest::Test
     end
   end
 
-  def pr(n, repo, state: "open", draft: false, merged: nil, head: nil, closed: "2026-11-16T23:06:57Z")
+  # base: a local repo's PR is on `local`, any other on `main` (ENROLLED's bases); open and mergeable unless said
+  def pr(n, repo, state: "open", draft: false, merged: nil, head: nil, closed: "2026-11-16T23:06:57Z", **more)
     { "number" => n, "state" => state, "draft" => draft, "merged_at" => merged,
       "closed_at" => state == "closed" ? merged || closed : nil,
-      "html_url" => "https://github.com/#{repo}/pull/#{n}", "head_label" => head, }
+      "html_url" => "https://github.com/#{repo}/pull/#{n}", "head_label" => head,
+      "base" => { "ref" => repo.end_with?("_local") ? "local" : "main" }, "mergeable" => true,
+      "mergeable_state" => "clean", "auto_merge" => nil, }.merge(more.transform_keys(&:to_s))
   end
 
   def ev(kind, login = "robertziel") = { "event" => kind, "actor" => { "login" => login } }
@@ -347,13 +350,16 @@ class PrStatesTest < Minitest::Test
     assert_equal 30, @client.not_modified
     assert_equal "open", @reader.lookup("o/m", "pr:1")[:state]
     assert_equal @now, @reader.lookup("o/m", "pr:1")[:checked_at], "a 304 is a fresh read"
-    @http.pulls = [pr(1, "o/m", draft: true)]
+    @http.pulls = [pr(1, "o/m", draft: true, base: { "ref" => "main", "repo" => { "full_name" => "o/m" } })]
     @now += 60
     @poller.run
     assert_equal 2, @client.calls, "the change is read"
     assert_equal "draft", @reader.lookup("o/m", "pr:1")[:state]
     page = @db[:gh_pages].where(url: PS::Poller.cache_key("/repos/o/m/pulls/1")).first
-    assert_equal %w[closed_at draft html_url merged_at number state], JSON.parse(page[:items]).keys.sort
+    items = JSON.parse(page[:items])
+    assert_equal %w[auto_merge base closed_at draft html_url mergeable mergeable_state merged_at number state],
+                 items.keys.sort
+    assert_equal ["ref"], items["base"].keys, "the base branch's name only, never its repo object"
     @now += 601
     @poller.run
     assert_nil @db[:gh_pages].where(url: PS::Poller.cache_key("/repos/o/m/pulls/1")).first, "nobody asked for 10 min: pruned"
@@ -420,7 +426,8 @@ class PrStatesTest < Minitest::Test
   ENROLLED = { slug: "g/widgets", path: "/repos/widgets", remote: "https://github.com/o/widgets_local.git",
              pr_remote: "https://github.com/o/widgets_local.git", local_mode: "own",
              local_repo: "https://github.com/o/widgets_local.git", public_repo: "https://github.com/o/widgets.git",
-             public_head: "https://github.com/o/widgets.git", local_error: nil, }.freeze
+             public_head: "https://github.com/o/widgets.git", local_base: "local", public_base: "main",
+             local_error: nil, }.freeze
 
   # "label [tag tag]" — what the rail shows
   def shown(links) = links.map { |l| l[:tags] ? "#{l[:label]} [#{l[:tags].map { |t| t[:text] }.join(' ')}]" : l[:label] }
@@ -447,7 +454,7 @@ class PrStatesTest < Minitest::Test
     out = links_for(ENROLLED, links, metadata: both)
     assert_equal ["#5 [local merged]", "#12 [public open]"], shown(out.drop(1))
     assert_equal [%w[local info], %w[merged done]], out[1][:tags].map { |t| t.values_at(:text, :tone) }
-    assert_equal({ "Repo" => "o/widgets_local", "Role" => "private local repo", "State" => "merged",
+    assert_equal({ "Repo" => "o/widgets_local", "Role" => "private local repo", "State" => "merged", "Base" => "local",
                    "Read" => "#{Time.at(@now).strftime('%Y-%m-%d %H:%M:%S %Z')} (GitHub)", },
                  detail(out[1]))
     @now += 30
@@ -594,5 +601,89 @@ class PrStatesTest < Minitest::Test
     rows = links_for(bad, [], metadata: meta)
     assert_equal ["#7 [open]", "config [local unknown]"], shown(rows)
     assert_equal 'guard.mode is "mirror", not own or upstream', detail(rows[1])["Why"]
+  end
+
+  # a PR stacked on another branch (or retargeted by hand) is a `base: <ref>` warning on its row; the
+  # expected base is its side's (local → guard.localBranch, public → guard.publicBase's branch); an enrolment that
+  # names no base says so on every read PR
+  def test_a_pr_not_on_its_base_branch_is_flagged_and_gated
+    meta = { "prs" => { "local" => "https://github.com/o/widgets_local/pull/5" }.merge(PUB12["prs"]) }
+    links_for(ENROLLED, [], metadata: meta)
+    @http.pulls = [pr(5, "o/widgets_local"), pr(12, "o/widgets", base: { "ref" => "feature/live-agent-status" })]
+    @poller.run
+    out = links_for(ENROLLED, [], metadata: meta)
+    assert_equal ["#5 [local open]", "#12 [public open base: feature/live-agent-status]"], shown(out)
+    assert_equal "warn", out[1][:tags].last[:tone]
+    assert_equal ["feature/live-agent-status", "main"], detail(out[1]).values_at("Base", "Expected base")
+    assert_equal ["local", nil], detail(out[0]).values_at("Base", "Expected base")
+    unknown = ENROLLED.merge(public_base: nil, local_error: "guard.publicBase is not set")
+    out = links_for(unknown, [], metadata: meta)
+    assert_equal "#12 [public open base: feature/live-agent-status]", shown(out)[1]
+    assert_equal "unknown: guard.publicBase is not set", detail(out[1])["Expected base"]
+    plain = { slug: "g/r", remote: "https://github.com/o/r.git", local_mode: nil, local_error: nil }
+    @http.pulls = [pr(7, "o/r", base: { "ref" => "anything" })]
+    links_for(plain, [], metadata: { "prs" => { "pr" => "https://github.com/o/r/pull/7" } })
+    @poller.run
+    plain_out = links_for(plain, [], metadata: { "prs" => { "pr" => "https://github.com/o/r/pull/7" } })
+    assert_equal ["#7 [open]"], shown(plain_out), "a plain project's PR: any base"
+    assert_equal "anything", detail(plain_out[0])["Base"]
+  end
+
+  # GitHub's mergeable: false / dirty → conflicts, null (still computing) → "mergeable: computing" — never guessed clean
+  # or conflicting; every other mergeable_state is GitHub's own word, with its own tag (blocked,
+  # unstable and has_hooks are not "clean"); a value PrStates does not know → "unknown: <value>", never coerced; a
+  # merged or closed PR has none
+  def test_mergeable_state_is_tagged_and_null_is_computing
+    cases = { 1 => [{ mergeable: false, mergeable_state: "dirty" }, %w[conflicts bad], "conflicts"],
+              2 => [{ mergeable: true, mergeable_state: "behind" }, %w[behind warn], "behind"],
+              3 => [{ mergeable: nil, mergeable_state: "unknown" }, ["mergeable: computing", "muted"], "computing"],
+              4 => [{ mergeable: true, mergeable_state: "unknown" }, ["mergeable: computing", "muted"], "computing"],
+              5 => [{ mergeable: true, mergeable_state: "unstable" }, ["checks failing", "warn"], "unstable"],
+              6 => [{ mergeable: true, mergeable_state: "blocked" }, ["blocked by branch rules", "warn"], "blocked"],
+              7 => [{ mergeable: true, mergeable_state: "has_hooks" }, ["hooks pending", "muted"], "has_hooks"],
+              8 => [{ mergeable: true, mergeable_state: "clean" }, nil, "clean"],
+              9 => [{ mergeable: true, mergeable_state: "queued_somehow" }, ["unknown: queued_somehow", "warn"],
+                    "unknown: queued_somehow",], }
+    @http.pulls = cases.map { |n, (f, _, _)| pr(n, "o/widgets_local", **f) } +
+                  [pr(10, "o/widgets_local", state: "closed", merged: "2026-11-08T11:00:00Z", mergeable: nil)]
+    rows = lambda do
+      (1..10).map { |n| links_for(ENROLLED, [], metadata: { "prs" => { "local" => "https://github.com/o/widgets_local/pull/#{n}" } }).first }
+    end
+    rows.call
+    @poller.run
+    out = rows.call
+    cases.each do |n, (_, want, mergeable)|
+      tags = out[n - 1][:tags].drop(2).map { |t| [t[:text], t[:tone]] }
+      assert_equal [want].compact, tags, "PR #{n}"
+      assert_equal mergeable, detail(out[n - 1])["Mergeable"], "PR #{n}"
+    end
+    assert_equal "#10 [local merged]", shown([out[9]]).first, "merged: no mergeable tag"
+    assert_nil detail(out[9])["Mergeable"]
+  end
+
+  # every GitHub mergeable_state maps to itself or to what it means; nothing unknown is coerced
+  def test_merge_state_names_every_github_value
+    { [true, "clean"] => "clean", [true, "behind"] => "behind", [true, "blocked"] => "blocked",
+      [true, "unstable"] => "unstable", [true, "has_hooks"] => "has_hooks", [true, "draft"] => "draft",
+      [false, "dirty"] => "conflicts", [true, "dirty"] => "conflicts", [false, "blocked"] => "conflicts",
+      [nil, "clean"] => "computing", [true, "unknown"] => "computing",
+      [true, "new_value"] => "unknown: new_value", [true, nil] => "unknown: none given", }.each do |(m, st), want|
+      assert_equal want, Busyyaks::PrStates.merge_state("mergeable" => m, "mergeable_state" => st), [m, st].inspect
+    end
+  end
+
+  # auto-merge on: GitHub merges once the checks pass, whatever the board says — a warning on the row
+  def test_auto_merge_is_tagged
+    meta = { "prs" => { "local" => "https://github.com/o/widgets_local/pull/5" } }
+    @http.pulls = [pr(5, "o/widgets_local", auto_merge: { "merge_method" => "squash", "enabled_by" => { "login" => "x" } })]
+    links_for(ENROLLED, [], metadata: meta)
+    @poller.run
+    out = links_for(ENROLLED, [], metadata: meta)
+    assert_equal ["#5 [local open auto-merge]"], shown(out)
+    assert_equal "warn", out[0][:tags].last[:tone]
+    assert_match(/without the board's approval/, detail(out[0])["Auto-merge"])
+    @http.pulls = [pr(5, "o/widgets_local")]
+    @poller.run
+    assert_equal ["#5 [local open]"], shown(links_for(ENROLLED, [], metadata: meta)), "turned off: no tag"
   end
 end

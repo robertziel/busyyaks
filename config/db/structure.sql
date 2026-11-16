@@ -24,7 +24,9 @@ CREATE TABLE `projects`(
   `branches` text,
   `default_ref` varchar(255),
   `git_error` text,
-  `dirty_paths` text
+  `dirty_paths` text,
+  `local_base` varchar(255),
+  `public_base` varchar(255)
 );
 CREATE TABLE `commits`(
   `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -334,6 +336,10 @@ CREATE TABLE `gh_pr_checks`(
   `detail` text,
   `head` varchar(255),
   `builds` text,
+  `base` varchar(255),
+  `draft` boolean,
+  `merge_state` varchar(255),
+  `auto_merge` boolean,
   UNIQUE(`repo`, `ref`)
 );
 CREATE TABLE `boards`(
@@ -409,6 +415,9 @@ CREATE TABLE `gh_pr_states`(
   `error` text,
   `closed_at` integer,
   `reason` varchar(255),
+  `base` varchar(255),
+  `merge_state` varchar(255),
+  `auto_merge` boolean,
   UNIQUE(`repo`, `ref`)
 );
 CREATE TABLE `agent_settings`(
@@ -505,4 +514,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261207463000_lead_first_boards.rb'),
 ('20261207470000_gh_pr_checks_builds.rb'),
 ('20261208000000_gh_pollers.rb'),
-('20261208046700_pr_closed_reason.rb');
+('20261208046700_pr_closed_reason.rb'),
+('20261208468000_pr_base_merge_flags.rb');
