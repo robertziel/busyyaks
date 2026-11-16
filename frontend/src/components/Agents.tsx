@@ -8,7 +8,9 @@
 // Each row lists its open cards by column label (`#3 In progress`), `+N done`, or `no cards`.
 // each project shows its active sessions only; the "N idle" toggle in its header unfolds the rest (remembered per project), and
 // rows fold in and out with a height + fade transition (lib/agentFold.ts decides what is visible).
+// Open terminal: the session's live tmux pane in the row (LiveTerminal), read-only until Take control.
 import { ClaudeLink, CopyChip, ItermCopy, TerminalLink } from "./Copy";
+import { LiveTerminal } from "./LiveTerminal";
 import { ProjectIcon } from "./ProjectIcon";
 import { ReapButton } from "./Reap";
 import { YakLoader } from "./YakLoader";
@@ -45,6 +47,14 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
     return f === "you" || f === "busy" || f === "team" ? f : "all";
   });
   const [open, setOpen] = useState<Set<string>>(() => new Set());
+  // the sessions whose live terminal is open here: connected only on Open terminal
+  const [terms, setTerms] = useState<Set<string>>(() => new Set());
+  const toggleTerm = (key: string) =>
+    setTerms((t) => {
+      const n = new Set(t);
+      if (!n.delete(key)) n.add(key);
+      return n;
+    });
   const [unfolded, setUnfolded] = useState<Set<string>>(
     () => new Set(store.getJSON<string[]>("busyyaks.agunfold", [])),
   );
@@ -285,6 +295,15 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
                           <TerminalLink url={s.terminal_url} name={s.name} />
                           {s.model && <> · {s.model}</>}
                         </p>
+                        {terms.has(s.key) ? (
+                          <LiveTerminal session={s.name} socket={s.socket} overlay onClose={() => toggleTerm(s.key)} />
+                        ) : (
+                          <p className="ag-facts">
+                            <button type="button" className="btn small" onClick={() => toggleTerm(s.key)}>
+                              Open terminal
+                            </button>
+                          </p>
+                        )}
                         <div className="ag-teamlist" aria-live="polite">
                           {open.has(s.key) && <Team session={s.name} socket={s.socket} />}
                         </div>

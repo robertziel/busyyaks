@@ -63,6 +63,14 @@ agents:
 #                  max_seconds: 30..600 (the longest window accepted; the mic's windows are ≤ 30 s)}.
 dictation: none
 # dictation: { model: whisper-large-v3-turbo, timeout_seconds: 30, max_seconds: 120 }
+# terminal:      an agent session's live terminal in the dashboard (the Agents sidebar's Open terminal, a card's
+#                Terminals): its tmux pane in the browser, read-only until you press Take control. The screen and your
+#                keys cross the web: only a signed-in session, only from this app's own page (Origin), only a session
+#                busyyaks registered; every open / take / release is logged on the session's cards.
+#                public_host: allow | deny — whether it opens through PUBLIC_HOST (the TLS proxy / tunnel);
+#                  127.0.0.1 / localhost on WEB_HOST_PORT (an ssh -L forward included) always may.
+#                max_open: 1..64 — terminals open at once (each holds a thread of the web process); one more → 503.
+terminal: { public_host: deny, max_open: 8 }
 # launch:        which repos bin/launcher answers Claude Code's folder-trust prompt for ("Yes, I trust this folder"),
 #                which lets the repo's own .claude settings, hooks and .mcp.json run. Never decided from the repo
 #                itself (its origin or config: whoever wrote the repo wrote those). Trusted are only:

@@ -8,6 +8,7 @@ reap_protect: ["svc-*"]
 auth: { provider: test/fixtures/auth_stub, allowed_emails: [owner@example.com] }
 agents: { collector: none }
 dictation: none
+terminal: { public_host: deny, max_open: 4 }
 launch:
   trusted_paths: []
   start_seconds: 30

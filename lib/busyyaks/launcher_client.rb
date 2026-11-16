@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "socket"
+require "timeout"
 require "json"
 require_relative "../../vendor/agents_kanban/ruby/lib/agents_kanban/errors"
 
@@ -61,6 +62,43 @@ module Busyyaks
     # press `key` (a digit or "esc") ONLY if the screen still shows the dialog with this hash; refused (with the reason)
     # otherwise
     def answer(session:, socket:, hash:, key:) = call(op: "answer", session: session, socket: socket, hash: hash, key: key)
+
+    # The live terminal of a session (Busyyaks::Terminal): the launcher's `attach` stream. → [socket, hello]:
+    # the open connection (JSON lines both ways from now on; the caller closes it) and the first line, parsed. A
+    # refusal (not running, no agent in it, a bad name) → Refused with the launcher's reason and status, closed. A
+    # launcher that does not answer within ATTACH_WAIT_S, or refuses without a status, is Unavailable (503).
+    ATTACH_WAIT_S = 10 # the launcher's checks before the first line: a few tmux calls + a /proc walk
+
+    def attach(session:, socket:)
+      sock = UNIXSocket.new(ENV.fetch("LAUNCHER_SOCKET"))
+      sock.puts(JSON.generate(op: "attach", session: session, socket: socket))
+      line = begin
+        Timeout.timeout(ATTACH_WAIT_S) { sock.gets }
+      rescue Timeout::Error
+        sock.close
+        raise Unavailable, "the launcher did not answer the attach within #{ATTACH_WAIT_S}s"
+      end
+      hello = JSON.parse(line.to_s)
+      return [sock, hello] if hello["ok"]
+
+      sock.close
+      raise Unavailable, "the launcher refused the attach without a status: #{hello.inspect}" unless hello["status"]
+
+      raise AttachRefused.new(hello["error"].to_s, status: hello["status"])
+    rescue Errno::ENOENT, Errno::ECONNREFUSED, Errno::EACCES, Errno::EPIPE, Errno::ECONNRESET, JSON::ParserError => e
+      sock&.close
+      raise Unavailable, "launcher not reachable at #{ENV.fetch('LAUNCHER_SOCKET')}: #{e.class}"
+    end
+
+    # an attach the launcher refused: its reason + HTTP status (404 not running, 403 no agent, 400 a bad name)
+    class AttachRefused < Refused
+      attr_reader :status
+
+      def initialize(message, status:)
+        super(message)
+        @status = Integer(status)
+      end
+    end
 
     # The engine's LAUNCH port (AgentsKanban::Api launcher:): a free session name for the board, then the start of the
     # session the engine registered — the host renders the type's prompt ({dir} is the host's) and confirms Remote Control.

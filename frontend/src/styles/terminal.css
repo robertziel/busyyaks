@@ -1,0 +1,369 @@
+/* The live terminal of an agent session (components/LiveTerminal.tsx), drawn as a terminal window: title
+   bar (close · full window, the session, the one action) · the screen, the pane at its own size, scrolling when the
+   room is smaller · status bar (state, what went wrong, the pane's size). Full window = the same window centred over
+   the whole page. In control the frame and the status bar turn amber.
+   Colours: every --lt-* is set on .lt from lib/terminalTheme.ts (one dark terminal on every skin; the reason is
+   there) — no colour literal here, and no skin token inside the window. */
+.lt {
+  display: grid;
+  min-width: 0;
+}
+.lt-win {
+  display: flex;
+  flex-direction: column;
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--lt-edge);
+  border-radius: 10px;
+  background: var(--lt-bg);
+  color: var(--lt-fg);
+  box-shadow:
+    0 1px 2px var(--lt-shadow),
+    0 16px 32px -18px var(--lt-shadow);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.lt-control .lt-win {
+  border-color: var(--lt-control);
+  box-shadow:
+    0 0 0 3px var(--lt-control-ring),
+    0 16px 32px -18px var(--lt-shadow);
+}
+
+/* title bar */
+.lt-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  padding: 6px 8px 6px 13px;
+  border-bottom: 1px solid var(--lt-edge);
+  background: var(--lt-bar);
+  font-size: 12px;
+}
+.lt-lights {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lt-light {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+/* the dot is small, the target is not */
+.lt-light::after {
+  content: "";
+  position: absolute;
+  inset: -10px -4px;
+}
+.lt-light-close {
+  background: var(--lt-light-close);
+}
+.lt-light-full {
+  background: var(--lt-light-full);
+}
+.lt-light svg {
+  width: 9px;
+  height: 9px;
+  fill: none;
+  stroke: var(--lt-light-glyph);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+}
+.lt-lights:hover svg,
+.lt-light:focus-visible svg {
+  opacity: 1;
+}
+@media (hover: none) {
+  .lt-light svg {
+    opacity: 1;
+  }
+}
+.lt-name {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-weight: 600;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.lt-btn {
+  padding: 4px 11px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--lt-fill);
+  color: var(--lt-fg);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.lt-btn:hover {
+  background: var(--lt-fill-hover);
+}
+.lt-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.lt-btn-on,
+.lt-btn-on:hover {
+  background: var(--lt-control);
+  color: var(--lt-control-ink);
+  font-weight: 600;
+}
+.lt-btn:focus-visible,
+.lt-light:focus-visible {
+  outline: 2px solid var(--lt-focus);
+  outline-offset: 2px;
+}
+
+/* the screen */
+.lt-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.lt-slot {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.lt-screen {
+  flex: 1;
+  min-width: 0;
+  max-height: 70vh;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--lt-bg);
+  scrollbar-width: thin;
+  scrollbar-color: var(--lt-thumb) transparent;
+  /* xterm measures a character in an element that inherits the page's letter-spacing and draws its rows with its
+     own: a page value other than normal made every drawn character that much wider than its cell, so a full row
+     ran past the screen's edge and lost its last column */
+  letter-spacing: normal;
+}
+/* more of the pane to the right (LiveTerminal sets data-more): the screen fades at that edge */
+.lt-body::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 28px;
+  background: linear-gradient(to right, transparent, var(--lt-bg));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+.lt-body:has(.lt-screen[data-more="right"])::after {
+  opacity: 1;
+}
+.lt-screen .xterm {
+  width: max-content;
+}
+/* xterm sizes a cell from one measurement and spaces its characters from another, rounded to a whole pixel over 32
+   characters: a full row can come out up to 2px wider than its cells. xterm clips each row (inline style) so a row
+   never paints over the next one; sideways it has the screen's padding to run into — the last column stays whole */
+.lt-screen .xterm-rows > div {
+  overflow-x: visible !important;
+  overflow-y: clip !important;
+}
+/* nothing to show yet (connecting) or at all (failed): a short screen under the message, not an empty 24 rows */
+.lt[data-status="connecting"] .lt-screen,
+.lt[data-status="failed"] .lt-screen {
+  max-height: 190px;
+  overflow: hidden;
+}
+.lt[data-status="ended"] .lt-screen .xterm {
+  opacity: 0.5;
+}
+.lt-veil {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 16px 24px;
+  background: var(--lt-veil);
+  color: var(--lt-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.lt[data-status="failed"] .lt-veil {
+  color: var(--lt-bad);
+}
+
+/* status bar */
+.lt-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 5px 13px;
+  border-top: 1px solid var(--lt-edge);
+  background: var(--lt-bar);
+  color: var(--lt-dim);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.lt-control .lt-foot {
+  background: linear-gradient(var(--lt-control-fill), var(--lt-control-fill)), var(--lt-bar);
+}
+.lt-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.lt-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lt-dim);
+}
+.lt-state.st-open .lt-dot {
+  background: var(--lt-ok);
+}
+.lt-state.st-connecting .lt-dot {
+  animation: lt-pulse 1.2s ease-in-out infinite;
+}
+.lt-state.st-failed {
+  color: var(--lt-bad);
+}
+.lt-state.st-failed .lt-dot {
+  background: var(--lt-bad);
+}
+.lt-control .lt-state {
+  color: var(--lt-control);
+  font-weight: 600;
+}
+.lt-control .lt-state .lt-dot {
+  background: var(--lt-control);
+}
+.lt-hint {
+  color: var(--lt-control);
+  opacity: 0.8;
+}
+.lt-msg {
+  min-width: 0;
+  color: var(--lt-bad);
+  overflow-wrap: anywhere;
+}
+.lt[data-status="ended"] .lt-msg {
+  color: var(--lt-fg);
+}
+.lt-size {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+@keyframes lt-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lt-state.st-connecting .lt-dot {
+    animation: none;
+  }
+  .lt-win {
+    transition: none;
+  }
+}
+
+/* full window: the window centred over the whole page, as large as its pane needs and no larger than the page */
+.lt-full {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  place-items: center;
+  padding: 20px;
+  background: var(--bg);
+}
+.lt-full .lt-win {
+  justify-self: center;
+  max-height: 100%;
+}
+.lt-full .lt-screen {
+  max-height: none;
+}
+
+@media (max-width: 600px) {
+  .lt-bar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .lt-name {
+    text-align: left;
+  }
+  .lt-lights {
+    gap: 12px;
+  }
+  .lt-light {
+    width: 15px;
+    height: 15px;
+  }
+  .lt-light svg {
+    width: 10px;
+    height: 10px;
+  }
+  .lt-hint {
+    display: none;
+  }
+  .lt-full {
+    padding: 8px;
+  }
+}
+
+/* outside the window, on the page's skin: the card's session tabs and what CardTerminals could not read */
+.lt-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--bad);
+}
+.lt-tabs {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.lt-tablist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lt-tablist .chip[aria-selected="true"] {
+  background: var(--accent);
+  color: var(--bg);
+}
+/* "· owner" on the selected tab: the tab's own ink, not the faint one (unreadable on the accent) */
+.lt-tablist .chip[aria-selected="true"] .muted {
+  color: inherit;
+  opacity: 0.85;
+}
+.lt-open {
+  margin: 0;
+}
