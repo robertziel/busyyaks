@@ -235,6 +235,14 @@ out.dig("config", "runner"))
     assert_equal [[b, "In progress", "CI runner down", "https://ci.example.com/job/x/3/", "agent"]],
                  f["blocked_external"].map { |c| c.values_at("card", "column", "reason", "url", "by") }
     refute_nil f["blocked_external"][0]["since"]
+    # a work card the progress watch escalated (no progress for 3 periods) waits for the operator: no_progress
+    q = k.create(slug: "a", title: "quiet", by: "agent", column: "doing")
+    k.db[:cards].where(id: q).update(progress_at: 1_000, progress_pinged_at: 2_800, progress_commented_at: 4_600,
+                                     progress_stale_at: 6_400)
+    f = JSON.parse(tool("daily_facts", hours: 24, series: "Daily report")["content"][0]["text"])
+    assert_equal [[q, "In progress"]], f["no_progress"].map { |c| c.values_at("card", "column") }
+    assert_match(/\Ano progress for 90 min \(since /, f["no_progress"][0]["reason"])
+    assert_equal [id], f["human_input"].map { |c| c["card"] }, "never in the other lists"
   end
 
   def test_check_report_lists_broken_blocks_and_untracked_repos

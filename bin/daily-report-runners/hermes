@@ -77,7 +77,7 @@ tags, lines of at most 12 words. No paragraphs, no sentence that repeats a numbe
 Tools: the busyyaks MCP tools are named mcp__busyyaks__<tool>; delegate_task spawns children.
 1. FACTS. Call mcp__busyyaks__daily_facts with hours=24, series="Daily report" (the last scan's figures: its last_scan
    says when; never ask for a new scan).
-   Every number in the report comes from daily_facts (totals, previous_window, repos, pending, human_input, human_check,
+   Every number in the report comes from daily_facts (totals, previous_window, repos, pending, human_input, human_check, no_progress,
    blocked_external, previous_report.figures) or from the children's summaries — never count by hand, never estimate ("18+" is wrong).
    A number you could not get is left out and said missing, never guessed.
 2. ONE CHILD PER ACTIVE REPO: for every entry in daily_facts.repos, one task in a SINGLE delegate_task call
@@ -94,12 +94,14 @@ Tools: the busyyaks MCP tools are named mcp__busyyaks__<tool>; delegate_task spa
    said missing; the report still goes out.
    Changes (tl:churn) come ONLY from daily_facts.repos[].churn {files, add, del, top}, copied as is; a repo whose
    churn has "error" is left out of tl:churn and listed in the callout.
-3. NEEDS YOU: kanban cards waiting for the operator, both lists, Human input first:
+3. NEEDS YOU: kanban cards waiting for the operator, every list, Human input first:
    daily_facts.human_input = an agent's open question (question + options are in the entry) → one tl:needs row each:
    title, repo, card id, column "Human input", since, ask = the question in ≤ 12 words (options as "A / B / C").
    daily_facts.human_check = work to check (only the operator moves them on) → call mcp__busyyaks__kanban_card(id), one
    tl:needs row each: title, repo, card id, column "Human Check", since, ask = the decision in ≤ 12 words.
-   Add rows (no card) for decisions only the operator can take. Both lists empty → \`ok:0 cards waiting for you\`.
+   daily_facts.no_progress = work cards with no progress for too long (the progress watch) → one tl:needs row each:
+   title, repo, card id, its column, since, ask = its reason ("no progress for N min").
+   Add rows (no card) for decisions only the operator can take. All lists empty → \`ok:0 cards waiting for you\`.
 3b. GITHUB NETWORK: call mcp__busyyaks__github_network with hours=24. Its block_markdown is the whole section: copy it
    character for character under "## GitHub network". It holds the operator's GitHub feed (github.com/feed: releases and
    new repos first, then forks / members / tags / stars, pushes per repo, the rest counted — already capped and sorted

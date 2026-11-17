@@ -4,6 +4,7 @@ require "json"
 require "time"
 require "uri"
 require_relative "../../vendor/agents_kanban/ruby/lib/agents_kanban/errors"
+require_relative "../../vendor/agents_kanban/ruby/lib/agents_kanban/card_links"
 require_relative "github_network"
 require_relative "github"
 require_relative "pr_states"
@@ -143,10 +144,30 @@ module Busyyaks
         built!(card, step_checks(card, step))
       end
 
+      # The engine's progress watch (Store#progress_watch_pass, config/kanban.yml progress_watch): what moved on the card's
+      # work OUTSIDE the card, as {kind, key, text} — the engine calls a changed key progress:
+      #   the PR the idle watch follows (#target: the `local` PR on an enrolled project, else the `pr` one) — its head
+      #     (gh_pr_checks pr:<N> .head) and that head's CI (state + finish + the required checks' build URLs: a rebuild
+      #     of the same head is a new check); nothing while the github service has not read it yet;
+      #   each branch the card names (its title, description and comments — the words CardLinks links as branches)
+      #     that the scanner saw (projects.branch_tips): its tip shas — never a base branch (the checkout's branch, each
+      #     remote's default branch = projects.remote_heads, the enrolment's local / public base): those move with
+      #     every other card's merge.
+      # A PR the github service cannot answer, an assignment that names no PR, a project the scanner never read →
+      # Unavailable (the engine skips the card and says why).
+      PROGRESS_KINDS = ["the card's PR head", "the CI on that head", "commits on the branches the card names"].freeze
+      BRANCHES_MAX = 10 # branches named on one card that are followed (sorted by name)
+
+      def progress_kinds = PROGRESS_KINDS
+
+      def progress(card)
+        pr_progress(card) + branch_progress(card)
+      end
+
       # The poll rows on the path of card's Approve of `step` that the github service does not answer
       # (CiChecks.stale_gates): never asked, or outside its window, or failed. step_checks is walked over the
       # stored rows by a dup of this port with @peek on — no poll request is written. The walk goes past a stale row
-      # on its stored answer (review round 1): the list is EVERY row the operator would wait for, while a real Approve
+      # on its stored answer: the list is EVERY row the operator would wait for, while a real Approve
       # stops at the first (one refusal per click) — a superset of what one click names, never fewer.
       # → [{repo:, ref:, age: seconds since last asked | nil (never asked), error: the poll's error (only when failed),
       #     why: the github service is not answering (only then)}]
@@ -177,6 +198,37 @@ module Busyyaks
       end
 
       private
+
+      def pr_progress(card)
+        repo, ref = target(card)
+        return [] unless repo
+
+        row = answer(repo, ref)
+        head = row[:head] or return []
+
+        sha = head[0, 7]
+        [{ kind: "pr head", key: head, text: "PR #{repo}##{row[:number]} head #{sha}" },
+         { kind: "ci", key: [head, row[:state], row[:finished_at], *row[:builds]].compact.join(" "),
+           text: "CI #{row[:state]} on #{sha}", },]
+      end
+
+      def branch_progress(card)
+        project = @projects.call(card[:project_slug]) or raise Unavailable, "no project #{card[:project_slug]}"
+        raw = project[:branch_tips] or raise Unavailable, "#{card[:project_slug]} has not been read by the scanner yet"
+        heads = project[:remote_heads] or raise Unavailable, "#{card[:project_slug]} has not been read by the scanner yet"
+
+        tips = JSON.parse(raw)
+        comments = @db[:card_activity].where(card_id: card[:id], kind: "comment").select_map(:body)
+        text = [card[:title], card[:notes], *comments].compact.join("\n")
+        words = text.scan(AgentsKanban::CardLinks::WORD).to_set { |w| w.sub(/[.,;:!?)]+\z/, "") }
+        # a base branch moves with every other card's merge: it says nothing about THIS card — the
+        # checkout's branch, each remote's default branch (its HEAD: `main` on a plain repo too), the enrolment's bases
+        bases = [project[:default_ref], *JSON.parse(heads), project[:local_base], project[:public_base]].compact
+        ((words & tips.keys.to_set) - bases).sort.first(BRANCHES_MAX).map do |b|
+          shas = tips.fetch(b)
+          { kind: "branch #{b}", key: shas.join(" "), text: "branch #{b} at #{shas.map { |x| x[0, 7] }.join('/')}" }
+        end
+      end
 
       def built!(card, answer)
         return answer unless card.key?(:handoff_ci_url)

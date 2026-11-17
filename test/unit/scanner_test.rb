@@ -222,6 +222,10 @@ class ScannerTest < Minitest::Test
       assert_nil store.last_scan[:error]
       row = store.project("bad")
       assert_equal [%w[feature main], "main", nil], [JSON.parse(row[:branches]), row[:default_ref], row[:git_error]]
+      tip = IO.popen(["git", "-C", bad, "rev-parse", "HEAD"], &:read).strip
+      assert_equal({ "feature" => [tip], "main" => [tip] }, JSON.parse(row[:branch_tips]),
+                   "each branch's tip, for the progress watch")
+      assert_equal [], JSON.parse(row[:remote_heads]), "no remote: no remote default branch"
 
       git(bad, "config", "core.worktree", good)
       git(good, "commit", "-q", "--allow-empty", "-m", "more")

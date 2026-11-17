@@ -26,7 +26,9 @@ CREATE TABLE `projects`(
   `git_error` text,
   `dirty_paths` text,
   `local_base` varchar(255),
-  `public_base` varchar(255)
+  `public_base` varchar(255),
+  `branch_tips` text,
+  `remote_heads` text
 );
 CREATE TABLE `commits`(
   `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -116,7 +118,13 @@ CREATE TABLE `cards`(
   `flag_reminded_at` integer,
   `review_rounds` text,
   `gate_head` varchar(255),
-  `gate_state` text
+  `gate_state` text,
+  `progress_at` integer,
+  `progress_marks` text,
+  `progress_pinged_at` integer,
+  `progress_commented_at` integer,
+  `progress_stale_at` integer,
+  `progress_error` text
 );
 CREATE INDEX `cards_project_slug_column_position_index` ON `cards`(
   `project_slug`,
@@ -515,4 +523,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261207470000_gh_pr_checks_builds.rb'),
 ('20261208000000_gh_pollers.rb'),
 ('20261208046700_pr_closed_reason.rb'),
-('20261208468000_pr_base_merge_flags.rb');
+('20261208468000_pr_base_merge_flags.rb'),
+('20261209492000_progress_watch.rb');

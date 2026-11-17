@@ -182,6 +182,79 @@ class CiChecksTest < Minitest::Test
     assert_equal "failure", @port.pr_checks(@card)[:state]
   end
 
+  # the progress watch's evidence — the followed PR's head + that head's CI (a rebuild of the same head is a
+  # new key), each branch the card names that the scanner saw; a project never scanned, a stale poll → Unavailable
+  def test_progress_reads_the_pr_head_its_ci_and_the_named_branches
+    @conn[:projects].where(slug: "o-r").update(branch_tips: JSON.generate("card/1-x" => %w[c1c1c1c1c1], "main" => %w[m1]),
+                                               remote_heads: "[]")
+    assert_equal [], @port.progress(@kb.card(@id)), "not polled yet, no branch named: nothing"
+    @http.pulls = [PR]
+    @http.statuses = [{ "state" => "pending", "updated_at" => finish_at(@now - 50) }]
+    @poller.run
+    @kb.comment(@id, body: "pushed to card/1-x.", author: "lead")
+    got = @port.progress(@kb.card(@id))
+    assert_equal [["pr head", "abc", "PR o/r#112 head abc"], ["ci", "abc pending #{CI_URL}", "CI pending on abc"],
+                  ["branch card/1-x", "c1c1c1c1c1", "branch card/1-x at c1c1c1c"],],
+                 got.map { |e| e.values_at(:kind, :key, :text) }
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now - 20) }]
+    @poller.run
+    ci = @port.progress(@kb.card(@id)).find { |e| e[:kind] == "ci" }
+    assert_equal "abc success #{@now - 20} #{CI_URL}", ci[:key], "a finished check is a new key"
+    assert_equal ["pr head", "ci", "branch card/1-x", "branch main"],
+                 (@kb.update(@id, { "title" => "ship main" }, by: "lead") && @port.progress(@kb.card(@id))).map { |e| e[:kind] }
+    # a base branch (the checkout's, a remote's default branch) moves with every other card's merge: never
+    # this card's progress
+    @conn[:projects].where(slug: "o-r").update(default_ref: "main")
+    assert_equal ["pr head", "ci", "branch card/1-x"], @port.progress(@kb.card(@id)).map { |e| e[:kind] }
+    # a plain (not enrolled) repo whose checkout sits on another branch: its remote's default branch (origin/HEAD →
+    # main) still never counts
+    @conn[:projects].where(slug: "o-r").update(default_ref: "card/2-y", remote_heads: JSON.generate(["main"]))
+    assert_equal ["pr head", "ci", "branch card/1-x"], @port.progress(@kb.card(@id)).map { |e| e[:kind] }
+    @conn[:projects].where(slug: "o-r").update(remote_heads: nil)
+    e = assert_raises(CK::Unavailable) { @port.progress(@kb.card(@id)) }
+    assert_equal "o-r has not been read by the scanner yet", e.message
+    @conn[:projects].where(slug: "o-r").update(remote_heads: "[]")
+    @conn[:projects].where(slug: "o-r").update(default_ref: "card/1-x", public_base: "main")
+    assert_equal ["pr head", "ci"], @port.progress(@kb.card(@id)).map { |e| e[:kind] }
+    assert_equal ["the card's PR head", "the CI on that head", "commits on the branches the card names"], @port.progress_kinds
+    @conn[:projects].where(slug: "o-r").update(branch_tips: nil)
+    e = assert_raises(CK::Unavailable) { @port.progress(@kb.card(@id)) }
+    assert_equal "o-r has not been read by the scanner yet", e.message
+    @now += 200 # past stale_after (180), inside the poll window (600)
+    @conn[:projects].where(slug: "o-r").update(branch_tips: "{}", remote_heads: "[]")
+    e = assert_raises(CK::Unavailable) { @port.progress(@kb.card(@id)) }
+    assert_equal "GitHub check status for o/r pr:112 is 200s old (github service stopped?)", e.message
+  end
+
+  # the wiring: the notifier's watch pass runs the engine's progress watch on this Port — a quiet card pings its owner
+  # naming the PR head, then gets the busyyaks comment, then counts as waiting
+  def test_the_notifier_escalates_a_quiet_card_with_the_ports_evidence
+    @conn[:projects].where(slug: "o-r").update(branch_tips: "{}", remote_heads: "[]")
+    @http.pulls = [PR]
+    @port.progress(@kb.card(@id))
+    @poller.run
+    @kb.progress_watch_pass # the head first seen now
+    n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: StringIO.new)
+    # the notifier's cadence: a watch pass a minute (the poller answers each pass's requests)
+    step = lambda do |mins|
+      mins.times do
+        @now += 60
+        @poller.run
+        n.deliver
+        n.watch
+      end
+    end
+    step.call(30)
+    ping = @conn[:card_pings].where(card_id: @id, reason: "progress").first
+    assert_includes ping[:text], "PR o/r#112 head abc since"
+    step.call(30)
+    assert_equal 1, @conn[:card_activity].where(card_id: @id, author: "busyyaks", kind: "comment")
+                                         .where(Sequel.like(:body, "**No progress**%")).count
+    step.call(30)
+    assert_equal 1, @kb.waiting_counts(["o-r"]).waiting["o-r"]
+    assert_match(/\Ano progress for 90 min/, @kb.card(@id)[:progress_stale])
+  end
+
   # the approval gate's port. Not enrolled: every step reads the card's `pr` PR. Enrolled: a non-final step reads
   # the `local` PR; the final step the `public` one; none assigned, one on another repo, or an enrolment without a
   # public repo is said.

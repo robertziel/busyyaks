@@ -24,6 +24,7 @@ class MigrationsTest < Minitest::Test
   BEFORE_SESSION_BOARDS = 20_261_205_000_000 # the last migration before v11 (session boards: boards.archived_at)
   BEFORE_LEAD_FIRST = 20_261_206_000_000 # the last migration before v12 (lead-first boards)
   BEFORE_PR_FLAGS = 20_261_208_467_999 # just before the PR base / merge flags: whatever lands before it stays
+  BEFORE_PROGRESS = 20_261_209_491_999 # just before the progress watch (Schema v13 + projects.branch_tips)
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -210,6 +211,19 @@ class MigrationsTest < Minitest::Test
     refute_includes @db.schema(:boards).map(&:first), :archived_at
     migrate
     assert_includes @db.schema(:boards).map(&:first), :archived_at
+  end
+
+  # v13 = the progress watch's stretch on the card, + the scanner's branch tips; both roll back
+  def test_v13_progress_watch_columns_roll_back
+    pw = %i[progress_at progress_marks progress_pinged_at progress_commented_at progress_stale_at progress_error]
+    migrate
+    assert_equal pw, @db.schema(:cards).map(&:first) & pw
+    assert_includes @db.schema(:projects).map(&:first), :branch_tips
+    migrate(BEFORE_PROGRESS)
+    assert_empty @db.schema(:cards).map(&:first) & pw
+    refute_includes @db.schema(:projects).map(&:first), :branch_tips
+    migrate
+    assert_equal pw, @db.schema(:cards).map(&:first) & pw
   end
 
   # review round 1: v12 adds lead_id / needs_lead / lead_key_digest and the CHECK, rewrites the newest agent

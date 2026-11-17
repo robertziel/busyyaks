@@ -126,7 +126,7 @@ function rowLine(r: KindRow, kind: Kind): string | null {
   if (kind === "approved") return approvedLine(c);
   // approved, but no session owns it to carry it on: it waits for you — say why first
   if (c.approved && !c.carried_on && !c.needs_operator) return "approved · no agent";
-  return c.question_first_line ?? c.handoff_first_line ?? null;
+  return c.question_first_line ?? c.progress_stale ?? c.handoff_first_line ?? null;
 }
 
 // what an open sheet shows: the rows of a good read with at least one segment · "read failed: <reason>" after a failed

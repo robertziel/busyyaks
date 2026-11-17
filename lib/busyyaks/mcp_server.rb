@@ -52,6 +52,7 @@ module Busyyaks
                      "pending work over every repo (dirty / unpushed / " \
                      "own repos with no upstream), kanban cards waiting for the operator on every board " \
                      "(human_input: an agent's open question; human_check: work to check that can be approved now; " \
+                     "no_progress: work cards the progress watch escalated — no progress for too long; " \
                      "waiting_for_ci: gate cards whose CI is not green yet, not counted; blocked_external: cards " \
                      "waiting for another card, CI or a third party, not counted; approved: gate cards the operator " \
                      "approved that their agent carries on (merging), not counted) and per-column card " \
@@ -319,10 +320,12 @@ module Busyyaks
       boards = w.boards
       asks = []
       checks = []
+      quiet = []
       by_slug.each do |slug, cs|
         cs.each do |c|
           if kanban.needs_operator?(c) then asks << c
           elsif boards[slug].gate?(c[:column]) then checks << c
+          elsif c[:progress_stale] then quiet << c # the progress watch's last step
           end
         end
       end
@@ -338,6 +341,11 @@ module Busyyaks
       human_check = checks.map do |c|
         { card: c[:id], repo: c[:project_slug], title: c[:title], since: iso(c[:since]), assignee: c[:assignee],
           priority: c[:priority], comments: c[:comments], }
+      end
+      # work cards with no progress for 3 × progress_watch.stale_minutes: they wait for the operator
+      no_progress = quiet.map do |c|
+        { card: c[:id], repo: c[:project_slug], title: c[:title], column: c[:column_label], since: iso(c[:since]),
+          reason: c[:progress_stale], owner_session: c[:owner_session], }
       end
       # gate cards whose Approve would not pass now: waiting for CI, not for the operator
       waiting_for_ci = w.held.values.flatten.map do |c|
@@ -374,6 +382,7 @@ module Busyyaks
                                              .map { |p| { repo: p[:slug], dirty: p[:dirty], unpushed: p[:unpushed] } }, },
            human_input: questions,
            human_check: human_check,
+           no_progress: no_progress,
            waiting_for_ci: waiting_for_ci,
            blocked_external: blocked_external,
            approved: approved,
