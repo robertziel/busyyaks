@@ -11,6 +11,7 @@ require_relative "agent_settings"
 require_relative "dictation"
 require_relative "terminal"
 require_relative "ci_settings"
+require_relative "skills"
 
 module Busyyaks
   # The deployment's YAML (config/busyyaks.yml). Every key required, unknown keys refused,
@@ -19,11 +20,11 @@ module Busyyaks
     class Invalid < StandardError; end
 
     KEYS = %w[roots search_depth owner_remotes author_emails window_days reap_protect auth agents launch dictation
-              terminal ci].freeze
+              terminal ci skills].freeze
     OPTIONAL = %w[engines daily_report_runners].freeze
     attr_reader :roots, :search_depth, :owner_remotes, :author_emails, :window_days, :reap_protect, :engines,
                 :daily_report_runners, :auth, :agent_collector, :trusted_paths, :launch_commands,
-                :launch_start_seconds, :launch_scopes, :dictation, :terminal, :ci
+                :launch_start_seconds, :launch_scopes, :dictation, :terminal, :ci, :skills
 
     # mount: where compose mounts PROJECTS_ROOT (.env PROJECTS_MOUNT, the one place it is set): every root is under it.
     def self.load(path = ENV.fetch("BUSYYAKS_CONFIG"), mount: ENV.fetch("PROJECTS_MOUNT"))
@@ -127,6 +128,12 @@ module Busyyaks
         # how the github service reads a PR's CI (CiSettings; card #470): {max_pending_minutes, required}
         @ci = CiSettings.parse!(hash["ci"])
       rescue CiSettings::Invalid => e
+        raise Invalid, e.message
+      end
+      begin
+        # the skills bin/launcher hands each session it starts (Skills)
+        @skills = Skills.settings!(hash["skills"])
+      rescue Skills::Invalid => e
         raise Invalid, e.message
       end
       begin

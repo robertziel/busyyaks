@@ -9,6 +9,17 @@
 # {elapsed} in a screen = the time since this agent started (its one turn began at Launch), as Claude Code's status line
 # counts a turn: what its session wrote on a card since stays inside the turn (the card dialog shows it at work there).
 # Its sleep child keeps the launcher's start check satisfied.
+# Kind hermes: bin/launcher's start check asks `<command> skills list` in the session's own environment whether the
+# per-launch entry skill is listed (docs/DEPLOY.md § Skills). The stand-in answers as hermes would with the
+# `${BUSYYAKS_SKILLS_DIR}/busyyaks-skills` external_dirs line: every skill dir the launch staged, enabled.
+if [ "$1" = skills ] && [ "$2" = list ]; then
+  d=${BUSYYAKS_SKILLS_DIR:?readme-agent: BUSYYAKS_SKILLS_DIR unset: the launch staged no skills}/busyyaks-skills
+  [ -d "$d" ] || { echo "readme-agent: no staged skills at $d" >&2; exit 1; }
+  for s in "$d"/*/; do
+    [ -f "$s/SKILL.md" ] && printf '| %s | busyyaks | enabled |\n' "$(basename "$s")"
+  done
+  exit 0
+fi
 screens=@COLLECTOR@/screens
 session=$(tmux display-message -p '#S')
 start=$(date +%s)

@@ -10,6 +10,7 @@ require "socket"
 require "json"
 require "etc"
 require "yaml"
+require "shellwords"
 
 # bin/launcher itself, run as a process in a sandbox checkout (its own .env and config, a stub tmux that only records
 # its calls, a git wrapper that fakes `clone`): the folder-trust wiring of create and launch.
@@ -29,7 +30,7 @@ class LauncherTrustTest < Minitest::Test
   # launch.start_seconds of the sandbox: far above the 13 s a slow wrapper below takes, so a refusal "at
   # once" is told from one on the clock by its reason and its distance from this, never by the machine's speed
   START_SECONDS = 120
-  COPY = %w[bin/launcher lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml].freeze
+  COPY = %w[bin/launcher lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml skills].freeze
 
   def setup
     # under the user's home: the run dir's parents must not be writable by another user (LauncherRules.run_dir!)
@@ -63,25 +64,52 @@ class LauncherTrustTest < Minitest::Test
     @pane = File.join(@base, "pane.sh") # a pane command of a test's own: `sh pane.sh <session>`
     @dialog = File.join(@base, "dialog") # the pane shows a permission dialog
     FileUtils.cp(Open3.capture2("sh", "-c", "command -v bash").first.strip, File.join(@bin, "claude"))
-    FileUtils.cp(File.join(@bin, "claude"), File.join(@bin, "hermes")) # a hermes launch: its pane runs `hermes`
+    # a hermes launch: its pane runs `hermes`. Like hermes v0.21.5: `skills list` shows the
+    # skills of skills.external_dirs, `${BUSYYAKS_SKILLS_DIR}/busyyaks-skills` resolved from ITS environment
+    File.write(File.join(@bin, "hermes"), <<~SH)
+      #!/bin/sh
+      if [ "$1" = skills ]; then
+        grep -qF '${BUSYYAKS_SKILLS_DIR}/busyyaks-skills' "$HERMES_HOME/config.yaml" && [ -n "$BUSYYAKS_SKILLS_DIR" ] &&
+          for d in "$BUSYYAKS_SKILLS_DIR"/busyyaks-skills/*; do echo "│ $(basename "$d") │ external │ local │ enabled │"; done
+        exit 0
+      fi
+      sleep 300
+    SH
+    File.chmod(0o755, File.join(@bin, "hermes"))
     @hermes = File.join(@base, "hermes_mode")
+    @noplugin = File.join(@base, "noplugin") # a launcher command that drops the extra flags
+    # hermes reads its skills from config.yaml skills.external_dirs: the inert line busyyaks's launch env fills
+    @home = File.join(@base, "home") # the launcher's HOME: a launch writes nothing user-wide into it
+    FileUtils.mkdir_p(@home)
+    @hermes_home = File.join(@base, "hermes-home")
+    FileUtils.mkdir_p(@hermes_home)
+    File.write(File.join(@hermes_home, "config.yaml"),
+               YAML.dump("skills" => { "external_dirs" => ["${BUSYYAKS_SKILLS_DIR}/busyyaks-skills"] }))
     stub("tmux", <<~SH)
       echo "$*" >> #{@tmux_log}
       case "$1" in
         new-session)
+          # the command the launcher typed (the last word) and its per-session env (-e K=V): the stub agent gets the
+          # same --plugin-dir / BUSYYAKS_SKILLS_DIR the real one would (the launcher reads them off /proc)
+          for a; do cmd=$a; done
+          pd=$(printf '%s' "$cmd" | sed -nE 's/.*--plugin-dir ([^ ]+).*/\\1/p')
+          printf '%s\n' "$cmd" > #{@base}/command
+          for a; do case "$a" in BUSYYAKS_SKILLS_DIR=*) export "$a" ;; esac; done
           while [ "$1" != -s ]; do shift; done
           # each pane its own process group (setsid): teardown ends the whole group, its `sleep`s too — a TERM to the
           # pane's shell alone left them running 300 s (the flake gate's repeats ran out of tasks)
-          if [ -e #{@pane} ]; then setsid sh #{@pane} "$2" >/dev/null 2>&1 &
+          if [ -e #{@pane} ]; then setsid sh #{@pane} "$2" "$pd" >/dev/null 2>&1 &
           elif [ -e #{@refuse} ]; then setsid sleep 300 >/dev/null 2>&1 &
-          elif [ -e #{@hermes} ]; then setsid #{@bin}/hermes -c 'sleep 300; :' >/dev/null 2>&1 &
-          else setsid #{@bin}/claude -c 'sleep 300; :' --remote-control "$2" >/dev/null 2>&1 & fi
+          elif [ -e #{@hermes} ]; then setsid #{@bin}/hermes chat >/dev/null 2>&1 &
+          elif [ -e #{@noplugin} ]; then setsid #{@bin}/claude -c 'sleep 300; :' --remote-control "$2" >/dev/null 2>&1 &
+          else setsid #{@bin}/claude -c 'sleep 300; :' --plugin-dir "$pd" --remote-control "$2" >/dev/null 2>&1 & fi
           echo $! >> #{@pids}; echo $! > #{@base}/pane.pid; date +%s.%N > #{@base}/started_at; exit 0 ;;
         list-panes) [ -e #{@base}/pane.pid ] && cat #{@base}/pane.pid && exit 0; exit 1 ;;
         kill-session) [ -e #{@base}/nokill ] && echo "server busy" >&2 && exit 1; exit 0 ;;
         has-session) grep -qx -- "$3" #{@base}/alive 2>/dev/null && exit 0
           [ -e #{@base}/nokill ] && [ -e #{@base}/pane.pid ] && exit 0; exit 1 ;;
-        ls|display-message) exit 1 ;;
+        ls) [ -e #{@base}/ls ] && cat #{@base}/ls && exit 0; [ -e #{@base}/ls_err ] && cat #{@base}/ls_err >&2; exit 1 ;;
+        display-message) exit 1 ;;
         capture-pane)
           if [ -e #{@dialog} ]; then printf '%s\\n' "Do you want to proceed?" "❯ 1. Yes" "Enter to confirm · Esc to cancel"
           elif [ -e #{@refuse} ]; then echo "Temp directory /tmp/claude-1000 is owned by uid 0, expected 1000."; echo '$ '
@@ -123,6 +151,7 @@ class LauncherTrustTest < Minitest::Test
       "reap_protect" => [], "auth" => { "provider" => "none" }, "agents" => { "collector" => "none" }, "dictation" => "none",
       "terminal" => { "public_host" => "deny", "max_open" => 4 },
       "ci" => { "max_pending_minutes" => 60, "required" => { "o/r" => ["jenkins/ci"] } },
+      "skills" => { "max_bytes" => 65_536, "max_start_bytes" => 32_768, "project" => "allow", "local_dir" => nil },
       "launch" => launch
     ))
   end
@@ -142,7 +171,8 @@ class LauncherTrustTest < Minitest::Test
 
   def start
     @log = File.join(@base, "launcher.log")
-    env = { "PATH" => "#{@bin}:#{ENV.fetch('PATH')}", "GIT_SSH_COMMAND" => "false", "GIT_TEMPLATE_DIR" => "/nowhere",
+    env = { "PATH" => "#{@bin}:#{ENV.fetch('PATH')}", "HERMES_HOME" => @hermes_home, "HOME" => @home,
+            "GIT_SSH_COMMAND" => "false", "GIT_TEMPLATE_DIR" => "/nowhere",
             "GIT_CONFIG_COUNT" => "1", "GIT_CONFIG_KEY_0" => "protocol.file.allow", "GIT_CONFIG_VALUE_0" => "always", }
     @pid = Process.spawn(env, RbConfig.ruby, File.join(@co, "bin/launcher"), %i[out err] => [@log, "w"])
     sock = File.join(@base, "run/launcher.sock")
@@ -238,6 +268,166 @@ class LauncherTrustTest < Minitest::Test
     refute env.key?("GIT_CONFIG_COUNT")
   end
 
+  # A claude_code launch hands its session busyyaks's skills for its type through --plugin-dir <stage> (a
+  # copy under LAUNCHER_STATE_DIR, 0700) and a prompt opening with /busyyaks:session; --remote-control stays last
+  def test_a_claude_launch_carries_its_staged_skills
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    r = launch("fresh")
+    assert r["ok"], r.inspect
+    stage = File.join(@base, "state/skills/fresh_s")
+    argv = Shellwords.split(File.read(File.join(@base, "command")).chomp.delete_suffix("; exec bash"))
+    i = argv.index("--plugin-dir")
+    assert_equal stage, argv[i + 1]
+    assert argv[i + 2].start_with?("/busyyaks:session Test lead session for fresh"), argv.inspect
+    assert_equal ["--remote-control", "fresh_s"], argv.last(2)
+    assert_equal %w[workflow lead reviewer session], r["skills"].map { |k| k["name"] }
+    assert_equal "none", r["project_skills"]
+    assert_equal 0o700, File.stat(stage).mode & 0o777
+    assert_equal({ "name" => "busyyaks" }, JSON.parse(File.read(File.join(stage, ".claude-plugin/plugin.json"))))
+    entry = File.read(File.join(stage, "skills/session/SKILL.md"))
+    assert_includes entry, "## workflow (busyyaks)"
+    assert_includes entry, "## lead (busyyaks)"
+    assert_includes entry, "`busyyaks:reviewer`", "an on-demand skill is listed by its plugin name"
+    refute_includes entry, "## reviewer"
+    refute File.exist?(File.join(stage, "skills/author")), "a worker's skill is not a lead's"
+    assert_match(/skills workflow\(busyyaks,start,\h{12}\)/, File.read(@log))
+    assert_empty Dir.children(@home), "nothing installed user-wide (no ~/.claude/skills, no plugin install)"
+  end
+
+  # a skill dir the manifest names is missing: refused before tmux starts anything, no stage left
+  def test_a_launch_with_a_broken_skill_set_is_refused_before_it_starts
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    FileUtils.rm_rf(File.join(@co, "skills/lead"))
+    File.write(@tmux_log, "")
+    r = launch("fresh")
+    refute r["ok"], r.inspect
+    assert_match(%r{\Askills: .*/skills: lead named in .*manifest.yml but missing}, r["error"])
+    refute_includes tmux_calls, "new-session", "nothing started"
+    refute File.exist?(File.join(@base, "state/skills/fresh_s"))
+  end
+
+  # an agent that comes up WITHOUT the stage (a launcher function dropping the extra flags): refused, killed, stage gone
+  def test_an_agent_up_without_its_skills_is_refused
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    FileUtils.touch(@noplugin)
+    r = launch("fresh")
+    refute r["ok"], r.inspect
+    assert_match(/\Afresh_s did not start: the agent runs without its skills: no --plugin-dir /, r["error"])
+    assert_match(/kill-session -t =fresh_s/, tmux_calls)
+    refute File.exist?(File.join(@base, "state/skills/fresh_s"))
+  end
+
+  # a stage lives while its session does: the next launch removes the stage of a session tmux no longer lists
+  def test_the_stage_of_an_ended_session_is_removed
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    ask("op" => "create", "root" => "/projects", "name" => "two", "url" => "")
+    assert launch("fresh")["ok"]
+    assert File.directory?(File.join(@base, "state/skills/fresh_s"))
+    File.write(File.join(@base, "ls"), "") # tmux ls: fresh_s is gone
+    FileUtils.rm_f(File.join(@base, "pane.pid"))
+    assert launch("two")["ok"]
+    refute File.exist?(File.join(@base, "state/skills/fresh_s"))
+    assert File.directory?(File.join(@base, "state/skills/two_s"))
+  end
+
+  # the notifier's watch pass asks `sessions`: a stage goes within a pass of its session's end
+  def test_the_sessions_op_removes_the_stage_of_an_ended_session
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    assert launch("fresh")["ok"]
+    File.write(File.join(@base, "ls"), "") # tmux ls: fresh_s is gone
+    assert ask("op" => "sessions")["ok"]
+    refute File.exist?(File.join(@base, "state/skills/fresh_s"))
+    assert_match(/skills sweep \(sessions\): removed fresh_s/, File.read(@log))
+  end
+
+  # tmux unreadable (ls fails, not "no server"): nothing removed, and the log says the sweep was skipped and why
+  def test_a_failed_tmux_ls_never_removes_a_stage
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    assert launch("fresh")["ok"]
+    FileUtils.rm_f(File.join(@base, "ls")) # the stub's ls exits 1, no output
+    ask("op" => "sessions")
+    assert File.directory?(File.join(@base, "state/skills/fresh_s"))
+    assert_match(/skills sweep skipped \(sessions\): tmux ls failed: no output/, File.read(@log))
+  end
+
+  # tmux's real "no server" answers (no server running / the socket missing) = no sessions: the stage goes; any other
+  # error (a socket it may not open: Permission denied) = tmux unreadable: kept, the skip logged
+  def test_only_a_real_no_server_answer_counts_as_no_sessions
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    assert launch("fresh")["ok"]
+    stage = File.join(@base, "state/skills/fresh_s")
+    FileUtils.rm_f(File.join(@base, "ls"))
+    File.write(File.join(@base, "ls_err"), "error connecting to /tmp/tmux-1000/default (Permission denied)\n")
+    ask("op" => "sessions")
+    assert File.directory?(stage)
+    assert_match(/skills sweep skipped \(sessions\): tmux ls failed: error connecting to .*\(Permission denied\)/,
+File.read(@log))
+    ["no server running on /tmp/tmux-1000/default", "error connecting to /tmp/tmux-1000/default (No such file or directory)"]
+      .each do |msg|
+        FileUtils.mkdir_p(stage)
+        File.write(File.join(@base, "ls_err"), "#{msg}\n")
+        ask("op" => "sessions")
+        refute File.exist?(stage), msg
+      end
+  end
+
+  def project_skill(repo, types:)
+    base = File.join(@projects, repo, ".busyyaks")
+    FileUtils.mkdir_p(File.join(base, "skills/deploy"))
+    File.write(File.join(base, "skills.yml"),
+YAML.dump("version" => 1, "skills" => { "deploy" => { "types" => types, "load" => "start" } }))
+    File.write(File.join(base, "skills/deploy/SKILL.md"),
+"---\nname: deploy\ndescription: how this repo deploys\n---\nRun make deploy.\n")
+  end
+
+  # a TRUSTED repo's own .busyyaks skills load for the type they name, after busyyaks's
+  def test_a_trusted_repos_own_skills_load
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    project_skill("fresh", types: ["lead"])
+    r = launch("fresh")
+    assert r["ok"], r.inspect
+    assert_equal "loaded", r["project_skills"]
+    assert_equal [%w[deploy project]], r["skills"].select { |k|
+ k["source"] == "project" }.map { |k| k.values_at("name", "source") }
+    entry = File.read(File.join(@base, "state/skills/fresh_s/skills/session/SKILL.md"))
+    assert_operator entry.index("## lead (busyyaks)"), :<, entry.index("## deploy (project)")
+  end
+
+  # an UNTRUSTED repo's .busyyaks skills are left (never read); the launch runs on busyyaks's and says why
+  def test_an_untrusted_repos_skills_are_left
+    planted("planted")
+    project_skill("planted", types: ["lead"])
+    r = launch("planted")
+    assert r["ok"], r.inspect
+    assert_match(/\Aleft: .* is not in config\/busyyaks.yml launch.trusted_paths/, r["project_skills"])
+    refute(r["skills"].any? { |k| k["source"] == "project" })
+  end
+
+  # hermes: a config without the external_dirs line → hermes (asked in the session's env) lists no busyyaks-session:
+  # refused with the file and the line to add, the session killed
+  def test_a_hermes_launch_without_the_external_dirs_line_is_refused
+    File.write(File.join(@hermes_home, "config.yaml"), YAML.dump("skills" => { "external_dirs" => [] }))
+    FileUtils.touch(@hermes)
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    hermes = { "key" => "hermes", "label" => "hermes", "kind" => "hermes", "command" => "hermes", "args" => ["chat"],
+               "via_shell" => false, }
+    types = AGENTS["agent_types"].map do |t|
+      next t unless t["key"] == "plain"
+
+      t.merge("launchers" => t["launchers"] + ["hermes"],
+              "model" => t["model"].is_a?(Hash) ? t["model"].merge("hermes" => nil) : t["model"])
+    end
+    doc = AGENTS.merge("launchers" => AGENTS["launchers"] + [hermes], "agent_types" => types)
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "plain", "launcher" => "hermes",
+            "settings" => { "id" => 3, "doc" => doc },
+            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "plain", "cards" => "-" })
+    refute r["ok"], r.inspect
+    assert_match(/the agent runs without its skills: hermes does not list busyyaks-session-\h{12}: /, r["error"])
+    assert_includes r["error"], "#{@hermes_home}/config.yaml needs `- ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills`"
+    assert_match(/kill-session -t =fresh_s/, tmux_calls)
+    refute File.exist?(File.join(@base, "state/skills/fresh_s"))
+  end
+
   # claude never came up (it refused to start; the pane is a bare shell): the launch is refused with the pane's last
   # lines and the session killed — never an ok the engine would register an owner on
   def test_a_launch_without_claude_remote_control_is_refused_and_killed
@@ -327,7 +517,15 @@ class LauncherTrustTest < Minitest::Test
     assert_equal [true, "hermes", "on", "hermes"], r.values_at("ok", "kind", "process", "process_name"), r.inspect
     refute r.key?("remote_control"), r.inspect
     started = tmux_calls.lines.find { |l| l.start_with?("new-session") }
-    assert_match(/hermes chat -q work\\ on\\ fresh/, started)
+    token = started[/-s busyyaks-session-(\h{12}) /, 1]
+    refute_nil token, started
+    assert_match(/hermes chat -s busyyaks-session-#{token} -q work\\ on\\ fresh/, started)
+    stage = File.join(@base, "state/skills/fresh_s")
+    assert_includes started, "-e BUSYYAKS_SKILLS_DIR=#{stage} ", "the stage reaches hermes through this session's env only"
+    entry = File.join(stage, "busyyaks-skills/busyyaks-session-#{token}/SKILL.md")
+    assert_match(/\A---\nname: busyyaks-session-#{token}\n/, File.read(entry))
+    assert File.file?(File.join(stage, "busyyaks-skills/busyyaks-workflow-#{token}/SKILL.md"))
+    assert_equal %w[workflow lead reviewer session], r["skills"].map { |k| k["name"] }, "lead: its skills + the entry skill"
     refute_match(/--remote-control/, started)
     refute_match(/send-keys/, tmux_calls, "no trust prompt answered for hermes")
   end
@@ -360,7 +558,7 @@ class LauncherTrustTest < Minitest::Test
   # execs claude --remote-control: up, kept
   def test_a_slow_wrapper_that_then_starts_claude_is_ok
     planted("slow")
-    File.write(@pane, "sleep 13; exec #{@bin}/claude -c 'sleep 300; :' --remote-control \"$1\"\n")
+    File.write(@pane, "sleep 13; exec #{@bin}/claude -c 'sleep 300; :' --plugin-dir \"$2\" --remote-control \"$1\"\n")
     r = Elapsed.at_least(12, "the wrapper's 13 s were waited out") { launch("slow") }
     assert_equal [true, "on", "slow_s"], r.values_at("ok", "remote_control", "remote_control_name"), r.inspect
     refute_includes tmux_calls, "kill-session"
@@ -470,7 +668,7 @@ class LauncherTrustTest < Minitest::Test
   # a TRUSTED repo whose wrapper works longer than the trust wait, then starts claude: its prompt answered, up, kept
   def test_a_trusted_repo_with_a_slow_wrapper_is_ok
     ask("op" => "create", "root" => "/projects", "name" => "tslow", "url" => "")
-    File.write(@pane, "sleep 13; exec #{@bin}/claude -c 'sleep 300; :' --remote-control \"$1\"\n")
+    File.write(@pane, "sleep 13; exec #{@bin}/claude -c 'sleep 300; :' --plugin-dir \"$2\" --remote-control \"$1\"\n")
     r = Elapsed.at_least(12, "the wrapper's 13 s were waited out") { launch("tslow") }
     assert_equal [true, "accepted", "on", "tslow_s"], r.values_at("ok", "trust", "remote_control", "remote_control_name"),
                  r.inspect

@@ -152,12 +152,22 @@ class AgentSettingsTest < Minitest::Test
     assert_equal %w[lead worker team plain], S.template["agent_types"].map { |t| t["key"] }
   end
 
-  # the worker's PR subagents (QA + Reviewer) run on haiku, never on the worker's own model
+  # the worker's PR subagents (QA + Reviewer) run on haiku, never on the worker's own model — said once, in the
+  # author skill busyyaks hands every worker session (skills/manifest.yml)
   def test_the_worker_prompt_runs_its_qa_and_reviewer_subagents_on_haiku
-    prompt = S.template["agent_types"].find { |t| t["key"] == "worker" }.fetch("prompt")
-    qa = prompt.lines.find { |l| l.include?("independent QA agent") }
-    reviewer = prompt.lines.find { |l| l.include?("dispatch a REVIEWER AGENT") }
-    [qa, reviewer].each { |line| assert_includes line, 'Agent tool `model: "haiku"`' }
+    author = File.read(File.expand_path("../../skills/author/SKILL.md", __dir__))
+    assert_match(/\*\*QA agent\*\*: a fresh subagent \(`model: "haiku"`\)/, author)
+    assert_match(/dispatch a REVIEWER — a fresh subagent \(`model: "haiku"`\)/, author)
+  end
+
+  # A template prompt says who the session is; the workflow is the skills', never repeated here
+  def test_the_template_prompts_carry_no_workflow_text
+    S.template["agent_types"].each do |t|
+      p = t["prompt"].to_s
+      ["kanban_ask", "kanban_handoff", "kanban_block", "severity", "skill", "reviewer agent", "conflict"].each do |w|
+        refute_includes p.downcase, w, "#{t['key']}: #{w}"
+      end
+    end
   end
 
   # the move off config/kanban.yml: an old file's launchers + agent_types become a revision, the rest is ignored

@@ -40,7 +40,7 @@ class DailyReportDryRunTest < Minitest::Test
                                   "owner_remotes" => ["github.com/me/"], "author_emails" => ["me@x.io"],
                                   "window_days" => 7, "reap_protect" => [], "auth" => { "provider" => "none" },
                                   "agents" => { "collector" => "none" }, "dictation" => "none", "terminal" => TERMINAL_DENY,
-      "ci" => CI_SETTINGS,
+      "ci" => CI_SETTINGS, "skills" => SKILLS_SETTINGS,
                                   "launch" => LAUNCH_CLAUDE)
     Busyyaks::Scanner.new(config, store).run
   end

@@ -504,6 +504,16 @@ loops, four gates), in the graph editor; dashed arrows go back up the board orde
 
 ---
 
+## Skills
+
+The workflow busyyaks's agents follow (asking on a card, handing off on green CI, review loops, never merging before
+your approval) is a set of skills in `skills/`, handed to each session busyyaks starts — per launch only (Claude Code
+`--plugin-dir`, hermes through one env-gated `external_dirs` line); your own `claude` / `hermes` sessions are not
+touched. A project adds its own in `.busyyaks/skills.yml` + `.busyyaks/skills/<name>/SKILL.md`, loaded for the agent
+types it names when the repo is trusted. Format and rules: `docs/DEPLOY.md` § Skills.
+
+---
+
 ## MCP tools
 
 | Tool | Does |

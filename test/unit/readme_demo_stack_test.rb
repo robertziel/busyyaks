@@ -133,6 +133,33 @@ class ReadmeDemoStackTest < Minitest::Test
     end
   end
 
+  # kind hermes: bin/launcher's start check runs `readme-agent skills list` in the session's environment; the stand-in
+  # lists the staged skills as hermes does, so the real check (Skills::Hermes#listed) passes — and a launch that
+  # staged none is an error, never an empty list
+  def run_agent_skills(env)
+    agent = File.read(File.join(ROOT, "scripts/readme-images/agent")).gsub("@COLLECTOR@", "/nonexistent")
+    Open3.capture3({ "PATH" => ENV.fetch("PATH") }.merge(env), "sh", "-c", agent, "readme-agent", "skills", "list",
+                   unsetenv_others: true)
+  end
+
+  def test_the_agent_lists_the_staged_skills_like_hermes
+    hermes = Busyyaks::Skills::Hermes.new("0123456789ab")
+    Dir.mktmpdir("readme-skills") do |stage|
+      dir = hermes.skill_dir(stage, Busyyaks::Skills::ENTRY)
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, "SKILL.md"), "---\nname: x\n---\n")
+      out, err, st = run_agent_skills("BUSYYAKS_SKILLS_DIR" => stage)
+      assert st.success?, err
+      assert_nil hermes.listed(out, "/home/x/.hermes")
+    end
+  end
+
+  def test_the_agent_refuses_a_skills_list_without_a_stage
+    _, err, st = run_agent_skills({})
+    refute st.success?
+    assert_includes err, "BUSYYAKS_SKILLS_DIR unset"
+  end
+
   # the read socket takes no input for the stand-in: a ping is refused, never answered ok
   def test_the_collector_refuses_send
     src = File.read(File.join(ROOT, "scripts/readme-images/collector"))

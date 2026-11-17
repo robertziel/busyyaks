@@ -9,7 +9,7 @@ class ConfigTest < Minitest::Test
   OK = { "roots" => [{ "path" => "/p", "prefix" => "" }], "search_depth" => 2, "owner_remotes" => ["github.com/me/"],
          "author_emails" => ["Me@x.io"], "window_days" => 7, "reap_protect" => [], "auth" => { "provider" => "none" },
          "agents" => { "collector" => "none" }, "dictation" => "none",
-         "terminal" => TERMINAL_DENY, "ci" => CI_SETTINGS, "launch" => LAUNCH_CLAUDE, }.freeze
+         "terminal" => TERMINAL_DENY, "ci" => CI_SETTINGS, "skills" => SKILLS_SETTINGS, "launch" => LAUNCH_CLAUDE, }.freeze
 
   def test_valid = assert_equal ["me@x.io"], Busyyaks::Config.new(OK).author_emails
 
@@ -22,6 +22,15 @@ class ConfigTest < Minitest::Test
     assert_match(/missing keys: dictation/, e.message)
     e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.merge("dictation" => on.except("model"))) }
     assert_match(/dictation must be `none` or a mapping with exactly/, e.message)
+  end
+
+  # The skills bin/launcher hands each session are stated — limits, project skills, the deployment's dir
+  def test_skills_are_required
+    assert_equal ["allow", nil], Busyyaks::Config.new(OK).skills.to_h.values_at(:project, :local_dir)
+    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.except("skills")) }
+    assert_match(/missing keys: skills/, e.message)
+    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.merge("skills" => SKILLS_SETTINGS.except("project"))) }
+    assert_match(/skills: missing project/, e.message)
   end
 
   # card #470: how the github service reads CI is stated — the stuck limit + the contexts that gate per repo, no default
