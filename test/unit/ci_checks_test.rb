@@ -391,6 +391,74 @@ class CiChecksTest < Minitest::Test
     assert_raises(CK::Unavailable) { @port.pr_checks(card) }
   end
 
+  # the github service's last poll of a request lands seconds before the request leaves the window; the
+  # handoff right after it uses that green read at once (first try) — never drops it and refuses "CI not read yet"
+  def test_a_fresh_green_read_is_used_although_its_request_left_the_window
+    @http.pulls = [PR]
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    asked = @now
+    e = assert_raises(AgentsKanban::Invalid) { hand_off(CI_URL) }
+    assert_match(/CI not read yet/, e.message, "nothing read yet: refused")
+    @now = asked + 595
+    @poller.run # the last poll inside the window (requested_at >= now - 600)
+    @now = asked + 608 # 608 s after the request, 13 s after the read
+    hand_off(CI_URL)
+    assert_equal [@kb.board_of("o-r").approvals.first.from, CI_URL], @kb.card(@id).values_at(:column, :ci_url)
+    assert_equal [@now, asked + 595, "success"],
+                 @conn[:gh_pr_checks].where(ref: "pr:112").get(%i[requested_at checked_at state]),
+                 "the read is kept and the request renewed"
+  end
+
+  # a green read for an older head is still refused at the handoff (its ci_url names the new head's build),
+  # and the request stays registered, so the service reads the new head
+  def test_a_fresh_green_for_another_head_is_refused_and_asked_again
+    @http.pulls = [PR]
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    asked = @now
+    @port.pr_checks(@card)
+    @now = asked + 595
+    @poller.run
+    @now = asked + 608
+    e = assert_raises(AgentsKanban::Invalid) { hand_off("https://ci.example.com/job/r/2/") }
+    assert_match(%r{ci_url https://ci.example.com/job/r/2/ is not the build of abc}, e.message)
+    assert_equal ["doing", nil], @kb.card(@id).values_at(:column, :handoff_at)
+    assert_equal @now, @conn[:gh_pr_checks].where(ref: "pr:112").get(:requested_at), "asked again"
+  end
+
+  # past the window an answer older than stale_after (or a failed read) is not used: refused "CI not read
+  # yet" and asked afresh (requested now, the old read dropped); the next poll answers and the retry passes
+  def test_a_stale_read_past_the_window_is_refused_and_asked_again
+    @http.pulls = [PR]
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    asked = @now
+    @port.pr_checks(@card)
+    @poller.run
+    @now = asked + 601 # read 601 s ago > stale_after 180
+    e = assert_raises(AgentsKanban::Invalid) { hand_off(CI_URL) }
+    assert_match(/CI not read yet \(asked now/, e.message)
+    assert_equal [@now, nil], @conn[:gh_pr_checks].where(ref: "pr:112").get(%i[requested_at checked_at])
+    @conn[:gh_pr_checks].where(ref: "pr:112").update(requested_at: asked, checked_at: @now - 5, error: "boom")
+    assert_equal "unpolled", @port.pr_checks(@card)[:state], "a failed read past the window is asked afresh too"
+    assert_equal [@now, nil, nil], @conn[:gh_pr_checks].where(ref: "pr:112").get(%i[requested_at checked_at error])
+    @poller.run
+    hand_off(CI_URL)
+    assert_equal CI_URL, @kb.card(@id)[:ci_url]
+  end
+
+  # a request the service has not answered yet is refused, inside the window too
+  def test_an_unread_request_is_refused
+    @port.pr_checks(@card)
+    @now += 30
+    e = assert_raises(AgentsKanban::Invalid) { hand_off(CI_URL) }
+    assert_match(/CI not read yet/, e.message)
+    assert_equal "doing", @kb.card(@id)[:column]
+  end
+
+  def hand_off(ci_url)
+    @kb.handoff(@id, qa: "open the board and check the card moves", pr_url: "https://github.com/o/r/pull/112",
+                     ci_url: ci_url, ui_change: false, by: "lead")
+  end
+
   # end to end on a local (v3) board: the Store refuses the final approval (Public: Human review → Awaiting merge)
   # while the local PR is open, then while the card records no public PR, then on the public PR's CI; a failed or stale
   # read is refused as unknown, never guessed.

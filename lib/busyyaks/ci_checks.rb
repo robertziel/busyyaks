@@ -360,13 +360,16 @@ module Busyyaks
       end
 
       # The poll row's answer, any state. A request last made longer ago than wanted_for has fallen out of the github
-      # service's window (it polls only recent requests): its old answer is dropped and it is asked again.
+      # service's window (it polls only recent requests): its old answer is dropped and it is asked again — unless
+      # that answer is itself fresh (read within stale_after, no error): the service's last poll of the window can
+      # land seconds before the request ages out, and that read is used as it is (dropping it refused a
+      # handoff "CI not read yet" while a green for the same head was stored).
       # Inside the window, an unanswered or old answer still means the service is not answering → Unavailable.
       def answer(repo, ref)
         now = @clock.call
         row = @db[:gh_pr_checks].where(repo: repo, ref: ref).first
         return peek_answer(repo, ref, row, now) if @peek
-        if row && now - row[:requested_at] > @wanted_for
+        if row && now - row[:requested_at] > @wanted_for && !fresh?(row, now)
           @db[:gh_pr_checks].where(id: row[:id]).update(requested_at: now, checked_at: nil, error: nil)
           return { number: nil, state: "unpolled", finished_at: nil }
         end
@@ -425,6 +428,9 @@ module Busyyaks
         out[:builds] = JSON.parse(row[:builds]) if row[:builds] # the required checks' build URLs
         row[:detail] ? out.merge(detail: row[:detail]) : out
       end
+
+      # an answer the github service read within stale_after, without an error
+      def fresh?(row, now) = !row[:error] && row[:checked_at] && now - row[:checked_at] <= @stale_after
 
       # → [owner/name, "pr:N"] of the PR the idle watch follows | nil when none is assigned: on an enrolled project the
       # card's `local` PR (on the local repo), on any other its `pr` PR (its URL names the repo). An assignment that is
