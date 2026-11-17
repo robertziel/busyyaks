@@ -20,7 +20,9 @@ require "yaml"
 class CollectorContractTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
   BOOT_SECONDS = 60
-  COPY = %w[bin/launcher bin/collector lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml].freeze
+  COPY = %w[
+    bin/launcher bin/collector lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml config/harnesses.yml
+  ].freeze
   INVOCATIONS = YAML.safe_load_file(File.expand_path("../fixtures/busyyaks.yml", __dir__)).dig("launch", "commands")
 
   def setup
