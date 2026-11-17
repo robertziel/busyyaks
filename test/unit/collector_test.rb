@@ -184,6 +184,16 @@ class CollectorTest < Minitest::Test
     snap["sessions"].flat_map { |s| s["panes"] }.each { |p| assert_empty keys - p.keys, p["engine"] }
   end
 
+  # a FIFO where the record should be would park the collector's loop on its read: only a regular file is read
+  def test_a_claude_record_that_is_no_regular_file_is_not_read
+    fake = box
+    File.delete(File.join(@sessions, "11.json")) if File.exist?(File.join(@sessions, "11.json"))
+    File.mkfifo(File.join(@sessions, "11.json"))
+    pane = build(fake).first["sessions"].first["panes"].then { one(_1) }
+    assert_nil pane["status"]
+    assert_match(/11\.json is not a regular file/, pane["unknown"]["status"])
+  end
+
   def test_claude_record_is_trusted_only_for_its_own_process
     fake = box
     record(11, ticks: 499) # a recycled pid: another process's record
@@ -343,12 +353,26 @@ class CollectorTest < Minitest::Test
     assert_empty inputs(fake)
   end
 
-  def test_send_tmux_failure_is_retryable
+  # nothing typed yet (the buffer load failed) → tmux, worth a retry; the paste or the Enter failed → unconfirmed: the
+  # text may be on the screen, so it is never sent again (public review round 1)
+  def test_send_tmux_failure_before_the_paste_is_retryable_after_it_unconfirmed
     fake = box
+    fake.fail["load-buffer"] = "no server"
+    r = server(fake).handle("op" => "send", "session" => "app lead", "text" => "x")
+    assert_equal({ type: "tmux", message: "no server" }, r[:error])
+    assert_equal %w[load-buffer], inputs(fake).map { |a, _| a.first }, "no paste after a failed load"
+
+    fake.fail.clear
     fake.fail["paste-buffer"] = "can't find pane %1"
     r = server(fake).handle("op" => "send", "session" => "app lead", "text" => "x")
-    assert_equal({ type: "tmux", message: "can't find pane %1" }, r[:error])
+    assert_equal({ type: "unconfirmed", message: "the paste failed and may have been typed in part: can't find pane %1" },
+                 r[:error])
     refute(inputs(fake).any? { |a, _| a.first == "send-keys" }, "no Enter after a failed paste")
+
+    fake.fail.clear
+    fake.fail["send-keys"] = "lost"
+    r = server(fake).handle("op" => "send", "session" => "app lead", "text" => "x")
+    assert_equal({ type: "unconfirmed", message: "pasted, then the Enter failed: lost" }, r[:error])
   end
 
   def test_screen_and_tasks_and_unknown_ops
@@ -403,7 +427,7 @@ class CollectorTest < Minitest::Test
     assert_raises(ArgumentError) { C::Tmux.new(dir: @tmuxdir, uid: Process.uid, runner: fake, timeout: 0) }
     assert_raises(ArgumentError) { C::Tmux.new(dir: @tmuxdir, uid: Process.uid, runner: fake, timeout: nil) }
 
-    fake.fail["paste-buffer"] = C::Tmux.timed_out(3)
+    fake.fail["load-buffer"] = C::Tmux.timed_out(3)
     r = s.handle("op" => "send", "session" => "app lead", "text" => "x")
     assert_equal({ type: "tmux", message: "tmux did not answer within 3s (agents.collector.tmux_timeout_seconds): killed" },
                  r[:error])

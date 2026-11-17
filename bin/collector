@@ -112,15 +112,18 @@ end
 TMUX = Busyyaks::Collector::Tmux.new(dir: Busyyaks::Collector::Tmux.dir_for(ENV, Process.uid), uid: Process.uid,
                                      runner: RUN_TMUX, timeout: PATHS.tmux_timeout_seconds)
 
-# one snapshot; a bug here SHOWS as the snapshot's error with no sessions, never an old list kept
+# one snapshot; a bug here SHOWS as the snapshot's error with no sessions, never an old list kept — that includes a
+# snapshot JSON cannot encode (a name tmux handed over that is not UTF-8): checked here, inside the rescue
 def collect
   rows, error = TMUX.rows
-  Busyyaks::Collector::Snapshot.build(rows, procfs: PROCFS, families: FAMILIES, interval_s: Busyyaks::Collector::INTERVAL_S,
-                                            error: error)
+  snap, targets = Busyyaks::Collector::Snapshot.build(rows, procfs: PROCFS, families: FAMILIES,
+                                                            interval_s: Busyyaks::Collector::INTERVAL_S, error: error)
+  JSON.generate(snap)
+  [snap, targets]
 rescue StandardError => e
   [{ "version" => Busyyaks::Collector::Snapshot::VERSION, "generated_at" => Busyyaks::Clock.now.to_f,
      "host" => Socket.gethostname, "interval_s" => Busyyaks::Collector::INTERVAL_S,
-     "error" => "collector: #{e.class}: #{e.message}"[0, 300], "sessions" => [], }, {},]
+     "error" => "collector: #{e.class}: #{e.message.scrub}"[0, 300], "sessions" => [], }, {},]
 end
 
 if ONCE
@@ -144,11 +147,11 @@ unless LOCK.flock(File::LOCK_EX | File::LOCK_NB)
   abort "bin/collector: another collector runs at #{File.dirname(sock)} (#{lock_path} is locked): stop it first"
 end
 
+abort "#{sock} exists and is not a socket (a symlink or a file): remove it" if File.symlink?(sock) || (File.exist?(sock) && !File.socket?(sock))
 # the first snapshot before the socket: a request is answered from a snapshot, never from none
 snap, targets = collect
 LATEST.set(targets)
 Busyyaks::Collector::Snapshot.write_atomic(PATHS.snapshot, JSON.generate(snap))
-abort "#{sock} exists and is not a socket (a symlink or a file): remove it" if File.symlink?(sock) || (File.exist?(sock) && !File.socket?(sock))
 File.unlink(sock) if File.socket?(sock) # the last run's
 server = Busyyaks::PrivateSocket.bind(sock)
 trap("TERM") do

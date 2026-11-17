@@ -76,7 +76,8 @@ class CollectorContractTest < Minitest::Test
       echo "$*" >> #{b}/tmux.log
       for a; do case "$a" in -S) ;; *) [ -n "$cmd" ] || case "$a" in /*|-*) ;; *) cmd=$a ;; esac ;; esac; done
       case "$cmd" in
-        list-panes) echo "#{@agent} %7 0 0 0 1700000000 1700000100 1700000200 1 app_lead"
+        list-panes) [ -f #{b}/fail-list ] && { echo "server exited unexpectedly" >&2; exit 1; }
+                    echo "#{@agent} %7 0 0 0 1700000000 1700000100 1700000200 1 app_lead"
                     echo "#{@hermes} %8 0 0 0 1700000000 1700000100 1700000300 1 desk"; exit 0 ;;
         capture-pane) [ "$1" = -S ] && [ -f #{b}/hang-capture ] && exec sleep 3001; printf '❯ \\n'; exit 0 ;;
         display-message) echo "✳ app-7"; exit 0 ;;
@@ -177,10 +178,12 @@ class CollectorContractTest < Minitest::Test
     assert_match(/\Acannot read its screen: tmux did not answer within 2s \(agents.collector.tmux_timeout_seconds\): killed\z/,
                  r["error"])
     FileUtils.rm(File.join(@base, "hang-capture"))
+    # a paste that hung and was killed may have typed: outcome unknown, ended (`unsupported`), never resent
     FileUtils.touch(File.join(@base, "hang-paste"))
     r = launcher("op" => "notify", "session" => "app_lead", "socket" => "default", "text" => "x")
-    assert_equal [false, true], r.values_at("ok", "retry"), r.inspect
-    assert_match(/tmux did not answer within 2s/, r["error"])
+    assert_equal [false, true, true], r.values_at("ok", "unsupported", "unconfirmed"), r.inspect
+    assert_match(/\Aoutcome unknown, not resent \(it may have been typed\): the paste failed .*tmux did not answer within 2s/,
+                 r["error"])
     FileUtils.rm(File.join(@base, "hang-paste"))
     assert_equal({ "ok" => true }, launcher("op" => "notify", "session" => "app_lead", "socket" => "default", "text" => "y"))
     # this collector's children only (the flake stage runs copies of this file side by side)
@@ -221,6 +224,23 @@ File.read(log))
       JSON.parse(s.gets)
     end
     assert_equal({ "ok" => true, "collector" => "busyyaks" }, answer)
+  end
+
+  # a snapshot whose tmux walk failed leaves the session out: unknown, so the ping waits (retry) — never "not running"
+  # (public review round 1)
+  def test_a_session_missing_from_a_failed_snapshot_is_retried_not_gone
+    FileUtils.touch(File.join(@base, "fail-list"))
+    snap = File.join(@coll, "sessions.json")
+    Wait.for(-> { "a snapshot with the tmux error" }, seconds: BOOT_SECONDS, every: 0.2) do
+      JSON.parse(File.read(snap))["error"].to_s.include?("server exited unexpectedly")
+    rescue JSON::ParserError
+      false
+    end
+    r = launcher("op" => "notify", "session" => "app_lead", "socket" => "default", "text" => "x")
+    assert_equal [false, true, nil], r.values_at("ok", "retry", "gone"), r.inspect
+    assert_match(/\Asession app_lead not in the snapshot, which failed: tmux default: server exited unexpectedly\z/,
+                 r["error"])
+    refute File.exist?(File.join(@base, "inputs")), "nothing typed"
   end
 
   def test_agent_tasks_say_the_collector_reads_none

@@ -120,9 +120,11 @@ pane's `unknown`):
 | listed in the sidebar, its project from the pane's dir | yes | yes |
 | state (working · blocked · idle) | its own record `CLAUDE_SESSIONS_DIR/<pid>.json` (idle · busy · waiting, title, when) + its screen | its screen (`bin/launcher`'s Hermes rules: an approval or a question = blocked) |
 | a dialog answered from the card / sidebar | yes | no (shown as blocked) |
-| card comments typed into the session | yes (one bracketed paste + Enter, only while the same agent process runs and no dialog is on screen) | no |
+| card comments typed into the session | yes (one bracketed paste + Enter, only while the same agent process runs and no dialog is on screen; a send whose outcome is unknown — tmux failed after the paste began, or no answer — is never sent again) | no |
 | live phase line (thinking · tool · writing) | yes | no |
 | subagents, workflows, background tasks | not read (the sidebar says so) | not read |
+| Clear idle | stops a quiet session only when its record says idle (subagents unread: a session in any other state is kept) | keeps it (state unread) |
+| several agent panes in one session | each listed; `screen` and card comments go to the first (lowest window.pane) | same |
 
 Install it before the launcher (`yaks doctor` checks it: a fresh snapshot, the socket, the unit):
 

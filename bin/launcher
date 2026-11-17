@@ -956,6 +956,9 @@ def notify(req)
   return { ok: false, retry: true, error: "collector snapshot is #{snap[:age_s]}s old" } if snap[:age_s].to_f > 3 * snap[:interval_s].to_f
 
   s = snap[:sessions].find { |x| x["name"] == name && x["socket"] == sock }
+  # absent from a snapshot whose walk failed (a tmux server that errored or timed out drops its sessions): unknown, not
+  # gone — the ping waits for a snapshot that read them
+  return { ok: false, retry: true, error: "session #{name} not in the snapshot, which failed: #{snap[:collector_error]}" } if !s && snap[:collector_error]
   return { ok: false, gone: true, error: "session #{name} is not running" } unless s
 
   panes = s["panes"]
@@ -972,7 +975,15 @@ def notify(req)
 
   res = collector(op: "send", session: name, socket: sock, text: text)
   puts "#{Busyyaks::Clock.now.iso8601} notify #{name}: #{res['ok'] ? 'sent' : res.dig('error', 'message')}"
-  res["ok"] ? { ok: true } : { ok: false, retry: res.dig("error", "type") == "tmux", error: res.dig("error", "message") || "collector refused" }
+  return { ok: true } if res["ok"]
+
+  type = res.dig("error", "type")
+  message = res.dig("error", "message") || "collector refused"
+  # a send whose outcome is unknown — the paste had started (unconfirmed) or the collector never answered (collector) —
+  # may already be on the agent's screen: it is never sent again. `unsupported` is the key the notifier ends a ping on.
+  return { ok: false, unsupported: true, unconfirmed: true, error: "outcome unknown, not resent (it may have been typed): #{message}" } if %w[unconfirmed collector].include?(type)
+
+  { ok: false, retry: type == "tmux", error: message }
 rescue Errno::ENOENT, Errno::ECONNREFUSED, Errno::EACCES => e
   { ok: false, retry: true, error: "collector read socket unavailable: #{e.class}" }
 end
@@ -1226,7 +1237,7 @@ end
 # One request to the collector's read socket → its answer, within agents.collector.answer_timeout_seconds for the
 # whole answer line (card #479: a collector that accepts and never answers costs that, never a parked launcher). A
 # collector that does not answer, closes early or answers no JSON → an error answer naming it ({ok:false, error:
-# {type, message}}, type collector — no retry: a send it did not confirm may still have been typed).
+# {type, message}}, type collector — a send it did not confirm may still have been typed: notify never resends it).
 def collector(req)
   why = "agent-session collector #{COLLECTOR.read_socket}"
   line = UNIXSocket.open(COLLECTOR.read_socket) do |u|
@@ -1239,6 +1250,8 @@ def collector(req)
   res.is_a?(Hash) ? res : collector_error("#{why} answered no JSON object")
 rescue Busyyaks::AgentCollector::Slow
   collector_error("#{why} did not answer within #{COLLECTOR.answer_timeout_seconds}s")
+rescue Errno::EPIPE, Errno::ECONNRESET => e
+  collector_error("#{why} dropped the connection (#{e.class})") # the request may have been taken: an unknown outcome
 rescue Busyyaks::AgentCollector::TooLarge, JSON::ParserError => e
   collector_error("#{why}: #{e.is_a?(JSON::ParserError) ? 'its answer is not JSON' : e.message}")
 end

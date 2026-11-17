@@ -10,7 +10,8 @@ module Busyyaks
     # {version, generated_at, host, interval_s, error, sessions: [{name, socket, attached, created, activity, windows,
     # panes: [{target, pane_id, pid, cwd, started, engine, <FACTS>, unknown}]}]}. A session is listed once, with every
     # pane of it that runs an agent; sessions with none are not listed. What leaves: tmux's session facts, the pane's
-    # target and the family's facts — never the pane's contents, its environment or its argv.
+    # target and the family's facts — never the pane's contents or its environment; of its argv only what a family reads
+    # from it (Claude Code's model and effort, shape-checked).
     module Snapshot
       VERSION = 1
       CWD_MAX = 4096
@@ -42,6 +43,7 @@ module Busyyaks
                             "pid" => process.pid, "cwd" => procfs.cwd(process.pid)&.[](0, CWD_MAX),
                             "started" => procfs.started(process, boot), "engine" => family.name,
                             **family.facts(process, procfs), }
+            # screen / send address a session's FIRST agent pane (the panes come in tmux's window.pane order)
             targets[key] ||= Target.new(socket: label, name: r["session_name"], pane_id: r["pane_id"], pid: process.pid,
                                         start_ticks: process.start_ticks, family: family)
           end
