@@ -1,0 +1,11 @@
+● Index + ranking done; 37 tests green. Next: the corrected
+  query in the search box.
+
+● Read(app/views/search/_box.html.erb)
+  ⎿  Read 48 lines
+
+✻ Pondering… ({elapsed} · ↓ 3.4k tokens · thinking with high effort)
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · esc to interrupt

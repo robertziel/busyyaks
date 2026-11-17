@@ -1,0 +1,11 @@
+● Rendering the new email layout against the fixtures.
+
+● Running 1 shell command · 4s…
+  ⎿  $ bin/rails test test/mailers (4s)
+     (ctrl+b ctrl+b (twice) to run in background)
+
+✶ Brewing… ({elapsed} · ↓ 6.1k tokens)
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · esc to interrupt · ↓ to manage

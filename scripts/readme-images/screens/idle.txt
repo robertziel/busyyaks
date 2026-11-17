@@ -1,0 +1,9 @@
+● Asked the operator which payment methods ship first; the
+  card waits for the answer.
+
+✻ Worked for 14s · done 10:32 AM
+
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

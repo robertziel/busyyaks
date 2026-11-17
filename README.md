@@ -57,13 +57,14 @@ timer). All state is one database: a SQLite file by default, or PostgreSQL ([Dat
 **one operator on one Linux box**: see [When not to use it](#when-not-to-use-it).
 
 <p align="center">
-  <img src="docs/images/today.webp" width="960" alt="The Today page: commit, own-commit, repo and merged-PR tiles with 7-day sparklines, a year-long commit heatmap, a 7-day table and the list of merged PRs; the agents sidebar on the right lists the running agent sessions per project: one needs input, one has a PR in review, one is working">
+  <img src="docs/images/today.webp" width="960" alt="The Today page in the dark skin: commit, own-commit, repo and merged-PR tiles with 7-day sparklines, a year-long commit heatmap, a 7-day table and the list of merged PRs; the agents sidebar on the right lists the running agent sessions per project (needs input, PR review, finished); the waiting widget in the corner counts to answer, to review and external. Projects other than busyyaks are shown as acme-N">
 </p>
 
-<p align="center"><sub><b>Today</b> (light skin): the numbers come from the scanner's git reads and from GitHub, never
-from a model. The right rail lists the live agent sessions per project. All screenshots show a throwaway demo deployment:
-generated repos and commits, a fresh database, example accounts (<code>dev@example.com</code>, <code>acme/*</code>) — no real deployment's
-data — regenerated with <a href="scripts/readme-images/build"><code>scripts/readme-images/</code></a>.</sub></p>
+<p align="center"><sub><b>Today</b> (dark skin): the numbers come from the scanner's git reads and from GitHub, never
+from a model. The right rail lists the live agent sessions per project. The screenshots are the author's own dashboard
+building busyyaks: every other project is renamed <code>acme-N</code> and its text replaced, emails, hosts and people's
+pictures removed, and a gate refuses any private word left — captured with
+<a href="scripts/readme-images/live"><code>scripts/readme-images/live</code></a>.</sub></p>
 
 ## The project
 
@@ -303,19 +304,20 @@ over projects, cards, commits and reports (`⌘K`).
 **Desktop app**: the dashboard runs as an app in a window of its own — see [Desktop app](#desktop-app).
 
 <p align="center">
-  <img src="docs/images/board.webp" width="960" alt="A project's board: the launch bar with Launch, Worker, Sub team and Plain buttons and the running tmux sessions above the columns Backlog, To do, In progress, QA and Human Check; a card in progress carries a question with three choices, and each card shows the session that owns it">
+  <img src="docs/images/board.webp" width="960" alt="busyyaks' own board: the session lanes on top (Needs you: a PR to review; Quiet: finished workers) and the launch bar with Launch, Worker, Sub team and Plain on their launcher; the column counts (waiting for you, waiting for CI, Local and Public review loops, Done); below them the columns Backlog, To do, In progress and Local: Agent review with cards, their picture covers, review rounds and the session that owns each">
 </p>
 
-<p align="center"><sub><b>Board</b>: the launch bar starts a lead, worker, sub-team or plain session in
-tmux; each card shows the session that owns it and whether anyone is listening.</sub></p>
+<p align="center"><sub><b>Board</b>: the session lanes say who needs you (answer a dialog or a question in place),
+who works and on what; the launch bar starts the lead first, then workers, a sub team or a plain session in tmux; each
+card shows the session that owns it and whether anyone is listening.</sub></p>
 
 <table>
   <tr>
-    <td width="72%"><img src="docs/images/card.webp" alt="A card opened: labels, priority, a checklist, the activity log with each move the agent made, and the owner session panel with its model and its iTerm and Terminal links"></td>
-    <td width="28%"><img src="docs/images/today-mobile.webp" alt="The Today page on a phone: the stat tiles two per row and the commit heatmap"></td>
+    <td width="72%"><img src="docs/images/card.webp" alt="A busyyaks card (the waiting widget's kind counters) opened in Awaiting merge: its hand-off box with the public PR, the CI build, how to check it and its screenshots (drawn as blank plates), the Links rail with the local and public PRs and their state, the CI build, branches and commits, and the owner session panel with its Claude, iTerm and Terminal links and the last ping"></td>
+    <td width="28%"><img src="docs/images/today-mobile.webp" alt="The Today page on a phone in the dark skin: the stat tiles two per row, the commit heatmap and the waiting widget"></td>
   </tr>
   <tr>
-    <td align="center"><sub><b>Card</b>: checklist, every move and comment with who made it, and the session comments are typed into.</sub></td>
+    <td align="center"><sub><b>Card</b>: the hand-off (PR, CI, how to check it), its PRs and their state, and the session comments are typed into.</sub></td>
     <td align="center"><sub><b>Phone</b>.</sub></td>
   </tr>
 </table>
@@ -457,6 +459,48 @@ lead per board.
 
 The full contract is [`vendor/agents_kanban/SPEC.md`](vendor/agents_kanban/SPEC.md); the HTTP API is
 [`docs/API-kanban.md`](docs/API-kanban.md).
+
+---
+
+## Workflows
+
+A board's workflow is data, stored in the database: its **columns**, each of one **type**, in board order, and the
+**named transitions** between them. Every board has one; a new project gets a copy of the template.
+
+| Column type | Rules |
+|---|---|
+| `parked` | nobody listens; agents may create cards here |
+| `queued` | listened; one per board; the lead's ownerless work, each card started with `kanban_spawn`; a card released from the first working column returns here |
+| `working` | listened; several per board; the first one is watched (owner gone → card back to `queued`); a card released in any other working column stays put |
+| `review` | listened; review rounds counted per loop column (`review_loop.max_rounds`) |
+| `gate` | waits for the operator; agents enter only with `kanban_handoff`; its one forward operator exit is an approval step |
+| `done` | exactly one per board; agents enter only from a gate, once approved (a board without a gate: anyone may finish a card), and never leave |
+| `cancelled` | at most one; only the operator moves a card in or out |
+
+| Transition `{name, from, to, by}` | |
+|---|---|
+| `by: agent` · `any` | agents move only along these, by name (`kanban_move(transition: …)`); no edge → refused, the edges listed |
+| `by: operator` | the operator's (web); busyyaks' boards add a catch-all `Move` (`* → *`, board config), so the operator drags a card to any column |
+| flags | `needs_operator` (`kanban_ask`) and `blocked_external` (`kanban_block`) keep the card's column and refuse agent moves |
+
+| Gates and approvals | |
+|---|---|
+| enter | only `kanban_handoff` (QA steps, PR URL, CI URL; screenshots for a UI change) |
+| green CI first | a handoff into an approval gate and every explicit approval (the **Approve** button, the step's named transition) are refused until the step's PR checks are read and green (`approval.requires_green_ci`); the operator's drag is never refused by it |
+| approve | the gate's **Approve** button (card dialog) records who approved and pings the owner, who then takes the next named transition |
+
+| Edit · read | |
+|---|---|
+| operator | the board's **Workflow** button → graph editor: add / rename / retype / delete columns (refused while cards sit in one), connect transitions, reorder, Save · Discard · Reset to template; the layout is automatic (top to bottom) |
+| agents | `kanban_workflow` (read-only: no tool writes a workflow); each card's JSON lists its `transitions` |
+| API | `GET` / `POST` / `DELETE /api/projects/<slug>/workflow` ([`docs/API-kanban.md`](docs/API-kanban.md)) |
+
+<p align="center">
+  <img src="docs/images/workflow.webp" width="720" alt="The Workflow graph editor on busyyaks' own 15-column board, top to bottom: Backlog (parked) → To do (queued) → In progress (working) → Agent review ↔ Author response loops, Local and Public Human review, Deploy check and Awaiting merge gates marked waits for you, Done and Cancelled; each arrow is a named transition such as Start work, Hand over, Approve, Merge, Rework; the column list with each column's type is on the right">
+</p>
+
+<p align="center"><sub><b>Workflow</b>: busyyaks' own board, the engine's local-repo shape (15 columns, two review
+loops, four gates), in the graph editor; dashed arrows go back up the board order.</sub></p>
 
 ---
 

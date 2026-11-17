@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# The README screenshots of busyyaks, from the operator's own LIVE local dashboard (not the demo stack): busyyaks' real
+# board, one of its real cards, its real workflow, Today on a desktop and a phone, in the dark skin. Everything that is
+# not busyyaks is renamed before each screenshot (scripts/readme-images/rename.js: a rule, no names), and the gate in
+# capture-live.js refuses the images on any private term, email, host, the operator's name or a real project name left
+# in the page's text or attributes. Only 127.0.0.1 is requested (local: no analytics); signed in with bin/qa-cookie.
+#
+#   PRIVATE_TERMS=<file>[:<file>…] OWN=<slug> KEEP="<slug> …" CARD=<busyyaks card id> \
+#     scripts/readme-images/live <live checkout> <workdir>
+#     → docs/images/{today,board,card,today-mobile,workflow}.webp here, only when the gate passes
+#
+# <live checkout>: the running deployment's checkout (its .env: WEB_HOST_PORT, PUBLIC_HOST; its compose `web` service:
+# bin/qa-cookie; its `upstream` remote: busyyaks' public repo).
+# <workdir>: a private dir for the raw captures, the renamed text and the gate's verdict (gate.json) — QA reads it.
+set -euo pipefail
+
+PLAYWRIGHT=mcr.microsoft.com/playwright:v1.63.0-noble
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+live=$(cd "${1:?the live deployment checkout}" && pwd)
+mkdir -p "${2:?a workdir for the raw captures}"
+w=$(cd "$2" && pwd)
+: "${CARD:?the busyyaks card the card image opens (its id on the busyyaks board)}"
+# busyyaks' project slug on the dashboard, and the other projects shown as they are (busyyaks' own; set, may be empty):
+# named, never derived from a directory or a name pattern
+: "${OWN:?busyyaks project slug on the dashboard}"
+: "${KEEP?the projects shown as they are, space-separated slugs (empty for none)}"
+IFS=: read -r -a lists <<< "${PRIVATE_TERMS:?term list files, colon-separated (one term per line, # comments)}"
+for l in "${lists[@]}"; do [ -r "$l" ] || { echo "live: term list $l is not readable" >&2; exit 1; }; done
+
+env_of() {
+  local v
+  v=$(grep "^$1=" "$live/.env" | cut -d= -f2-) || true
+  printf '%s\n' "$v"
+}
+port=$(env_of WEB_HOST_PORT)
+[ -n "$port" ] || { echo "live: WEB_HOST_PORT is not set in $live/.env" >&2; exit 1; }
+public_host=$(env_of PUBLIC_HOST)
+upstream=$(git -C "$live" remote get-url upstream) || { echo "live: $live has no upstream remote" >&2; exit 1; }
+public_repo=$(sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##' <<< "$upstream")
+# busyyaks' public repos, the only owner/repo names an image keeps: this one and the engine's (vendor/agents_kanban)
+engine_repo=$(sed -nE 's#.*\(https://github\.com/([A-Za-z0-9-]+/[A-Za-z0-9._-]+)\).*#\1#p' "$repo/vendor/agents_kanban/VENDOR.md" | head -1)
+[ -n "$engine_repo" ] || { echo "live: no engine repo in vendor/agents_kanban/VENDOR.md" >&2; exit 1; }
+
+secret=$(mktemp -d)
+chmod 700 "$secret"
+trap 'rm -rf "$secret"' EXIT
+(cd "$live" && docker compose exec -T web bin/qa-cookie) > "$secret/cookie"
+# the gate's words: the private-term lists and the public host (anywhere, any case); the operator's name and each of
+# its words (as whole words: renamed, then refused)
+name=$(git -C "$live" config user.name) || { echo "live: no git user.name in $live" >&2; exit 1; }
+{
+  cat "${lists[@]}"
+  [ -z "$public_host" ] || printf '%s\n' "$public_host"
+} > "$secret/terms"
+{
+  printf '%s\n' "$name"
+  tr -s ' ' '\n' <<< "$name"
+} > "$secret/names"
+
+rm -rf "$w/raw" "$w/images"
+mkdir -p "$w/raw" "$w/images"
+docker run --rm --network host -u "$(id -u):$(id -g)" -e HOME=/tmp \
+  -e WEB="http://127.0.0.1:$port" -e COOKIE_FILE=/secret/cookie -e OWN="$OWN" -e KEEP="$KEEP" -e CARD="$CARD" \
+  -e OWN_REPOS="$public_repo $engine_repo" -e TERMS=/secret/terms -e NAMES=/secret/names -e OUT=/out -e RAW=/raw \
+  -v "$w/images:/out" -v "$w/raw:/raw" -v "$secret:/secret:ro" -v "$here:/s:ro" "$PLAYWRIGHT" \
+  sh -euc 'mkdir -p /tmp/w && cd /tmp/w && npm init -y >/dev/null && npm install --silent playwright@1.63.0 >/dev/null && NODE_PATH=/tmp/w/node_modules node /s/capture-live.js'
+
+MAX_BYTES=409600
+big=$(find "$w/images" -name '*.webp' -size +"$MAX_BYTES"c)
+[ -z "$big" ] || { echo "live: over $MAX_BYTES bytes: $big; docs/images/ left as they were" >&2; exit 1; }
+cp "$w"/images/*.webp "$repo/docs/images/"
+echo "live: the gate passed on $(cat "$w"/raw/*.txt | wc -w) captured words → docs/images/"
