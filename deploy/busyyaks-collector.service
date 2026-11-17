@@ -1,0 +1,18 @@
+# systemd --user unit; installed by deploy/install-collector.sh. busyyaks's agent-session collector (bin/collector,
+# card #479): this user's tmux panes + /proc → the snapshot and read socket at config/busyyaks.yml agents.collector,
+# which bin/launcher reads. Runs as the operator: it reads only this uid's tmux servers.
+[Unit]
+Description=busyyaks agent-session collector (tmux panes running Claude Code / Hermes)
+Before=busyyaks-launcher.service
+
+[Service]
+WorkingDirectory=__DIR__
+Environment=PATH=__PATH__
+ExecStart=__RUBY__ __DIR__/bin/collector
+Restart=always
+RestartSec=5
+# it starts no tmux server (list-panes / capture-pane on a server that runs), but a stop must never take one down
+KillMode=process
+
+[Install]
+WantedBy=default.target

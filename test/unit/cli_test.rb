@@ -5,6 +5,8 @@
 require "minitest/autorun"
 require "minitest/mock"
 require "fileutils"
+require "json"
+require "yaml"
 require "socket"
 require "stringio"
 require "tmpdir"
@@ -85,7 +87,7 @@ class CliTest < Minitest::Test
     FileUtils.mkdir_p([@run, @projects, File.join(@home, "config"), File.join(@home, "data")])
     File.chmod(0o700, @run)
     write_env
-    File.write(File.join(@home, "config/busyyaks.yml"), "roots: []\n")
+    File.write(File.join(@home, "config/busyyaks.yml"), "roots: []\nagents: { collector: none }\n")
     File.write(File.join(@home, "config/kanban.yml"), "{}\n")
     File.write(File.join(@home, "docker-compose.yml"), "# ${IN_A_COMMENT:?}\nx: ${WEB_HOST_PORT:?} ${PROJECTS_ROOT:?}\n")
     @runner = FakeRunner.new
@@ -594,6 +596,69 @@ class CliTest < Minitest::Test
     assert_equal 1, code
     assert_match(%r{^FAIL  config/busyyaks.yml\s+missing: cp config/busyyaks.example.yml config/busyyaks.yml}, out)
     assert_match(/^ok    ruby\s/, out)
+  end
+
+  # the agent-session collector (card #479): none is ok; named paths need a fresh snapshot + the socket; the row says
+  # whether busyyaks's unit runs (another collector may write the same paths)
+  def test_doctor_checks_the_agent_collector
+    @runner = FakeRunner.new(answers: { %w[docker compose version] => ["2.32.4\n", true] })
+    code, out, = yaks("doctor")
+    assert_equal 0, code, out
+    assert_match(/^ok    agent collector\s+none: the agents sidebar is off\s+the agents sidebar/, out)
+
+    snap = File.join(@home, "c/sessions.json")
+    sock = File.join(@home, "c/read.sock")
+    FileUtils.mkdir_p(File.dirname(snap))
+    collector = { "snapshot" => snap, "read_socket" => sock, "tmux_timeout_seconds" => 1, "answer_timeout_seconds" => 5 }
+    File.write(File.join(@home, "config/busyyaks.yml"), YAML.dump("agents" => { "collector" => collector }))
+    code, out, = yaks("doctor")
+    assert_equal 1, code
+    assert_match(/^FAIL  agent collector\s+snapshot #{Regexp.escape(snap)} unreadable \(Errno::ENOENT\)/, out)
+    assert_match(/unreadable \(Errno::ENOENT\) · busyyaks-collector.service active\s/, out)
+
+    now = 1_800_000_000
+    File.write(snap, JSON.generate("generated_at" => now - 2, "interval_s" => 5, "sessions" => [{}, {}]))
+    Busyyaks::Clock.stub(:now, Time.at(now)) do
+      _, out, = yaks("doctor")
+      assert_match(/^FAIL  agent collector\s+no socket at #{Regexp.escape(sock)}/, out)
+      server = UNIXServer.new(sock)
+      # a socket that takes the connection and never answers: FAIL by name (card #479 review round 1), at the
+      # answer deadline (the clock moved past it)
+      silent = Thread.new { server.accept }
+      calls = 0
+      Busyyaks::Clock.stub(:monotonic, -> { (calls += 1) == 1 ? 0.0 : 100.0 }) do
+        code, out, = yaks("doctor")
+        assert_equal 1, code
+        assert_match(/^FAIL  agent collector\s+#{Regexp.escape(sock)} does not answer \(no reply within 5s\)/, out)
+      end
+      Wait.join(silent, "the silent accept", seconds: 10).value.close
+      # it answers the ping (any collector's JSON object counts)
+      answers = Thread.new do
+        loop do
+          c = server.accept
+          c.gets
+          c.write("{\"ok\":true}\n")
+          c.close
+        end
+      end
+      code, out, = yaks("doctor")
+      assert_equal 0, code, out
+      assert_match(/^ok    agent collector\s+snapshot 2s old · 2 sessions · busyyaks-collector.service active\s/, out)
+      @runner = FakeRunner.new(answers: { %w[docker compose version] => ["2.32.4\n", true],
+                                          %w[systemctl --user is-active] => ["inactive\n", false], })
+      _, out, = yaks("doctor")
+      assert_match(/^ok    agent collector\s+snapshot 2s old · 2 sessions · busyyaks-collector.service inactive\s/, out)
+      answers.kill
+      server.close
+    end
+    Busyyaks::Clock.stub(:now, Time.at(now + 16)) do
+      _, out, = yaks("doctor")
+      assert_match(/^FAIL  agent collector\s+snapshot 18s old \(stale\)/, out)
+    end
+
+    File.write(File.join(@home, "config/busyyaks.yml"), "roots: []\n")
+    _, out, = yaks("doctor")
+    assert_match(/^FAIL  agent collector\s+agents.collector: agents must be a mapping/, out)
   end
 
   def test_the_real_runner_finds_programs_on_path_and_refuses_the_rest

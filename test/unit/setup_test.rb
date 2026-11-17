@@ -25,7 +25,8 @@ class SetupTest < Minitest::Test
       FileUtils.cp(File.join(ROOT, f), File.join(@dir, f), preserve: true)
     end
     @bin = File.join(@tmp, "bin")
-    FileUtils.mkdir_p(@bin)
+    @home = File.join(@tmp, "home")
+    FileUtils.mkdir_p([@bin, @home])
     # docker: records its argv, exits DOCKER_EXIT (compose config's answer)
     File.write(File.join(@bin, "docker"), "#!/bin/sh\necho \"$*\" >> \"#{@tmp}/docker.log\"\nexit \"${DOCKER_EXIT:-0}\"\n")
     File.chmod(0o755, File.join(@bin, "docker"))
@@ -37,7 +38,7 @@ class SetupTest < Minitest::Test
 
   def setup!(*args, docker: true, exit_code: 0)
     path = [(@bin if docker), "/usr/local/bin", "/usr/bin", "/bin"].compact.join(":")
-    out, err, st = Open3.capture3({ "PATH" => path, "DOCKER_EXIT" => exit_code.to_s },
+    out, err, st = Open3.capture3({ "PATH" => path, "DOCKER_EXIT" => exit_code.to_s, "HOME" => @home },
                                   File.join(@dir, "bin/setup"), *args, chdir: @tmp)
     [st.exitstatus, out, err]
   end
@@ -288,5 +289,42 @@ class SetupTest < Minitest::Test
     assert_equal 1, code
     assert_includes err, "FAIL  .env is missing: run bin/setup"
     assert_equal 2, setup!("bogus").first
+  end
+
+  def collector_paths = File.read(File.join(@dir, "config/busyyaks.yml"))[/^agents:\n(?:  .*\n)+/]
+
+  # a fresh config/busyyaks.yml gets agents.collector's paths under this user's HOME (the example says /home/you);
+  # a kept one is never rewritten
+  def test_first_run_puts_the_collector_paths_under_home
+    _, out, = setup!
+    assert_includes out, "wrote    agents.collector paths under #{@home}"
+    assert_includes collector_paths, "    snapshot: #{@home}/.local/state/busyyaks/collector/sessions.json\n"
+    assert_includes collector_paths, "    read_socket: #{@home}/.local/state/busyyaks/collector/read.sock\n"
+    refute_includes collector_paths, "/home/you/"
+    _, out, = setup!
+    refute_includes out, "agents.collector paths"
+  end
+
+  # check names a collector path deploy/install-collector.sh would stop on with a bare mkdir (card #479)
+  def test_check_names_a_collector_path_it_cannot_use
+    setup!
+    fill(filled)
+    cfg = File.join(@dir, "config/busyyaks.yml")
+    good = File.read(cfg)
+    File.write(cfg, good.gsub("#{@home}/", "/home/you/"))
+    code, _, err = setup!("check")
+    assert_equal 1, code
+    assert_includes err, "agents.collector.snapshot is the example's /home/you/.local/state/busyyaks/collector/sessions.json"
+    assert_includes err, "agents.collector.read_socket is the example's /home/you/"
+    File.write(ro = File.join(@tmp, "a-file"), "") # a file where a dir should be (refused for root too)
+    File.write(cfg, good.gsub("#{@home}/.local/state", ro).sub(/^    read_socket: \S+/, "    read_socket: rel/read.sock"))
+    _, _, err = setup!("check")
+    assert_includes err, "agents.collector.snapshot #{ro}/busyyaks/collector/sessions.json: " \
+                         "its dir cannot be created by you (#{ro} is not a dir"
+    assert_includes err, "agents.collector.read_socket must be an absolute path (got rel/read.sock)"
+    File.write(cfg, good.sub(/^agents:\n(?:  .*\n)+/, "agents:\n  collector: none\n"))
+    assert_equal 0, setup!("check").first
+    File.write(cfg, good)
+    assert_equal 0, setup!("check").first
   end
 end

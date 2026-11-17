@@ -43,17 +43,27 @@ auth:
 # reap_protect:   tmux session name globs the agents sidebar's "Clear idle" never stops — sessions a
 #                 service owns and manages itself. [] for none, e.g. ["svc-*", "deploy"].
 reap_protect: []
-# agents:        the agent-session collector (README "Agent sessions"): a separate host program that writes a JSON
-#                 snapshot of every tmux pane running a coding agent and answers screen/send requests on a unix socket.
+# agents:        the agent-session collector (README "Agent sessions"): a host program that writes a JSON snapshot of
+#                 every tmux pane running a coding agent and answers screen/send requests on a unix socket.
+#                 `collector: {snapshot: <file>, read_socket: <socket>}` (host paths, read by bin/launcher, which refuses
+#                 to start while either is missing). busyyaks ships one: bin/collector, installed by
+#                 deploy/install-collector.sh, writes exactly these two paths — both in ONE dir it creates 0700, outside
+#                 PROJECTS_ROOT, this checkout and LAUNCHER_RUN_DIR. Another collector may write them instead.
+#                 tmux_timeout_seconds (Integer 1..60, required): bin/collector's deadline on each tmux call — a
+#                 hung tmux is killed and that request answers the error. answer_timeout_seconds (Integer, required,
+#                 above 4 × tmux_timeout_seconds: a send is 4 tmux calls): bin/launcher's and `yaks doctor`'s
+#                 deadline on the collector's whole answer — a collector that does not answer is refused by name.
 #                 `collector: none` = this box runs none: no agents sidebar, no session states on cards, no Clear idle,
 #                 no subagent list, no typing card comments or answers into sessions, no spotting a session stuck
 #                 on a dialog before anyone comments (each says so where it shows); the dashboard, scanner, MCP,
 #                 board, Launch, claim and reports work without it.
-#                 Or `collector: {snapshot: <file>, read_socket: <socket>}` (host paths, read by bin/launcher,
-#                 which refuses to start while either is missing).
 agents:
-  collector: none
-  # collector: { snapshot: /home/you/code-state/sessions.json, read_socket: /home/you/code-state/read.sock }
+  collector:
+    snapshot: /home/you/.local/state/busyyaks/collector/sessions.json
+    read_socket: /home/you/.local/state/busyyaks/collector/read.sock
+    tmux_timeout_seconds: 5
+    answer_timeout_seconds: 30
+  # collector: none
 # dictation:     the card dialog's mic (and Alt+R held in an open card): speak, the words land in the comment box. The
 #                 browser records 16 kHz WAV windows; the web service forwards each to your speech server — any
 #                 OpenAI-compatible POST /v1/audio/transcriptions (docs/DEPLOY.md § Dictation) — at .env DICTATION_URL
