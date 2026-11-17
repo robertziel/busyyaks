@@ -443,6 +443,18 @@ ans.values_at("body", "author")
     assert_equal [200, "local_merged_pr", "owner@example.com"], [last_response.status, c["column"], c["approved_by"]]
     c = api(:post, "/api/cards/#{id}/approve", { approved: false })["card"]
     assert_equal ["local_human_review", nil], c.values_at("column", "approved_by")
+    # Force approves without the green-CI gate — the card's PR red now, the plain Approve refused
+    checks = Hanami.app["db.gateway"].connection[:gh_pr_checks]
+    checks.where(ref: "pr:9").update(state: "failure")
+    api(:post, "/api/cards/#{id}/approve", { approved: true })
+    assert_equal 422, last_response.status
+    j = api(:post, "/api/cards/#{id}/approve", { approved: false, force: true })
+    assert_equal [422, "force: true approves; it cannot withdraw (approved: false)"], [last_response.status, j["error"]]
+    c = api(:post, "/api/cards/#{id}/approve", { approved: true, force: true })["card"]
+    assert_equal [200, "local_merged_pr", "owner@example.com"], [last_response.status, c["column"], c["approved_by"]]
+    assert_match(/\(forced: CI not asked\)\z/, kb.activity(id).reverse.find { |a| a[:kind] == "approve" }[:body])
+    api(:post, "/api/cards/#{id}/approve", { approved: false })
+    checks.where(ref: "pr:9").update(state: "success")
     api(:post, "/api/cards/#{id}/move", { column: "public_human_review" })
     c = api(:post, "/api/cards/#{id}/approve", {})["card"]
     assert_equal %w[awaiting_merge owner@example.com], c.values_at("column", "approved_by")
