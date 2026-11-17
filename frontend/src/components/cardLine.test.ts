@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSession } from "../types";
-import { cardLine, mentionParts } from "./Agents";
+import { mentionParts } from "./Agents";
+import { cardLine } from "../lib/agentRow";
 
 const s = (extra: Partial<AgentSession>) =>
   ({ cards_known: true, cards: [], cards_finished: 0, asks: [], reviews: [], ...extra }) as AgentSession;
