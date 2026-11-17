@@ -38,10 +38,11 @@ launchers:
 #   prompt          typed after the start; placeholders {slug} {dir} {session} {agent} {type} {cards}. The prompts
 #                   name no column: every board's columns and transitions are the operator's (the Workflow editor),
 #                   so an agent reads where a card may go next from kanban_card's `transitions`. A prompt says
-#                   only who the session is: the board workflow is busyyaks's skills (skills/manifest.yml),
-#                   which bin/launcher hands each session it starts — Claude Code: the prompt is prefixed
-#                   with /busyyaks:session (the entry skill) and --plugin-dir <stage> added; hermes: -s
-#                   busyyaks-session. null = the entry skill alone
+#                   only who the session is and its cards: what a session does is busyyaks's skills, which
+#                   bin/launcher hands each session it starts — skills/busyyaks/core (every session),
+#                   skills/busyyaks/agents/<type key>.md, the repo's .busyyaks/skills/agents/<type key>.md.
+#                   Claude Code: the prompt is prefixed with /busyyaks:session (the entry skill) and
+#                   --plugin-dir <stage> added; hermes: -s busyyaks-session. null = the entry skill alone
 # Caps: none (0 = no cap) except one lead per board.
 #
 agent_types:
@@ -82,7 +83,7 @@ agent_types:
     model: null
     under: lead   # a sub team runs only while the board's lead runs, on its launcher; another one asked for → 422
     prompt: |
-      Busyyaks sub team for {slug} ({dir}). Dispatch subagents IN PARALLEL (one per area: recent commits, uncommitted work, open/unmerged branches) to review this repo, read-only. Then record the result with mcp__busyyaks__add_note (project "{slug}", author "{agent}"): compact tables, shas, max 5 "act on" bullets. Do not modify, commit or push anything unless I ask in this session.
+      Busyyaks sub team for {slug} ({dir}): review this repo, read-only.
       Your tmux session is {session}; on the board you are {agent}: a card you create with mcp__busyyaks__kanban_create (author "{agent}") is owned by this session; a card you take over: mcp__busyyaks__kanban_claim with tmux_session "{session}".
     agent_name: "team-{session}"
     session_name: "{slug}_team"

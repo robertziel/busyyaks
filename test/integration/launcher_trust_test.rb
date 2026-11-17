@@ -280,28 +280,28 @@ class LauncherTrustTest < Minitest::Test
     assert_equal stage, argv[i + 1]
     assert argv[i + 2].start_with?("/busyyaks:session Test lead session for fresh"), argv.inspect
     assert_equal ["--remote-control", "fresh_s"], argv.last(2)
-    assert_equal %w[workflow lead reviewer session], r["skills"].map { |k| k["name"] }
+    assert_equal %w[core agents/lead reviewer session], r["skills"].map { |k| k["name"] }
     assert_equal "none", r["project_skills"]
     assert_equal 0o700, File.stat(stage).mode & 0o777
     assert_equal({ "name" => "busyyaks" }, JSON.parse(File.read(File.join(stage, ".claude-plugin/plugin.json"))))
     entry = File.read(File.join(stage, "skills/session/SKILL.md"))
-    assert_includes entry, "## workflow (busyyaks)"
-    assert_includes entry, "## lead (busyyaks)"
+    assert_includes entry, "# busyyaks session (agent type lead)"
+    assert_includes entry, "## Agent type lead (busyyaks)"
     assert_includes entry, "`busyyaks:reviewer`", "an on-demand skill is listed by its plugin name"
     refute_includes entry, "## reviewer"
-    refute File.exist?(File.join(stage, "skills/author")), "a worker's skill is not a lead's"
-    assert_match(/skills workflow\(busyyaks,start,\h{12}\)/, File.read(@log))
+    refute_includes entry, "Agent type worker", "a worker's part is not a lead's"
+    assert_match(%r{skills core\(busyyaks,start,\h{12}\) agents/lead\(busyyaks,start,\h{12}\)}, File.read(@log))
     assert_empty Dir.children(@home), "nothing installed user-wide (no ~/.claude/skills, no plugin install)"
   end
 
-  # a skill dir the manifest names is missing: refused before tmux starts anything, no stage left
+  # busyyaks's core skill is missing: refused before tmux starts anything, no stage left
   def test_a_launch_with_a_broken_skill_set_is_refused_before_it_starts
     ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
-    FileUtils.rm_rf(File.join(@co, "skills/lead"))
+    FileUtils.rm_rf(File.join(@co, "skills/busyyaks/core"))
     File.write(@tmux_log, "")
     r = launch("fresh")
     refute r["ok"], r.inspect
-    assert_match(%r{\Askills: .*/skills: lead named in .*manifest.yml but missing}, r["error"])
+    assert_match(%r{\Askills: .*/skills/busyyaks/core/SKILL.md missing \(every session starts with it\)}, r["error"])
     refute_includes tmux_calls, "new-session", "nothing started"
     refute File.exist?(File.join(@base, "state/skills/fresh_s"))
   end
@@ -371,32 +371,34 @@ File.read(@log))
       end
   end
 
-  def project_skill(repo, types:)
-    base = File.join(@projects, repo, ".busyyaks")
-    FileUtils.mkdir_p(File.join(base, "skills/deploy"))
-    File.write(File.join(base, "skills.yml"),
-YAML.dump("version" => 1, "skills" => { "deploy" => { "types" => types, "load" => "start" } }))
-    File.write(File.join(base, "skills/deploy/SKILL.md"),
-"---\nname: deploy\ndescription: how this repo deploys\n---\nRun make deploy.\n")
+  # a repo's own layer: agents/<type>.md (an addition for that type) + one on-demand skill
+  def project_skill(repo, type:)
+    base = File.join(@projects, repo, ".busyyaks/skills")
+    FileUtils.mkdir_p(File.join(base, "agents"))
+    File.write(File.join(base, "agents/#{type}.md"), "Run make deploy.\n")
+    FileUtils.mkdir_p(File.join(base, "deploy"))
+    File.write(File.join(base, "deploy/SKILL.md"), "---\nname: deploy\ndescription: how this repo deploys\n---\nDetails.\n")
   end
 
-  # a TRUSTED repo's own .busyyaks skills load for the type they name, after busyyaks's
+  # a TRUSTED repo's own .busyyaks skills load: its agents/<type>.md after busyyaks's, its skills on demand
   def test_a_trusted_repos_own_skills_load
     ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
-    project_skill("fresh", types: ["lead"])
+    project_skill("fresh", type: "lead")
     r = launch("fresh")
     assert r["ok"], r.inspect
     assert_equal "loaded", r["project_skills"]
-    assert_equal [%w[deploy project]], r["skills"].select { |k|
- k["source"] == "project" }.map { |k| k.values_at("name", "source") }
+    assert_equal [%w[agents/lead start], %w[deploy on_demand]], r["skills"].select { |k|
+ k["source"] == "project" }.map { |k| k.values_at("name", "load") }
     entry = File.read(File.join(@base, "state/skills/fresh_s/skills/session/SKILL.md"))
-    assert_operator entry.index("## lead (busyyaks)"), :<, entry.index("## deploy (project)")
+    assert_operator entry.index("## Agent type lead (busyyaks)"), :<,
+entry.index("## Agent type lead (project)\n\nRun make deploy.")
+    assert_includes entry, "- `busyyaks:deploy` (project): how this repo deploys"
   end
 
   # an UNTRUSTED repo's .busyyaks skills are left (never read); the launch runs on busyyaks's and says why
   def test_an_untrusted_repos_skills_are_left
     planted("planted")
-    project_skill("planted", types: ["lead"])
+    project_skill("planted", type: "lead")
     r = launch("planted")
     assert r["ok"], r.inspect
     assert_match(/\Aleft: .* is not in config\/busyyaks.yml launch.trusted_paths/, r["project_skills"])
@@ -524,8 +526,10 @@ YAML.dump("version" => 1, "skills" => { "deploy" => { "types" => types, "load" =
     assert_includes started, "-e BUSYYAKS_SKILLS_DIR=#{stage} ", "the stage reaches hermes through this session's env only"
     entry = File.join(stage, "busyyaks-skills/busyyaks-session-#{token}/SKILL.md")
     assert_match(/\A---\nname: busyyaks-session-#{token}\n/, File.read(entry))
-    assert File.file?(File.join(stage, "busyyaks-skills/busyyaks-workflow-#{token}/SKILL.md"))
-    assert_equal %w[workflow lead reviewer session], r["skills"].map { |k| k["name"] }, "lead: its skills + the entry skill"
+    assert File.file?(File.join(stage, "busyyaks-skills/busyyaks-reviewer-#{token}/SKILL.md"))
+    assert_includes File.read(entry), "## Agent type lead (busyyaks)"
+    assert_equal %w[core agents/lead reviewer session], r["skills"].map { |k|
+ k["name"] }, "lead: core + its part + the entry skill"
     refute_match(/--remote-control/, started)
     refute_match(/send-keys/, tmux_calls, "no trust prompt answered for hermes")
   end

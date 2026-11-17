@@ -153,9 +153,9 @@ class AgentSettingsTest < Minitest::Test
   end
 
   # the worker's PR subagents (QA + Reviewer) run on haiku, never on the worker's own model — said once, in the
-  # author skill busyyaks hands every worker session (skills/manifest.yml)
+  # worker's part of the skills busyyaks hands every worker session (skills/busyyaks/agents/worker.md)
   def test_the_worker_prompt_runs_its_qa_and_reviewer_subagents_on_haiku
-    author = File.read(File.expand_path("../../skills/author/SKILL.md", __dir__))
+    author = File.read(File.expand_path("../../skills/busyyaks/agents/worker.md", __dir__))
     assert_match(/\*\*QA agent\*\*: a fresh subagent \(`model: "haiku"`\)/, author)
     assert_match(/dispatch a REVIEWER — a fresh subagent \(`model: "haiku"`\)/, author)
   end

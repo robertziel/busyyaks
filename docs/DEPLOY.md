@@ -264,19 +264,34 @@ drops the three columns.
 busyyaks's board workflow is a set of skills, handed to each session busyyaks launches or spawns — **for that session
 only**. Nothing is installed user-wide: a `claude` or `hermes` you start yourself on this host sees none of them.
 
-| layer | where | loads for |
+No manifests — the shape of a layer is the rule. Every layer is a dir of the same shape:
+
+| layer | where | committed in |
 |---|---|---|
-| busyyaks's own | `skills/manifest.yml` + `skills/<name>/SKILL.md` of this checkout | every launch, by agent type |
-| this deployment's | `config/busyyaks.yml` `skills.local_dir` (same format), or `null` | every launch, by agent type |
-| a project's | `<repo>/.busyyaks/skills.yml` + `.busyyaks/skills/<name>/SKILL.md` | launches in that repo, only when `skills.project: allow` and the repo is trusted (row Folder trust); else the launch says `project_skills: left: <why>` and reads none of it |
+| busyyaks's own | `skills/busyyaks/` of this checkout | busyyaks |
+| this deployment's | `config/busyyaks.yml` `skills.local_dir`, or `null` | this checkout |
+| a project's | `<repo>/.busyyaks/skills/` | that repo — loaded only when `skills.project: allow` and the repo is trusted (row Folder trust); else the launch says `project_skills: left: <why>` and reads none of it; a leftover `.busyyaks/skills.yml` (the old manifest) leaves them too, named |
 
-A manifest: `version: 1`, `skills: {<name>: {types: all | [<agent type>…], load: start | on_demand}}`. A skill =
-regular `.md` files, `SKILL.md` with frontmatter exactly `name` (= its dir) + `description`. `load: start` bodies are
-folded into the entry skill `session` the session opens with; `on_demand` ones are listed there by name.
+| in a layer | what | loads for |
+|---|---|---|
+| `core/SKILL.md` (+ reference `.md` files) | how a session works with the board and the kanban MCP. busyyaks's layer only, required | every session busyyaks starts, `plain` included |
+| `agents/<type>.md` | what a session of that agent type does (`lead.md`, `worker.md`, `team.md` — the agent settings' type KEYS; another file name is refused) | sessions of that type; each layer's file is appended after busyyaks's, in layer order |
+| `<name>/SKILL.md` (+ `.md` files) | an on-demand skill (e.g. `reviewer`) | every session: listed in the entry skill by the name its CLI loads it with (hermes: `busyyaks-<name>-<token>`), loaded when the work needs it. A name another layer has, `core`, `agents` or `session` is refused |
 
-Per launch, `bin/launcher` selects the type's skills, validates them (a bad manifest, an unknown type, a link, a size
-over `skills.max_bytes` / `max_start_bytes`, a project skill named like a busyyaks one → the launch is refused, nothing
-started), stages a copy in `LAUNCHER_STATE_DIR/skills/<session>/` (0700; removed once the session is gone) and hands it
+A skill = regular `.md` files, `SKILL.md` with frontmatter exactly `name` (= its dir) + `description`. The entry skill
+`session` the session opens with = core, then `agents/<type>.md` of each layer, then the on-demand list; core's
+reference files are staged beside it.
+
+An `agents/<type>.md` names a type of the CURRENT agent settings: removing a type from Settings → Agents & launchers
+while a layer still has its file refuses every launch with that file named — delete the file in the same change.
+
+**Updates need no install**: `bin/launcher` reads the layers at every launch, so a change merged into this checkout
+(or committed in a repo) reaches the next session started; a running session keeps the copy it started with (its sha
+is in the launch result).
+
+Per launch, `bin/launcher` selects the type's skills, validates them (a missing core, an `agents/` file for no agent
+type, a stray file, a link, a size over `skills.max_bytes` / `max_start_bytes`, a skill named like another layer's →
+the launch is refused, nothing started), stages a copy in `LAUNCHER_STATE_DIR/skills/<session>/` (0700; removed once the session is gone) and hands it
 to the CLI:
 
 | kind | how | checked after the start |
