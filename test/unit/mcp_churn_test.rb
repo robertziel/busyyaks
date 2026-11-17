@@ -7,7 +7,7 @@ require "minitest/mock"
 
 # daily_facts' churn: computed from the repo (a GitRead child, libgit2), so the report model never adds lines up.
 class McpChurnTest < Minitest::Test
-  def server = Busyyaks::McpServer.new(token: "x" * 32, report_token: "r" * 32, scan_interval: 60, store: Object.new,
+  def server = Busyyaks::McpServer.new(token: "x" * 32, report_token: "r" * 32, scan_interval: -> { 60 }, store: Object.new,
                                        config: nil)
 
   def git(dir, *a) = Open3.capture2("git", "-C", dir, *a).first.strip

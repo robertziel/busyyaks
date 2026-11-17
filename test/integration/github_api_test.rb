@@ -57,7 +57,7 @@ class GithubApiTest < Minitest::Test
     sign_in
     out = get_json("/api/github?hours=24")
     assert_equal [], out["gate_stale"]
-    assert_equal 600, out["ci_window"], "10 × GITHUB_CI_INTERVAL_SECONDS"
+    assert_equal 600, out["ci_window"], "10 × github_ci_interval_seconds"
     db[:projects].insert(slug: "x", path: "/projects/x", remote: "git@github.com:o/r.git", own: true, commits_window: 0,
                          mine_window: 0, dirty: 0, scanned_at: 0, local_mode: "own", local_repo: "git@github.com:o/r.git",
                          public_repo: "git@github.com:p/x.git")

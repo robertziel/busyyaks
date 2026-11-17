@@ -18,6 +18,7 @@ import "./styles/connection.css";
 import "./styles/waiting.css";
 import "./styles/terminal.css";
 import "./styles/hello.css";
+import "./styles/runtime.css";
 
 keepRemote(window.location.search, sessionStore());
 

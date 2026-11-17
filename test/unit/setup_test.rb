@@ -153,6 +153,29 @@ class SetupTest < Minitest::Test
     end
   end
 
+  # the services' timing is Settings → Runtime; a .env line left over would look like it still sets it
+  def test_the_moved_runtime_keys_are_the_apps_and_a_leftover_is_refused
+    ruby = File.read(File.join(ROOT, "lib/busyyaks/runtime_settings.rb")).scan(/^\s*"[a-z_]+" => \["([A-Z_]+)", /).flatten
+    assert_equal 6, ruby.size
+    assert_equal ruby, File.read(File.join(ROOT, "bin/setup"))[/^RUNTIME_MOVED="([A-Z_ ]+)"$/, 1].split
+    ruby.each { |k| refute_match(/^#{k}=/, File.read(File.join(ROOT, ".env.example")), k) }
+    setup!
+    fill(filled)
+    File.write(File.join(@dir, ".env"), "#{File.read(File.join(@dir, '.env'))}SCAN_INTERVAL_SECONDS=60\n")
+    code, _, err = setup!("check")
+    assert_equal 1, code
+    # the import needs web, which compose starts without bin/setup check: the order is web alone → import → delete
+    assert_includes err, "FAIL  SCAN_INTERVAL_SECONDS moved to Settings → Runtime: start web alone " \
+                         "(docker compose up -d --wait web: it migrates), import your values " \
+                         "(docker compose exec -T web bin/runtime-settings import-env < .env), then delete the line " \
+                         "from .env (docs/DEPLOY.md § Runtime settings)"
+    refute File.exist?(File.join(@tmp, "docker.log")), "refused before compose"
+    text = File.read(File.join(@dir, ".env")).sub(/^SCAN_INTERVAL_SECONDS=60\n/, "export WATCHDOG_GRACE_SECONDS=60\n")
+    File.write(File.join(@dir, ".env"), text)
+    _, _, err = setup!("check")
+    assert_match(/FAIL  \.env line \d+: not KEY=value/, err, "an export line is refused by the shape check, as EnvFile does")
+  end
+
   def test_check_refuses_a_short_mcp_token_and_the_databases_empty_keys
     setup!
     fill(filled.merge("MCP_TOKEN" => "short"))

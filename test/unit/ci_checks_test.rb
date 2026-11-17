@@ -736,7 +736,7 @@ class CiChecksTest < Minitest::Test
     flunk "handoff refused twice"
   end
 
-  # the compose cadences: a watch pass every 30 s (NOTIFIER_WATCH_SECONDS), a poll every 60 s (GITHUB_CI_INTERVAL_SECONDS)
+  # the compose cadences: a watch pass every 30 s (notifier_watch_seconds), a poll every 60 s (github_ci_interval_seconds)
   def run_services_for(seconds)
     n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: StringIO.new)
     (seconds / 30).times do |i|
@@ -897,14 +897,6 @@ class CiChecksTest < Minitest::Test
     assert_equal "not approved (Local: Human review → Local: Merged): card ##{@id} — #{moved}; hand it back for review. " \
                  "A drag into Local: Merged approves without asking CI", e.message
     assert_equal "local_human_review", @kb.card(@id)[:column]
-  end
-
-  def test_the_watch_pass_must_fit_the_poll_window
-    Busyyaks::Kanban.watch_fits!(watch: 30, interval: 10)
-    e = assert_raises(ArgumentError) { Busyyaks::Kanban.watch_fits!(watch: 600, interval: 10) }
-    assert_match(/a watch pass every 600 s .* must be below 600 s/, e.message)
-    e = assert_raises(ArgumentError) { Busyyaks::Kanban.watch_fits!(watch: 30, interval: 600) }
-    assert_match(/NOTIFIER_INTERVAL_SECONDS=600/, e.message, "the deliver loop's sleep stretches the watch period too")
   end
 
   def test_failed_poll_and_stale_answers_are_unavailable_not_guessed
@@ -1349,7 +1341,7 @@ class CiChecksTest < Minitest::Test
   end
 
   def wait_in_the_gates(notifier, seconds)
-    (seconds / 30).times do # NOTIFIER_WATCH_SECONDS = 30; the github service polls what was asked
+    (seconds / 30).times do # notifier_watch_seconds = 30; the github service polls what was asked
       @now += 30
       notifier.watch
       @poller.run

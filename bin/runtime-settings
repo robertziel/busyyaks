@@ -1,0 +1,42 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The services' timing revisions (Settings → Runtime) from a shell, inside the web container:
+#
+#   docker compose exec -T web bin/runtime-settings show                  # the current revision as YAML
+#   docker compose exec -T web bin/runtime-settings import < file.yml     # a new revision from a YAML mapping (the
+#                                                                         # keys of config/runtime.template.yml)
+#   docker compose exec -T web bin/runtime-settings import-env < .env     # a new revision from the old .env lines
+#                                                                         # SCAN_INTERVAL_SECONDS … WATCHDOG_GRACE_SECONDS
+#
+# Each is checked like a save on the Settings page. import-env is the move off .env for a deployment that ran other
+# values than .env.example's (docs/DEPLOY.md § Runtime settings): import, then delete those lines from .env.
+require "bundler/setup"
+require "hanami/prepare"
+require "yaml"
+require "busyyaks/runtime_settings_api"
+
+S = Busyyaks::RuntimeSettings
+db = Busyyaks::Kanban.db
+save = lambda do |doc, by|
+  status, body = Busyyaks::RuntimeSettingsAPI.save({ "base" => S.current_id(db), "doc" => doc }, by: by)
+  abort "bin/runtime-settings: #{status}: #{body[:error]}" unless status == 200
+  puts "revision #{body[:revision][:id]}: #{body[:doc].map { |k, v| "#{k}=#{v}" }.join(' ')}"
+end
+case ARGV
+in ["show"]
+  cur = S.current(db) or abort "bin/runtime-settings show: no revision saved"
+  puts YAML.dump(cur[:doc])
+in ["import"]
+  raw = YAML.safe_load($stdin.read)
+  abort "bin/runtime-settings import: stdin must be a YAML mapping" unless raw.is_a?(Hash)
+  save.call(raw, "bin/runtime-settings import")
+in ["import-env"]
+  begin
+    save.call(S.from_env_lines($stdin.read), "bin/runtime-settings import-env")
+  rescue S::Refused => e
+    abort "bin/runtime-settings import-env: #{e.message}"
+  end
+else
+  abort "usage: bin/runtime-settings show | import < file.yml | import-env < .env"
+end

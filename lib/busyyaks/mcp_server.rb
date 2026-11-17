@@ -135,7 +135,8 @@ module Busyyaks
     MIN_TOKEN_CHARS = 32
 
     # sessions: -> live tmux session names for kanban_claim (nil = the host launcher's `sessions` op).
-    # scan_interval: .env SCAN_INTERVAL_SECONDS (the scanner's value): last_scan is `stale` when it finished longer ago
+    # scan_interval: -> the scanner's current scan_interval_seconds (Settings → Runtime; asked per call, so a
+    # save applies at once): last_scan is `stale` when it finished longer ago
     # than 3 × the interval + min(its duration, one interval), more than 60 s in the future, or a row with no start /
     # a negative duration (ScanFreshness)
     def initialize(token:, report_token:, scan_interval:, store: nil, config: nil, clock: -> {
@@ -148,9 +149,7 @@ module Busyyaks
       end
       raise KeyError, "MCP_REPORT_TOKEN must differ from MCP_TOKEN" if report_token == token
 
-      unless scan_interval.is_a?(Integer) && scan_interval.positive?
-        raise KeyError, "SCAN_INTERVAL_SECONDS must be a positive integer"
-      end
+      raise ArgumentError, "scan_interval must be a callable returning seconds" unless scan_interval.respond_to?(:call)
 
       @token = token
       @report_token = report_token
@@ -284,7 +283,7 @@ module Busyyaks
            end,
            commits_by_repo: by_repo,
            pending_work: pending,
-           last_scan: ScanFreshness.json(scan, interval: @scan_interval, now: now))
+           last_scan: ScanFreshness.json(scan, interval: @scan_interval.call, now: now))
     end
 
     def daily_facts(hours, series)
@@ -389,7 +388,7 @@ module Busyyaks
            kanban_columns: columns,
            previous_report: before && { id: before[:id], title: before[:title], created_at: iso(before[:created_at]),
                                         figures: ReportBlocks.digest(before[:body_md], Markdown.report_ctx(store))[:figures], },
-           last_scan: ScanFreshness.json(scan, interval: @scan_interval, now: now))
+           last_scan: ScanFreshness.json(scan, interval: @scan_interval.call, now: now))
     end
 
     private

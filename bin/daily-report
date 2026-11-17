@@ -19,7 +19,7 @@
 #      model / agent_model = "served": use the model the
 #      gateway serves at this tick; 0 or several served → offline (never a guess). The report names the model used.
 #        → one "vLLM offline" log line, exit 0; after the cutoff → post ONE "NOT RUN" report instead
-#   4. the last scan (daily_facts last_scan): missing, failed or stale — older than 3 × SCAN_INTERVAL_SECONDS +
+#   4. the last scan (daily_facts last_scan): missing, failed or stale — older than 3 × scan_interval_seconds +
 #      min(its duration, one interval), more than 60 s in the future, or a row with no start / a negative duration →
 #      before the cutoff a log line, exit 0, the next
 #      tick retries; from the cutoff on (or --force) ONE "Daily report <day> FAILED" saying why

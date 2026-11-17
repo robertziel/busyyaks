@@ -18,6 +18,7 @@ require_relative "dashboard_url"
 require_relative "git_port"
 require_relative "session_git"
 require_relative "clock"
+require_relative "runtime_settings"
 
 module Busyyaks
   module Kanban
@@ -155,13 +156,14 @@ module Busyyaks
     def backlog(project, board) = AgentsKanban::BacklogMd.read(project[:path], board: board, status_map: BACKLOG_STATUS_MAP)
     def backlog_md?(path) = AgentsKanban::BacklogMd.present?(path)
 
-    # Seconds a session the board launched counts as running before tmux lists it = the watchdog grace (one value, env).
-    def grace = Integer(ENV.fetch("WATCHDOG_GRACE_SECONDS"))
+    # Seconds a session the board launched counts as running before tmux lists it = the watchdog grace (one value,
+    # Settings → Runtime watchdog_grace_seconds, read per use).
+    def grace(conn = db) = RuntimeSettings.get(conn)[:watchdog_grace_seconds]
 
     # The MCP tools (agents). sessions: live tmux session names, the launcher's `sessions` op by default.
     def tools(st = default, sessions: nil)
       AgentsKanban::Tools.new(store: st, attachments: attachments(st), projects: method(:project), backlog: method(:backlog),
-                              sessions: sessions || -> { LauncherClient.session_names }, grace: grace,
+                              sessions: sessions || -> { LauncherClient.session_names }, grace: grace(st.db),
                               card_url: ->(slug, id) { card_url(slug, id) }, # each card's `url` (Links rule)
                               # kanban_spawn (the lead starts a worker): the same LAUNCH port as the Launch bar
                               launcher: LauncherClient::LaunchPort.new(revision_of(st.config)))
@@ -187,7 +189,7 @@ module Busyyaks
       AgentsKanban::Api.new(store: st, attachments: attachments(st), markdown: markdown, projects: method(:project),
                             backlog: method(:backlog),
                             sessions: -> { LauncherClient.session_names },
-                            launcher: LauncherClient::LaunchPort.new(revision_of(st.config)), grace: grace,
+                            launcher: LauncherClient::LaunchPort.new(revision_of(st.config)), grace: grace(st.db),
                             press: ->(**kw) { LauncherClient.answer(**kw) }, **extras)
     end
 
@@ -205,27 +207,18 @@ module Busyyaks
       CiChecks.stale_gates(st, ci_port(st.db)).map { |g| g.merge(path: card_path(g[:project], g[:card])) }
     end
 
-    # The poll window of the CI requests (CiChecks.wanted_for of GITHUB_CI_INTERVAL_SECONDS), in seconds.
-    def ci_window = CiChecks.wanted_for(Integer(ENV.fetch("GITHUB_CI_INTERVAL_SECONDS")))
-
-    # The notifier's watch pass keeps every gated card's approval checks asked (the engine's approval prefetch), so
-    # the github service always holds a fresh answer (card #247). A pass slower than the poller's window lets a request
-    # lapse between two passes, and Approve waits for a CI read again — refused at boot (bin/notifier).
-    def watch_fits!(watch:, interval:)
-      window = ci_window
-      period = [watch, interval].max # the watch runs inside the deliver loop, which sleeps `interval` between turns
-      return if period < window
-
-      raise ArgumentError, "a watch pass every #{period} s (NOTIFIER_WATCH_SECONDS=#{watch}, " \
-                           "NOTIFIER_INTERVAL_SECONDS=#{interval}) must be below #{window} s, the CI poll window " \
-                           "(10 × GITHUB_CI_INTERVAL_SECONDS): a slower watch pass lets gated cards' CI requests lapse"
-    end
+    # The CI poll interval (Settings → Runtime github_ci_interval_seconds) and its request window
+    # (CiChecks.wanted_for), in seconds. The notifier's watch pass fits inside the window: RuntimeSettings refuses a
+    # revision where it does not (watch_fits!), so no reader checks it again.
+    def ci_interval(conn = db) = RuntimeSettings.get(conn)[:github_ci_interval_seconds]
+    def ci_window(conn = db) = CiChecks.wanted_for(ci_interval(conn))
 
     # The idle watch's CI port: PR check status the github service polled (the token never leaves that service), the owner
     # branch and its last commit read here (SessionGit: the launcher names the session's dir, a GitRead child reads it).
     # An answer older than 3 poll intervals is Unavailable.
-    def ci_port(conn = db, clock: -> { Busyyaks::Clock.epoch })
-      interval = Integer(ENV.fetch("GITHUB_CI_INTERVAL_SECONDS"))
+    # interval: the CI poll interval (Settings → Runtime) — given only where the runtime_settings table is not there yet
+    # (test/unit/migrations_test.rb runs the store on a schema before its migration)
+    def ci_port(conn = db, clock: -> { Busyyaks::Clock.epoch }, interval: ci_interval(conn))
       CiChecks::Port.new(db: conn, projects: ->(slug) { conn[:projects].where(slug: slug.to_s).first },
                          approvals: ->(slug) { CiChecks.steps(store(conn, clock: clock).board_of(slug)) },
                          launcher: SessionGit,
@@ -235,7 +228,7 @@ module Busyyaks
     # the PR flags on a card's links — PR state the github service polled, same freshness rule as ci_port; the card's
     # own PRs are the ones assigned to it (PrStates.assigned).
     def pr_flags(conn = db)
-      interval = Integer(ENV.fetch("GITHUB_CI_INTERVAL_SECONDS"))
+      interval = ci_interval(conn)
       PrStates::Flags.new(PrStates::Reader.new(db: conn, stale_after: 3 * interval, wanted_for: PrStates.wanted_for(interval)))
     end
 

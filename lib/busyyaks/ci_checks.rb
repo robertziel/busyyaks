@@ -16,7 +16,7 @@ module Busyyaks
   # The GitHub token lives only in the `github` compose service, so the work is split over the db (gh_pr_checks):
   #   Port    (notifier)  — names the PR a card is about (the one its agents assigned to it: PrStates.assigned),
   #                         registers "I want this" (requested_at) and reads the answer. No token, no HTTP.
-  #   Poller  (github)    — every GITHUB_CI_INTERVAL_SECONDS answers the recently requested rows through
+  #   Poller  (github)    — every github_ci_interval_seconds answers the recently requested rows through
   #                         GithubNetwork::Client.
   # A poll that failed, or answers older than `stale_after` seconds, make the Port raise Unavailable: the engine skips the
   # idle watch for that pass and says why. Nothing is guessed.

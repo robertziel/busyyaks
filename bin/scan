@@ -1,15 +1,15 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Scans every repo, then sleeps SCAN_INTERVAL_SECONDS, forever. A failed scan is recorded
-# (scans.error, shown on the dashboard) and the loop keeps going; it never invents data.
+# Scans every repo, then sleeps scan_interval_seconds (Settings → Runtime, read each turn), forever. A
+# failed scan is recorded (scans.error, shown on the dashboard) and the loop keeps going; it never invents data.
 require "hanami/prepare"
 require "busyyaks/config"
 require "busyyaks/scanner"
 require "busyyaks/store"
 require "busyyaks/clock"
+require "busyyaks/runtime_settings"
 
-interval = Integer(ENV.fetch("SCAN_INTERVAL_SECONDS"))
 config = Busyyaks::Config.load
 store = Busyyaks::Store.default
 $stdout.sync = true
@@ -23,5 +23,5 @@ loop do
   end
   break if ENV["SCAN_ONCE"] == "1"
 
-  sleep interval
+  sleep Busyyaks::RuntimeSettings.get(Hanami.app["db.gateway"].connection)[:scan_interval_seconds]
 end

@@ -1,5 +1,5 @@
 // The settings cog at the right end of the header: a menu with the signed-in account, Agents & launchers (/settings),
-// Daily report (/settings/daily-report), Shortcuts (/settings/shortcuts),
+// Daily report (/settings/daily-report), Runtime (/settings/runtime), Shortcuts (/settings/shortcuts),
 // the hello screen (/hello),
 // the skin and Sign out.
 // Closes on Escape (focus back on the cog), an outside pointer, focus moving out of it (Tab) or a route change.
@@ -90,6 +90,9 @@ export function SettingsView({ open, onToggle, email, signOut, csrf, wrap, btn }
         </Link>
         <Link className="settings-link" to="/settings/daily-report">
           Daily report
+        </Link>
+        <Link className="settings-link" to="/settings/runtime">
+          Runtime
         </Link>
         <Link className="settings-link" to="/settings/shortcuts">
           Shortcuts

@@ -1,0 +1,350 @@
+/* Settings → Runtime (routes/RuntimeSettings.tsx). Skin tokens only (lib/runtimeCss.test.ts): Light, Dark
+   and any skin file hold. One column of cards; every grid track may shrink, so a 390 px phone never scrolls sideways. */
+.rt {
+  max-width: 860px;
+  min-width: 0;
+}
+.rt > *,
+.rt form > * {
+  min-width: 0;
+}
+.rt h1 .tag {
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.rt-meta {
+  margin: -8px 0 14px;
+  font-size: 13px;
+}
+.rt .card h2 {
+  margin: 0;
+}
+/* the dot stays on the text's first line; a button wraps under it on a phone */
+.rt .flash {
+  align-items: baseline;
+}
+.rt .flash .dot {
+  flex: none;
+}
+.rt .flash span {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.rt .flash .btn {
+  margin-left: auto;
+}
+
+/* ── the watch period on the CI poll window ── */
+.rt-watch {
+  display: grid;
+  gap: 10px;
+}
+.rt-watch-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.rt-verdict {
+  font: 600 12.5px var(--mono);
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-chip);
+  color: var(--ink-faint);
+  background: var(--mat-fill-2);
+}
+.rt-watch.ok .rt-verdict {
+  color: var(--ok);
+  background: rgba(var(--ok-rgb), 0.12);
+}
+.rt-watch.over .rt-verdict {
+  color: var(--bad);
+  background: rgba(var(--bad-rgb), 0.12);
+}
+.rt-meter {
+  position: relative;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--track);
+  overflow: hidden;
+}
+.rt-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  min-width: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--ok);
+  transition: width 0.2s ease;
+}
+.rt-watch.over .rt-fill {
+  background: var(--bad);
+}
+/* where the window ends, when the period runs past it */
+.rt-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--panel);
+}
+.rt-terms {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 0;
+}
+.rt-terms dt {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-faint);
+}
+.rt-terms dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+}
+.rt-terms dd b {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.rt-terms dd .mono {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+.rt-terms div:last-child {
+  text-align: right;
+}
+.rt-terms div:last-child dd {
+  justify-content: flex-end;
+}
+
+/* ── the keys, one group per service ── */
+.rt-groups {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.rt-group {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: 0 16px;
+  padding: 10px 0;
+}
+.rt-group + .rt-group {
+  border-top: 1px solid var(--row-rule);
+}
+.rt-group h3 {
+  font: 600 12px var(--mono);
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  padding-top: 9px;
+  overflow-wrap: anywhere;
+}
+.rt-rows {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.rt-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6.5rem 5.5rem 7rem;
+  grid-template-areas: "name input human note";
+  align-items: center;
+  gap: 2px 12px;
+  min-width: 0;
+}
+.rt-name {
+  grid-area: name;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
+  min-width: 0;
+}
+.rt-name label {
+  font-weight: 500;
+  color: var(--ink);
+}
+.rt-part {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.rt-env {
+  flex-basis: 100%;
+  font: 400 11px var(--mono);
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+.rt-input {
+  grid-area: input;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 0.55rem 0 0;
+  border-radius: var(--radius-ctl-sm);
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  color: var(--ink-faint);
+  font: 500 12.5px var(--mono);
+}
+.rt-input input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.38rem 0 0.38rem 0.6rem;
+  border: 0;
+  border-radius: var(--radius-ctl-sm);
+  background: transparent;
+  color: var(--ink);
+  font: 600 14px var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.rt-input input:focus-visible {
+  outline: none;
+}
+.rt-input:focus-within {
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 0 3px rgba(var(--accent-rgb), 0.3);
+}
+.rt-row.changed .rt-input {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  background: rgba(var(--accent-rgb), 0.06);
+}
+.rt-row.bad .rt-input {
+  box-shadow: inset 0 0 0 1.5px var(--bad);
+  background: rgba(var(--bad-rgb), 0.06);
+}
+.rt-human {
+  grid-area: human;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.rt-note {
+  grid-area: note;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  justify-content: flex-end;
+  min-width: 0;
+  font-size: 12.5px;
+}
+.rt-bad {
+  color: var(--bad);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+/* the server's refusal of this key, verbatim: a line of its own under the row */
+.rt-msg {
+  grid-column: 1 / -1;
+  font-size: 12.5px;
+}
+.rt-warn {
+  color: var(--warn);
+  font-weight: 500;
+}
+.rt-ok {
+  color: var(--ok);
+  font-weight: 500;
+}
+.rt-was {
+  font: 500 12px var(--mono);
+  padding: 0.1rem 0.45rem;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: var(--mat-fill-2);
+  color: var(--ink-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rt-was:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
+/* ── Save / Discard ── */
+.rt-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+.rt-bar .btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none; /* focusable, never pressed: the handlers refuse too */
+}
+.rt-status {
+  font-size: 13px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ── the revisions kept ── */
+.rt-history {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+.rt-revs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rt-revs li {
+  display: grid;
+  grid-template-columns: 3ch minmax(0, 1fr) auto 3.5ch;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0;
+  border-top: 1px solid var(--row-rule);
+  font-size: 13px;
+}
+.rt-revs li b {
+  text-align: right;
+}
+.rt-revs li.current b {
+  color: var(--accent);
+}
+.rt-revs .rt-who {
+  overflow-wrap: anywhere;
+}
+.rt-revs time {
+  color: var(--ink-dim);
+}
+.rt-revs li > :last-child {
+  text-align: right;
+}
+
+@media (max-width: 640px) {
+  .rt-group {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .rt-group h3 {
+    padding-top: 0;
+  }
+  .rt-rows {
+    gap: 12px;
+  }
+  .rt-row {
+    grid-template-columns: 7rem minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name name name"
+      "input human note";
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rt-fill {
+    transition: none;
+  }
+}

@@ -37,7 +37,7 @@ the tick re-runs the installer first (refused → `NOT CONFIGURED`, saying why).
    completion, enough context. Down → log and exit; after the `cutoff` → post one `NOT RUN` report.
 3. Up → start the runner. `hermes`: the busyyaks MCP server is its only tool source; there is no terminal, no process
    tool and no git on the host. Before it starts, the scan it would read is checked (`daily_facts` `last_scan`): none, a
-   failed one, or a stale one — older than 3 × `SCAN_INTERVAL_SECONDS` + min(its duration, one interval), or more than
+   failed one, or a stale one — older than 3 × `scan_interval_seconds` + min(its duration, one interval), or more than
    60 s in the future, or a row with no start time / a negative duration. Before the `cutoff` that is a log
    line and exit 0 (the next tick retries); from the cutoff on, or with `--force`, one `FAILED` report saying why. No
    run either way. The lead model reads the last scan through `daily_facts` (it never asks for a scan), spawns one child

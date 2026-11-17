@@ -13,7 +13,7 @@ module Busyyaks
   #   Reader  (web, notifier) — asks for the PRs a card dialog shows and, on every notifier watch pass, every PR
   #                       assigned to a live card (CiChecks::Port#closed_prs: the engine's PR watch); reads the answers.
   #                       No token, no HTTP.
-  #   Poller  (github)  — every GITHUB_CI_INTERVAL_SECONDS answers the recently requested rows. A merged PR is final:
+  #   Poller  (github)  — every github_ci_interval_seconds answers the recently requested rows. A merged PR is final:
   #                       answered once, never polled again. A PR closed without merging keeps its closed_at and why
   #                       (its issue events, read once per close: base deleted · head deleted · by <login>).
   # A failed poll, or an answer older than `stale_after`, is said on the link — never shown as the PR's state.

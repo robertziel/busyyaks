@@ -174,7 +174,7 @@ hello screen (`/hello`), which checks the database, the scanner, the launcher an
 looks for the agent CLIs on the host (Claude Code, Hermes, Codex — `config/harnesses.yml`): found with its version, or
 an install link, and the `launch.commands` line to add for one installed but not allowed. Reopened from the settings
 cog (Setup), it lands on a summary of the current settings, each step editable.
-The scanner reads every repo under `PROJECTS_ROOT` (mounted read-only) within `SCAN_INTERVAL_SECONDS`.
+The scanner reads every repo under `PROJECTS_ROOT` (mounted read-only) within `scan_interval_seconds` (Settings → Runtime).
 
 Connect Claude Code to the MCP server:
 
@@ -442,8 +442,8 @@ selected, Enter opens it) and every saved server, each with its state. The dashb
 |---|---|
 | `web` | Serves the SPA shell for every signed-in GET and the `/api/*` JSON API. Markdown (reports, notes, cards) is rendered on the server with raw HTML dropped. |
 | `mcp` | The MCP endpoint, local only. Refuses any request that carries an `Origin` header. |
-| `scanner` | Every `SCAN_INTERVAL_SECONDS`: log, status and upstream of each repo under the configured roots. A repo is a dir with `.git`; group dirs are searched `search_depth` levels down. Every read is one short-lived child (`bin/git-read`, libgit2: it runs no program a repo's config names) with hard limits (`GIT_READ_*`); a repo it cannot read is an error on that repo, never the git CLI instead. |
-| `github` | Every `GITHUB_INTERVAL_SECONDS`: the network, the feed, your merged PRs and PR states for the board. The only container that holds `GITHUB_TOKEN`; conditional requests (ETag) everywhere. |
+| `scanner` | Every `scan_interval_seconds`: log, status and upstream of each repo under the configured roots. A repo is a dir with `.git`; group dirs are searched `search_depth` levels down. Every read is one short-lived child (`bin/git-read`, libgit2: it runs no program a repo's config names) with hard limits (`GIT_READ_*`); a repo it cannot read is an error on that repo, never the git CLI instead. |
+| `github` | Every `github_interval_seconds`: the network, the feed, your merged PRs and PR states for the board. The only container that holds `GITHUB_TOKEN`; conditional requests (ETag) everywhere. |
 | `notifier` | Delivers the operator's comments, moves and answers to the owning session; turns a session stuck on a dialog into a question on its card; releases cards whose session is gone. |
 | `bin/launcher` | Runs on the host, because the containers cannot reach the host's tmux. Starts sessions, lists them, captures and answers dialogs, clones repos. |
 | `bin/daily-report` | Runs on the host from a systemd timer. See [the daily report](#the-daily-report). |
@@ -582,7 +582,7 @@ A deployment is configuration, never code. One place per value; an unknown or mi
 
 | File | Holds |
 |---|---|
-| `.env` (from [`.env.example`](.env.example)) | wiring and secrets: ports, `PROJECTS_ROOT`, the host user the containers run as (`HOST_UID`/`HOST_GID`), timezone, session secret, `MCP_TOKEN`, GitHub login and token, intervals, attachment limits. Compose uses `${VAR:?}`, so a missing value stops it. |
+| `.env` (from [`.env.example`](.env.example)) | wiring and secrets: ports, `PROJECTS_ROOT`, the host user the containers run as (`HOST_UID`/`HOST_GID`), timezone, session secret, `MCP_TOKEN`, GitHub login and token, attachment limits (the services' timing is Settings → Runtime, in the database). Compose uses `${VAR:?}`, so a missing value stops it. |
 | `config/busyyaks.yml` (from [`config/busyyaks.example.yml`](config/busyyaks.example.yml)) | repo roots and search depth, your remotes and author emails, the history window, `reap_protect` (sessions "Clear idle" never stops), `auth` ([Sign-in](#sign-in)), `agents` ([Agent sessions](#agent-sessions)), optional `engines:` and `daily_report_runners` (the runners Settings → Daily report may pick; a bad one stops the scanner and github services at boot and fails the `daily_report_config` tool). |
 | `config/engines.yml` (committed) | the coding-agent engine names a collector reports → sidebar label + behaviour family (`claude` · `hermes`); `engines:` in `config/busyyaks.yml` adds or relabels. |
 | `config/kanban.yml` (from [`config/kanban.example.yml`](config/kanban.example.yml); the file `KANBAN_CONFIG` names) | the kanban module's host settings: concurrency caps, theme, the handoff / approval gates, the review loop. Not the launchers and agent types: they are rows in the database, edited on **Settings → Agents & launchers** (the header's cog). |

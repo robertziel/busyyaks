@@ -14,6 +14,7 @@ import { Report } from "./routes/Report";
 import { Reports } from "./routes/Reports";
 import { Settings } from "./routes/Settings";
 import { DailyReportSettings } from "./routes/DailyReportSettings";
+import { RuntimeSettings } from "./routes/RuntimeSettings";
 import { ShortcutsSettings } from "./routes/ShortcutsSettings";
 import { Today } from "./routes/Today";
 
@@ -54,6 +55,7 @@ export function App() {
           <Route path="session-boards" element={<SessionBoards />} />
           <Route path="settings" element={<Settings />} />
           <Route path="settings/daily-report" element={<DailyReportSettings />} />
+          <Route path="settings/runtime" element={<RuntimeSettings />} />
           <Route path="settings/shortcuts" element={<ShortcutsSettings />} />
           <Route path="*" element={<NotFound />} />
         </Route>

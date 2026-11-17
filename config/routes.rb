@@ -93,6 +93,8 @@ module Busyyaks
     post "/api/settings/agents", to: "api.agent_settings.save"
     get "/api/settings/daily-report", to: "api.daily_report_settings.show"   # Settings → Daily report
     post "/api/settings/daily-report", to: "api.daily_report_settings.save"
+    get "/api/settings/runtime", to: "api.runtime_settings.show"   # Settings → Runtime: the services' timing
+    post "/api/settings/runtime", to: "api.runtime_settings.save"
     get "/api/setup", to: "api.setup.show"                      # the first-run hello screen (/hello)
     get "/api/setup/harnesses", to: "api.setup.harnesses"     # the agent CLIs on the host
     post "/api/setup/complete", to: "api.setup.complete"

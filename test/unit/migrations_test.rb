@@ -76,7 +76,8 @@ class MigrationsTest < Minitest::Test
   def store
     host = Busyyaks::AgentSettings.migration_host(Busyyaks::Kanban::CONFIG_PATH)
     AgentsKanban::Store.new(@db, config: host, markdown: Busyyaks::Kanban.markdown,
-                                 boards: ->(s) { @db[:projects].where(slug: s).any? }, ci: Busyyaks::Kanban.ci_port(@db))
+                                 boards: ->(s) { @db[:projects].where(slug: s).any? },
+                                 ci: Busyyaks::Kanban.ci_port(@db, interval: 60)) # runtime_settings may not exist yet
   end
 
   def project(slug)

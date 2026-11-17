@@ -14,7 +14,7 @@ class McpKanbanTest < Minitest::Test
   def live_sessions = (@live_sessions ||= %w[tl_g_r lead_1])
 
   def app
-    Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: 60, store: store, config: nil,
+    Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: -> { 60 }, store: store, config: nil,
                             sessions: lambda {
       raise Busyyaks::LauncherClient::Unavailable, "launcher not reachable at /x.sock: Errno::ENOENT" if live_sessions == :down
 

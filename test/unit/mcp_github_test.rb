@@ -15,7 +15,8 @@ class McpGithubTest < Minitest::Test
   REPORT_TOKEN = "r" * 40
   AV = "https://avatars.githubusercontent.com/u/1?v=4"
 
-  def app = Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: 60, store: store, config: nil)
+  def app = Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: -> { 60 }, store: store,
+                                    config: nil)
 
   def tool(name, args = {})
     header "Authorization", "Bearer #{TOKEN}"

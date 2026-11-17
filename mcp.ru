@@ -5,9 +5,12 @@
 require "hanami/boot"
 require_relative "lib/busyyaks/mcp_server"
 require_relative "lib/busyyaks/env_file"
+require_relative "lib/busyyaks/runtime_settings"
 
 # the host address compose publishes this port on (.env MCP_HOST): loopback, or the server refuses to start
 Busyyaks::EnvFile.shape!("MCP_HOST", ENV.fetch("MCP_HOST"))
 
 run Busyyaks::McpServer.new(token: ENV.fetch("MCP_TOKEN"), report_token: ENV.fetch("MCP_REPORT_TOKEN"),
-                            scan_interval: Integer(ENV.fetch("SCAN_INTERVAL_SECONDS")))
+                            scan_interval: lambda {
+                              Busyyaks::RuntimeSettings.get(Hanami.app["db.gateway"].connection)[:scan_interval_seconds]
+                            })
