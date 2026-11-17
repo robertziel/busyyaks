@@ -155,7 +155,9 @@ module Busyyaks
         # dirty_paths nil = the index could not be read (unknown), never "[]" (clean)
         dirty: r["dirty"], dirty_paths: r["dirty_paths"] && JSON.generate(r["dirty_paths"].first(DIRTY_PATHS_MAX)),
         unpushed: r["unpushed"], # no upstream = unknown (nil), not 0
-        branches: JSON.generate(r["branches"]), default_ref: r["default_ref"], git_error: r["daily_error"],
+        branches: JSON.generate(r["branches"]), branch_tips: JSON.generate(r["branch_tips"]),
+        remote_heads: JSON.generate(r["remote_heads"]),
+        default_ref: r["default_ref"], git_error: r["daily_error"],
         scanned_at: now, icon_path: icon_path, icon_mtime: icon_mtime
       )
       @store.replace_commits(slug, commits, since)

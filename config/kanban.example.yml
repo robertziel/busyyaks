@@ -79,6 +79,13 @@ theme:
 # 10 min is pinged once ("CI on PR #N finished (<state>) — hand off or fix"); 20 min after that ping, still silent, the
 # system comments on the card; an alive owner with no card activity and no commit for 4 h is flagged with a comment.
 idle_watch: { ci_ping_after_minutes: 10, ci_comment_after_minutes: 20, owner_idle_hours: 4 }
+# card-progress watch (engine: Store#progress_watch_pass, the notifier's watch pass): a card in a working or
+# review column (In progress, Local: Agent review, …), not flagged, with no progress for stale_minutes — no card activity
+# but the engine's own, no new head on its PR, no new CI check on that head, no new commit on a branch it names
+# (lib/busyyaks/ci_checks.rb Port#progress: gh_pr_checks + the scanner's projects.branch_tips) — pings its owner once
+# naming the last evidence; stale_minutes later still nothing → one busyyaks comment; stale_minutes after that the card
+# counts as waiting for you ("no progress for N min") until progress resets it. Required; null = off.
+progress_watch: { stale_minutes: 30 }
 # the handoff gate's requirements on a board with a gate column (e.g. Human Check): kanban_handoff needs how to QA it
 # (≥ 20 chars), the PR URL, and screenshots attached first for a UI change. requires_ci_url: true also demands the CI
 # run's URL — turn it on once your repos have CI (any system whose run has a URL)

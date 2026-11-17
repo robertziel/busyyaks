@@ -388,6 +388,18 @@ describe("the sheet", () => {
     const h = render({ data: w, error: null, open: true, kind: "review" });
     expect(h).toContain("approved · no agent");
   });
+  it("a progress-stale work card is to review, its row line the watch's reason", () => {
+    const stale = card(50, "doing", {
+      column_label: "In progress",
+      progress_stale: "no progress for 90 min (since 14:02)",
+      handoff_first_line: "an older handoff",
+    });
+    const w = { ...data, total: 5, projects: [{ slug: "acme/widgets", icon: null, count: 1, cards: [stale] }] };
+    expect(byKind(w).review.rows.map((r) => r.card.id)).toEqual([50]);
+    const h = render({ data: w, error: null, open: true, kind: "review" });
+    expect(h).toContain("no progress for 90 min (since 14:02)");
+    expect(h).not.toContain("an older handoff");
+  });
   it("a tab whose count dropped to 0 says so instead of an empty list", () => {
     const w = { ...data, held: [], external: [] };
     const h = render({ data: w, error: null, open: true, kind: "external" });

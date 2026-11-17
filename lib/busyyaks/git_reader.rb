@@ -236,7 +236,7 @@ else
 end }
       { remotes: repo.remotes.each_name.to_h { |n| [n, repo.remotes[n]&.url] },
         branch: b, config: names.to_h { |k| [k, repo.config[k]] }, **dirty, unpushed: unpushed,
-        branches: branches, default_ref: default_ref, **walk, }
+        branches: branches, branch_tips: branch_tips, remote_heads: remote_heads, default_ref: default_ref, **walk, }
     end
 
     def head = { branch: branch, last_commit_at: repo.head_unborn? ? nil : repo.head.target.time.to_i }
@@ -257,6 +257,31 @@ end }
       local = repo.branches.each_name(:local).to_a
       remote = repo.branches.each_name(:remote).map { |r| r.sub(%r{\A[^/]+/}, "") }
       (local + remote).reject { |b| b.empty? || b == "HEAD" || b.end_with?("/HEAD") }.uniq.sort
+    end
+
+    # {branch name => [tip sha, …]} of the same local + remote-tracking branches (the remote's name dropped): a name
+    # whose local and remote tips differ has both, sorted. The progress watch's "a new commit on a branch the card names"
+    # (CiChecks::Port#progress) compares them between scans.
+    def branch_tips
+      tips = Hash.new { |h, k| h[k] = [] }
+      %i[local remote].each do |kind|
+        repo.branches.each(kind) do |b|
+          name = kind == :remote ? b.name.sub(%r{\A[^/]+/}, "") : b.name
+          next if name.empty? || name == "HEAD" || name.end_with?("/HEAD") || b.target_id.nil?
+
+          tips[name] << b.target_id
+        end
+      end
+      tips.sort.to_h { |name, shas| [name, shas.uniq.sort] }
+    end
+
+    # The branches the remotes' HEAD names (refs/remotes/<remote>/HEAD → <remote>/<branch>, the remote dropped): each
+    # remote's default branch, e.g. ["main"]. A remote with no HEAD ref (never fetched with it) names none — said by its
+    # absence, never guessed. The progress watch never counts these as a card's branch (CiChecks::Port#progress).
+    def remote_heads
+      repo.references.each("refs/remotes/*/HEAD").filter_map do |r|
+        r.type == :symbolic ? r.target_id.to_s.sub(%r{\Arefs/remotes/[^/]+/}, "") : nil
+      end.uniq.sort
     end
 
     STATUS_CODE = { added: "A", deleted: "D", modified: "M", typechange: "T", renamed: "R", copied: "C" }.freeze

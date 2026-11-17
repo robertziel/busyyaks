@@ -17,6 +17,8 @@ export type WaitingCard = {
   blocked_first_line?: string | null;
   handoff_first_line?: string | null;
   gate_hold?: string | null;
+  // the progress watch: why a card in a work column waits for you ("no progress for 90 min (since 14:02)")
+  progress_stale?: string | null;
   owner_session: string | null;
   // every card, from the engine: when / who approved it (null = not approved) and — carried on by its agent —
   // where the agent takes it next (final = it merges); an approved card nobody owns waits with carried_on null

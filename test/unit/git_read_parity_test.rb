@@ -85,7 +85,25 @@ class GitReadParityTest < Minitest::Test
       "branches" => (heads.lines.map(&:strip) + (remotes.lines.map(&:strip) - heads.lines.map(&:strip))
                        .map { |r| r.sub(%r{\A[^/]+/}, "") })
                       .reject { |b| b.empty? || b == "HEAD" || b.end_with?("/HEAD") }.uniq.sort,
+      "branch_tips" => tips(dir),
+      "remote_heads" => remote_heads(dir),
       "default_ref" => ref_err ? "HEAD" : ref, }
+  end
+
+  # `git for-each-ref` over refs/heads + refs/remotes: {name (remote dropped) => [tip shas]}, as GitReader#branch_tips
+  def tips(dir)
+    heads, = git(dir, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads")
+    remotes, = git(dir, "for-each-ref", "--format=%(refname:short) %(objectname) %(symref)", "refs/remotes")
+    pairs = heads.lines.map(&:split) +
+            remotes.lines.map(&:split).select { |r| r.size == 2 }.map { |n, sha| [n.sub(%r{\A[^/]+/}, ""), sha] }
+    pairs.reject { |n, _| n == "HEAD" }.group_by(&:first).sort.to_h { |n, rows| [n, rows.map(&:last).uniq.sort] }
+  end
+
+  # `git for-each-ref` over refs/remotes/*/HEAD: the branch each remote's HEAD names, as GitReader#remote_heads
+  def remote_heads(dir)
+    out, = git(dir, "for-each-ref", "--format=%(refname) %(symref)", "refs/remotes")
+    out.lines.map(&:split).select { |r, sym| r.end_with?("/HEAD") && sym }
+       .map { |_, sym| sym.sub(%r{\Arefs/remotes/[^/]+/}, "") }.uniq.sort
   end
 
   def assert_parity(dir, msg)
@@ -93,6 +111,22 @@ class GitReadParityTest < Minitest::Test
     want = cli(dir)
     got["commits"] = got["commits"].sort_by { |c| c["sha"] }
     want.each { |k, v| v.nil? ? assert_nil(got[k], "#{msg}: #{k}") : assert_equal(v, got[k], "#{msg}: #{k}") }
+  end
+
+  # a clone's origin/HEAD names the remote's default branch — what the progress watch never counts
+  def test_remote_heads_name_each_remotes_default_branch
+    remote = File.join(@root, "rh.git")
+    git!(@root, "init", "-q", "--bare", "-b", "main", remote)
+    w = File.join(@root, "rh-work")
+    git!(@root, "clone", "-q", remote, w)
+    git!(w, "checkout", "-q", "-b", "main")
+    commit(w, "a.txt", "1\n")
+    git!(w, "push", "-q", "-u", "origin", "main")
+    d = File.join(@root, "rh-clone")
+    git!(@root, "clone", "-q", remote, d)
+    git!(d, "checkout", "-q", "-b", "card/7-x")
+    assert_equal [["main"], ["main"]], [read("scan", d, **SCAN)["remote_heads"], remote_heads(d)]
+    assert_equal [], read("scan", w, **SCAN)["remote_heads"], "no origin/HEAD fetched: none named"
   end
 
   def test_scan_matches_the_cli_across_repo_states
