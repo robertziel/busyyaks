@@ -3,7 +3,9 @@
 # the lockfile is required (npm ci) — generate it in a node container, never on the host.
 FROM node:22-bookworm-slim AS frontend
 WORKDIR /src/frontend
-COPY frontend/package.json frontend/package-lock.json ./
+# vendor/ + .npmrc: the patched picomatch the lockfile pins (frontend/vendor/picomatch/VENDOR.md, card #525)
+COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
+COPY frontend/vendor ./vendor
 RUN npm ci
 COPY frontend/ ./
 RUN npm run build

@@ -45,6 +45,13 @@ repository. Each license's full text is in the path given, or at the URL given.
             frontend/src/vendor/agents_kanban/LICENSE
    Copyright 2026 Robert Zieliński.
 
+6. picomatch 4.0.7 with an upstream security fix (vendored copy, a dev/build dependency of the SPA)
+   Path:    frontend/vendor/picomatch/ (what changed and why: frontend/vendor/picomatch/VENDOR.md)
+   Source:  https://github.com/micromatch/picomatch, release 4.0.7 + lib/parse.js of
+            https://github.com/micromatch/picomatch/pull/237
+   License: MIT, full text in frontend/vendor/picomatch/LICENSE
+   Copyright (c) 2017-present, Jon Schlinkert.
+
 --------------------------------------------------------------------------------------------------------------------
 Dependencies (Ruby gems in Gemfile.lock, npm packages in frontend/package-lock.json) are not part of this
 repository: they are downloaded when an image is built. Their licenses, and the few that are not MIT, BSD, Apache-2.0
