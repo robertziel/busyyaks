@@ -16,6 +16,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- "Needs you" no longer counts a gate card the operator already approved whose next step is its agent's (e.g. Awaiting merge after the final Approve, while the agent merges). It is shown apart: the board header and the Projects page say "N approved · agent on it", the card face "✓ approved · <owner> merging", the waiting widget a fourth ✓ "approved" segment (never in its total or the dock badge), `/api/waiting` lists it under `approved` (out of `total`), `/api/boards` and the board JSON count it as `approved`, the Agents sidebar row says "approved", and MCP `daily_facts` moves it from `human_check` to `approved`. A CI hold, a question for the operator or an external block wins over approved; an approved card with no owner session still waits for you.
 - **Breaking:** the boot refuses a `config/kanban.yml` `theme` that leaves out any `--ak-*` token the vendored engine's CSS declares, naming each; add `--ak-working: var(--working)` and `--ak-step-overhang: 12px` (see `docs/DEPLOY.md` § The board theme).
 - **Breaking:** required `config/busyyaks.yml` `ci` (`max_pending_minutes: 1..1440`, `required: {owner/name: [contexts]}`); see `docs/DEPLOY.md` § CI checks.
 - **Breaking:** required `config/busyyaks.yml` `terminal` (`public_host: allow | deny`, `max_open: 1..64`); see `docs/DEPLOY.md` § Terminals.

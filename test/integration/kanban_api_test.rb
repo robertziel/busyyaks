@@ -158,7 +158,7 @@ class KanbanApiTest < Minitest::Test
     r0 = api(:get, "/api/waiting/rev")["rev"]
     assert_equal "no-store", last_response.headers["Cache-Control"]
     assert_equal({ "waiting_columns" => %w[human_check ready], "total" => 0, "projects" => [], "held" => [], "external" => [],
-                   "launch_failures" => [], "lead_ends" => [], }, api(:get, "/api/waiting"))
+                   "approved" => [], "launch_failures" => [], "lead_ends" => [], }, api(:get, "/api/waiting"))
     # card #273: a session whose start failed (claude never came up) is in the list the layout's alert modal reads
     kb.register_session(session: "g_r_teamlead", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
     kb.end_session("g_r_teamlead", reason: "start failed: Temp directory is owned by uid 0", by: "op")
@@ -213,6 +213,35 @@ class KanbanApiTest < Minitest::Test
     clear_cookies
     get "/api/waiting", nil, "HTTP_ACCEPT" => "application/json"
     assert_equal 401, last_response.status
+  end
+
+  # a gate card the operator approved whose next step is its agent's (Ready to merge → Merged: the agent
+  # merges) waits for the agent, not for you — out of the total and the board's waiting, in `approved`, kind "approved"
+  def test_an_approved_gate_card_its_agent_carries_on_is_not_waiting_for_you
+    id = kb.create(slug: "g/r", title: "merging", by: "op", column: "ready")
+    kb.set_owner(id, session: "worker_2", by: "lead")
+    unapproved = api(:get, "/api/waiting")
+    assert_equal [1, [], 1], [unapproved["total"], unapproved["approved"], api(:get, "/api/projects/g/r/board")["waiting"]],
+                 "dragged in unapproved: the operator's Approve in place waits"
+    Hanami.app["db.gateway"].connection[:cards].where(id: id).update(approved_at: 1_700_000_000, approved_by: "op")
+    w = api(:get, "/api/waiting")
+    assert_equal [0, []], [w["total"], w["projects"]]
+    c = w["approved"][0]["cards"][0]
+    assert_equal [id, "approved", "worker_2", "op", { "next_column" => "merged", "next_label" => "Merged", "final" => true },
+                  Time.at(1_700_000_000).iso8601,],
+                 c.values_at("id", "kind", "owner_session", "approved_by", "carried_on", "since")
+    assert w["approved"][0].key?("icon")
+    b = api(:get, "/api/projects/g/r/board")
+    assert_equal [0, 1], b.values_at("waiting", "approved")
+    face = b["columns"].find { |col| col["column"] == "ready" }["cards"][0]
+    assert_equal [false, { "next_column" => "merged", "next_label" => "Merged", "final" => true }],
+                 face.values_at("waiting", "carried_on")
+    assert_equal [0, 1], api(:get, "/api/boards").values_at("waiting", "approved"), "the Projects page"
+    # nobody owns it: nobody carries it on — it waits for you again, approved, carried_on null
+    kb.set_owner(id, session: "", by: "op")
+    w = api(:get, "/api/waiting")
+    assert_equal [1, [], [id, "review", "op", nil]],
+                 [w["total"], w["approved"], w["projects"][0]["cards"][0].values_at("id", "kind", "approved_by", "carried_on")]
   end
 
   def test_comment_with_no_owner_session_says_nobody_is_listening
@@ -462,6 +491,25 @@ ans.values_at("body", "author")
     assert_equal 422, last_response.status
     assert_match(/only a card in Local: Human review or Local: Deploy check or Public: Human review can be approved/,
 j["error"])
+  end
+
+  # the final Approve through the API (green CI, the approval bookkeeping) puts the card in Awaiting merge, approved, and
+  # its owner session carries it on: out of the waiting total, listed under `approved`
+  def test_an_approved_card_through_the_approve_endpoint_is_carried_on_not_waiting
+    v4 = JSON.parse(File.read(File.join(__dir__, "../../vendor/agents_kanban/fixtures/boards/local_v4.board.json")))
+    api(:post, "/api/projects/g/r/workflow", v4)
+    assert_equal 200, last_response.status
+    id = api(:post, "/api/projects/g/r/board", { title: "ship", column: "public_human_review" })["card"]["id"]
+    kb.set_owner(id, session: "worker_2", by: "lead")
+    green_pr!(id)
+    assert_equal 1, api(:get, "/api/waiting")["total"], "in the gate, unapproved, CI green: waits for the operator"
+    c = api(:post, "/api/cards/#{id}/approve", { approved: true })["card"]
+    assert_equal [200, "awaiting_merge", "owner@example.com"], [last_response.status, c["column"], c["approved_by"]]
+    assert_equal [false, { "next_column" => "done", "next_label" => "Done", "final" => true }],
+                 c.values_at("waiting", "carried_on")
+    w = api(:get, "/api/waiting")
+    assert_equal [0, [[id, "approved", "worker_2"]]],
+                 [w["total"], w["approved"].flat_map { |g| g["cards"] }.map { |x| x.values_at("id", "kind", "owner_session") }]
   end
 
   # the operator reads every session's own board, read-only

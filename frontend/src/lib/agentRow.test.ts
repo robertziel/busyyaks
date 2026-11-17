@@ -33,7 +33,7 @@ const s = (extra: Partial<AgentSession> = {}) =>
     phase: null,
     ...extra,
   }) as AgentSession;
-type Flags = { gate_hold?: string; blocked_external?: string };
+type Flags = { gate_hold?: string; blocked_external?: string; approved_carried_on?: boolean };
 const card = (id: number, column_label: string, flags: Flags = {}) => ({
   id,
   slug: "p",
@@ -42,6 +42,7 @@ const card = (id: number, column_label: string, flags: Flags = {}) => ({
   column_type: null,
   gate_hold: flags.gate_hold ?? null,
   blocked_external: flags.blocked_external ?? null,
+  approved_carried_on: flags.approved_carried_on ?? false,
   path: "/",
 });
 const ask = { id: 11, slug: "p", title: "Compact rows", question: "A, B or C?", options: [], path: "/" };
@@ -131,6 +132,7 @@ describe("rowLines", () => {
 describe("cardFlags", () => {
   const ci = card(13, "Human Check", { gate_hold: "pending" });
   const ext = card(15, "QA", { blocked_external: "upstream" });
+  const approved = card(16, "Awaiting merge", { approved_carried_on: true });
   it("a card's state is a whole tag, never in the detail the row may cut; the uncut lines keep it", () => {
     const row = s({ state: "working", phase: "thinking", cards: [ci] });
     expect(rowLines(row).detail).toBe("#13 Human Check");
@@ -139,11 +141,13 @@ describe("cardFlags", () => {
     expect(rowTitle(row).split("\n")).toContain("#13 Human Check · waiting for CI");
   });
   it("each word once, naming every card it is about, in a fixed order", () => {
-    const row = s({ cards: [ext, ci, card(14, "Human Check", { gate_hold: "pending" })] });
+    const row = s({ cards: [approved, ext, ci, card(14, "Human Check", { gate_hold: "pending" })] });
     expect(cardFlags(row)).toEqual([
       { word: "CI wait", title: "#13, #14 waiting for CI" },
       { word: "ext. wait", title: "#15 blocked externally" },
+      { word: "approved", title: "#16 approved" },
     ]);
+    expect(fullLines(s({ cards: [approved] }))).toEqual(["#16 Awaiting merge · approved"]);
   });
   it("a card already on the why line is not tagged; cards unknown or none: no tags", () => {
     const review = { id: 13, slug: "p", title: "t", pr_url: null, path: "/" };

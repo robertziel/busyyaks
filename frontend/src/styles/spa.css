@@ -733,3 +733,12 @@ table.as-preview th:nth-child(2) {
     transition: none;
   }
 }
+
+/* the Projects page's Boards heading: "N waiting for you" and "N approved · agent on it" side by side */
+.kb-h2-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  vertical-align: middle;
+}

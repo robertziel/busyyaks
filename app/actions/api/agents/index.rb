@@ -33,10 +33,13 @@ module Busyyaks
             # a gate card whose Approve would not pass now is no review: it waits for CI — said on its row
             holds = w.held.values.flatten.to_h { |c| [c[:id], c[:gate_hold]] }
             external = w.external.values.flatten.to_h { |c| [c[:id], c[:blocked_reason]] }
+            # approved in a gate, its agent carrying it on: no review either — said on its row
+            approved = w.approved.values.flatten.to_h { |c| [c[:id], true] }
             cards.each_value do |reg|
               reg[:cards].each do |c|
                 c[:gate_hold] = holds[c[:id]]
                 c[:blocked_external] = external[c[:id]]
+                c[:approved_carried_on] = approved.key?(c[:id])
               end
             end
             groups = Busyyaks::Agents.groups(snap, projects, asks: asks, reviews: reviews, cards: cards, seen: seen)

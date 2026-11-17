@@ -10,6 +10,7 @@ const c = (
   column_label: string,
   gate_hold: string | null = null,
   blocked_external: string | null = null,
+  approved_carried_on = false,
 ) => ({
   id,
   slug: "p",
@@ -18,6 +19,7 @@ const c = (
   column_type: null,
   gate_hold,
   blocked_external,
+  approved_carried_on,
   path: "/",
 });
 
@@ -37,6 +39,9 @@ describe("cardLine", () => {
     expect(cardLine(s({ cards: [c(12, "Public: Create PR", null, "waits for card #9")] }))).toBe(
       "#12 Public: Create PR · blocked externally",
     );
+  });
+  it("an approved gate card its agent carries on says so: no review, not waiting for you", () => {
+    expect(cardLine(s({ cards: [c(21, "Awaiting merge", null, null, true)] }))).toBe("#21 Awaiting merge · approved");
   });
   it("no cards is said; a card already on the why line is not repeated", () => {
     expect(cardLine(s({}))).toBe("no cards");

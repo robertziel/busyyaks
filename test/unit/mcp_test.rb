@@ -189,6 +189,14 @@ out.dig("config", "runner"))
     assert_equal [[held, "PR #8: CI is still running"]], f["waiting_for_ci"].map { |c| [c["card"], c["hold"]] },
                  "not approvable now: waiting for CI, not in human_check"
     assert_equal 2, f["kanban_columns"]["Human Check"]
+    assert_equal [], f["approved"]
+    # approved in Ready to merge, its agent merging — not human_check, its own list
+    merging = k.create(slug: "a", title: "merging", by: "agent", column: "ready")
+    db[:cards].where(id: merging).update(approved_at: t, approved_by: "op", owner_session: "a_lead")
+    g = JSON.parse(tool("daily_facts", hours: 24, series: "Daily report")["content"][0]["text"])
+    assert_equal [id], g["human_check"].map { |c| c["card"] }
+    assert_equal [[merging, "Ready to merge", "op", "a_lead", "Merged"]],
+                 g["approved"].map { |c| c.values_at("card", "column", "approved_by", "owner_session", "next") }
     assert_equal "Daily report 2026-11-01", f["previous_report"]["title"]
     assert_equal [{ "label" => "Uncommitted", "value" => "9", "tone" => "neutral", "delta" => nil, "good" => nil }],
                  f["previous_report"]["figures"]
