@@ -24,8 +24,14 @@ class AppManifestTest < Minitest::Test
     assert_equal "/", m[:scope]
   end
 
+  # the manifest's skin is the one skin.js shows when nothing is stored (public/static/skin.js `DEFAULT`)
+  def test_default_skin_is_skin_js_default
+    js = File.read(File.join(ROOT, "public/static/skin.js"))
+    assert_equal js[/^\s*var DEFAULT = "([a-z0-9-]+)";/, 1], M::DEFAULT_SKIN
+  end
+
   def test_colours_are_the_default_skins_background
-    bg = YAML.safe_load_file(File.join(ROOT, "skins/light.yml")).fetch("tokens").fetch("--bg")
+    bg = YAML.safe_load_file(File.join(ROOT, "skins/dark.yml")).fetch("tokens").fetch("--bg")
     assert_equal bg, M.build[:background_color]
     assert_equal bg, M.build[:theme_color]
   end

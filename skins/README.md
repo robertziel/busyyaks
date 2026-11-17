@@ -12,7 +12,7 @@ tokens:               # any of the colour tokens (Busyyaks::Skins::TOKENS), over
   "--accent": "#36d1c4"
 ```
 
-- `light.yml` and `dark.yml` are the two bases: each sets every token. Light is the default.
+- `light.yml` and `dark.yml` are the two bases: each sets every token. Dark is the default.
 - Values: `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb(r, g, b)` or `rgba(r, g, b, a)`. `--ok`, `--warn`, `--bad`,
   `--accent` take hex only (their `-rgb` triple for tints is derived).
 - The key (file name): `a-z`, `0-9`, `-`, starting with a letter; never `auto`.

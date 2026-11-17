@@ -1,4 +1,4 @@
-# the Light skin: built in, the default (nothing chosen = this one); every token of Busyyaks::Skins::TOKENS
+# the Light skin: built in; every token of Busyyaks::Skins::TOKENS
 label: Light
 base: light
 tokens:

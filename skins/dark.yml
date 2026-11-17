@@ -1,4 +1,4 @@
-# the Dark skin: built in; every token of Busyyaks::Skins::TOKENS (a skin on base dark starts from these)
+# the Dark skin: built in, the default (nothing chosen = this one); every token of Busyyaks::Skins::TOKENS (a skin on base dark starts from these)
 label: Dark
 base: dark
 tokens:

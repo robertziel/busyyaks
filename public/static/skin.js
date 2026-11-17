@@ -1,11 +1,11 @@
-/* busyyaks skins (card #361): every skin is a file of the repo, skins/<key>.yml — light (the default), dark and any added
+/* busyyaks skins (card #361): every skin is a file of the repo, skins/<key>.yml — light, dark (the default) and any added
    next to them — listed by the page in <meta name="skins"> ({key, label, base}, before this script), their colour tokens
    in the page's <style id="skins-css">: a base skin's on :root[data-skin="<base>"], any other's on
    :root[data-skin-key="<key>"] (Busyyaks::Skins). A skin is shown as data-skin=<its base> + data-skin-key=<key>, so every
    rule for its base applies too. Choices: light · dark · auto (the system's light or dark, followed live) · the other
-   skins. This browser's choice is localStorage `busyyaks.skin` = one of them; nothing stored = light, the default.
+   skins. This browser's choice is localStorage `busyyaks.skin` = one of them; nothing stored = dark, the default (card #528).
    Loaded render-blocking in <head> of every page so the skin is on <html> before first paint. A stored value that is no
-   choice of this page (a skin file removed since) is reported in the console and removed (light) — the page never
+   choice of this page (a skin file removed since) is reported in the console and removed (dark) — the page never
    guesses a skin from it. The header control (frontend Skin.tsx) calls window.busyyaksSkin.set(choice) and listens for
    the `busyyaks:skin` event. */
 (function () {
@@ -13,7 +13,7 @@
   var KEY = "busyyaks.skin";
   var BASES = ["light", "dark"];
   var AUTO = "auto";
-  var DEFAULT = "light"; // what nothing stored means; choosing it again clears the key
+  var DEFAULT = "dark"; // what nothing stored means; choosing it again clears the key
   var mq = window.matchMedia("(prefers-color-scheme: dark)");
 
   function find(key) {
@@ -35,7 +35,7 @@
     if (!find(b)) throw new Error("busyyaks: the page lists no " + b + " skin (skins/" + b + ".yml)");
   });
 
-  // the switch's order: light (the default), dark, auto, then the other skins as the page lists them
+  // the switch's order: light, dark (the default), auto, then the other skins as the page lists them
   var CHOICES = BASES.concat(
     [AUTO],
     skins
