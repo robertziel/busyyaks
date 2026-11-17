@@ -15,6 +15,8 @@ module Busyyaks
         # its owner_session (null = none), which the widget matches against /api/agents to show whether that agent is
         # running / blocked. `held` (a gate card CI holds) and `external` (blocked_external) get the same icon and
         # owner_session, kind "held" / "external": the widget's third segment, never counted as waiting for you;
+        # `approved` (a gate card the operator approved that its agent carries on: Awaiting merge after the final Approve)
+        # the same, kind "approved": the widget's fourth segment, never counted either;
         # a held card's `since` is its hand-off time (the engine dates only flags and moves; none → null).
         class Index < Busyyaks::Action
           include KanbanAPI
@@ -29,7 +31,9 @@ module Busyyaks
 
           def self.enrich(body, projects, waiting)
             icons = projects.to_h { |p| [p[:slug], Busyyaks::API.icon_url(p)] }
-            raw = [waiting.by_slug, waiting.held, waiting.external].flat_map { |h| h.values.flatten }.to_h { |c| [c[:id], c] }
+            raw = [waiting.by_slug, waiting.held, waiting.external, waiting.approved]
+                  .flat_map { |h| h.values.flatten }
+                  .to_h { |c| [c[:id], c] }
             owners = raw.transform_values { |c| c[:owner_session] }
             handoffs = raw.transform_values { |c| AgentsKanban::Store.iso(c[:handoff_at]) }
             body.merge(projects: body[:projects].map do |g|
@@ -38,7 +42,8 @@ module Busyyaks
               g.merge(icon: icons[g[:slug]], cards: cards)
             end,
                        held: aside(body[:held], "held", icons, owners) { |c| { since: handoffs[c[:id]] } },
-                       external: aside(body[:external], "external", icons, owners) { {} })
+                       external: aside(body[:external], "external", icons, owners) { {} },
+                       approved: aside(body[:approved], "approved", icons, owners) { {} })
           end
 
           def self.aside(groups, kind, icons, owners)

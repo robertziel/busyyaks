@@ -53,7 +53,8 @@ module Busyyaks
                      "own repos with no upstream), kanban cards waiting for the operator on every board " \
                      "(human_input: an agent's open question; human_check: work to check that can be approved now; " \
                      "waiting_for_ci: gate cards whose CI is not green yet, not counted; blocked_external: cards " \
-                     "waiting for another card, CI or a third party, not counted) and per-column card " \
+                     "waiting for another card, CI or a third party, not counted; approved: gate cards the operator " \
+                     "approved that their agent carries on (merging), not counted) and per-column card " \
                      "counts, the previous report of `series` with its headline figures, the last scan.",
         inputSchema: { type: "object", properties: {
           hours: { type: "integer", description: "window length, 1-168 (24 for a daily report)" },
@@ -343,6 +344,13 @@ module Busyyaks
         { card: c[:id], repo: c[:project_slug], title: c[:title], column: c[:column_label], hold: c[:gate_hold],
           owner_session: c[:owner_session], }
       end
+      # gate cards the operator approved that their agent carries on: waiting for the agent, not the operator
+      approved = w.approved.values.flatten.map do |c|
+        on = kanban.carried_on_json(c, boards[c[:project_slug]])
+        { card: c[:id], repo: c[:project_slug], title: c[:title], column: c[:column_label],
+          approved: iso(c[:approved_at]), approved_by: c[:approved_by], owner_session: c[:owner_session],
+          next: on.fetch(:next_label), final: on.fetch(:final), }
+      end
       blocked_external = w.external.values.flatten.map do |c|
         { card: c[:id], repo: c[:project_slug], title: c[:title], column: c[:column_label], since: iso(c[:since]),
           reason: c[:blocked_reason], url: c[:blocked_url], by: c[:blocked_author], owner_session: c[:owner_session], }
@@ -368,6 +376,7 @@ module Busyyaks
            human_check: human_check,
            waiting_for_ci: waiting_for_ci,
            blocked_external: blocked_external,
+           approved: approved,
            kanban_columns: columns,
            previous_report: before && { id: before[:id], title: before[:title], created_at: iso(before[:created_at]),
                                         figures: ReportBlocks.digest(before[:body_md], Markdown.report_ctx(store))[:figures], },

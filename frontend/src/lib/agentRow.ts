@@ -15,11 +15,12 @@ export const STATE_LABEL: Record<AgentState, string> = {
 
 type Card = AgentSession["cards"][number];
 
-// what a card's row adds: it waits for CI or for the world — neither for you. `word` = the compact row's tag, drawn
-// whole; `text` = the uncut lines' tail
+// what a card's row adds: it waits for CI, for the world, or is approved and carried on by its agent — none for you.
+// `word` = the compact row's tag, drawn whole; `text` = the uncut lines' tail
 const FLAGS: { on: (c: Card) => boolean; word: string; text: string }[] = [
   { on: (c) => !!c.gate_hold, word: "CI wait", text: "waiting for CI" },
   { on: (c) => !!c.blocked_external, word: "ext. wait", text: "blocked externally" },
+  { on: (c) => c.approved_carried_on, word: "approved", text: "approved" },
 ];
 
 const tail = (c: Card) =>

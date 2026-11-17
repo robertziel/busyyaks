@@ -11,6 +11,7 @@ import { monogram } from "../components/ProjectIcon";
 import type { AgentsData } from "../types";
 import {
   age,
+  approvedLine,
   byKind,
   cardHref,
   KINDS,
@@ -34,6 +35,9 @@ const card = (id: number, kind: string, extra: Partial<WaitingCard> = {}): Waiti
   since: null,
   question_first_line: null,
   owner_session: null,
+  approved: null,
+  approved_by: null,
+  carried_on: null,
   ...extra,
 });
 const data: Waiting = {
@@ -75,6 +79,29 @@ const data: Waiting = {
       cards: [card(9, "external", { blocked_first_line: "runner offline" })],
     },
   ],
+  approved: [
+    {
+      slug: "gadgets",
+      icon: "/api/icons/gadgets?v=1",
+      count: 2,
+      cards: [
+        card(463, "approved", {
+          column_label: "Awaiting merge",
+          owner_session: "tl_lead",
+          approved: "2025-03-04T21:50:00Z",
+          approved_by: "op",
+          carried_on: { next_column: "done", next_label: "Done", final: true },
+        }),
+        card(464, "approved", {
+          column_label: "Awaiting merge",
+          owner_session: "w_2",
+          approved: "2025-03-04T21:51:00Z",
+          approved_by: "op",
+          carried_on: { next_column: "deploy", next_label: "Deploy check", final: false },
+        }),
+      ],
+    },
+  ],
 };
 const empty: Waiting = {
   waiting_columns: [],
@@ -82,6 +109,7 @@ const empty: Waiting = {
   projects: [],
   held: [],
   external: [],
+  approved: [],
   launch_failures: [],
   lead_ends: [],
 };
@@ -148,6 +176,13 @@ describe("counts by kind", () => {
     ]);
     expect(g.ask.count + g.review.count + g.external.count).not.toBe(data.total);
   });
+  // an approved gate card its agent carries on (Awaiting merge after the final Approve) is no review
+  it("approved = gate cards the operator approved that their agent carries on, never counted in the total", () => {
+    expect(g.approved.count).toBe(2);
+    expect(g.approved.rows.map((r) => r.card.id)).toEqual([463, 464]);
+    expect(g.ask.count + g.review.count).toBe(data.total);
+    expect([463, 464].some((id) => g.review.rows.some((r) => r.card.id === id))).toBe(false);
+  });
   it("a non-ask, non-gate waiting card still counts (to review), so the segments add up", () => {
     const w = { ...data, total: 1, projects: [{ slug: "x", icon: null, count: 1, cards: [card(1, "some_col")] }] };
     expect([byKind(w).ask.count, byKind(w).review.count]).toEqual([0, 1]);
@@ -204,7 +239,7 @@ describe("counts by kind", () => {
 });
 
 describe("the plate", () => {
-  it("one segment per kind, most important first: answer, review, external; glyph + count + label", () => {
+  it("one segment per kind, most important first: answer, review, external, approved; glyph + count + label", () => {
     const h = render({ data, error: null, open: false });
     const at = KINDS.map((k) => h.indexOf(`class="ww-seg ww-seg-${k}"`));
     expect(at.every((i) => i >= 0)).toBe(true);
@@ -212,12 +247,13 @@ describe("the plate", () => {
     expect(h).toContain('aria-label="2 to answer · gadgets"');
     expect(h).toContain('<span class="ww-num">2</span><span class="ww-lab">to answer</span>');
     expect(h).toContain('aria-label="2 external · acme/widgets, gadgets"');
+    expect(h).toContain('aria-label="2 approved · gadgets"');
     expect(h).toContain('src="/api/icons/gadgets?v=1"'); // the avatar stack
     expect(h).not.toContain("ww-panel");
     expect(h).not.toContain("aria-controls"); // nothing to control while closed
   });
   it("a kind with no cards has no segment", () => {
-    const w = { ...data, total: 2, projects: [data.projects[0]!], held: [], external: [] };
+    const w = { ...data, total: 2, projects: [data.projects[0]!], held: [], external: [], approved: [] };
     const h = render({
       data: { ...w, projects: [{ ...w.projects[0]!, cards: w.projects[0]!.cards.slice(0, 2) }] },
       error: null,
@@ -226,6 +262,7 @@ describe("the plate", () => {
     expect(h).toContain("ww-seg-ask");
     expect(h).not.toContain("ww-seg-review");
     expect(h).not.toContain("ww-seg-external");
+    expect(h).not.toContain("ww-seg-approved");
   });
   it("more than 3 projects: 3 avatars + '+N' (2 + '+N' under 600 px), never more", () => {
     const many: Waiting = {
@@ -315,8 +352,9 @@ describe("the sheet", () => {
   });
   it("tabs carry every kind's count, zeros included", () => {
     const h = render({ data, error: null, open: true, kind: "ask" });
-    expect(h).toMatch(/id="ww-tab-ask".*?<span class="ww-tab-n">2<\/span> to answer/);
-    expect(h).toMatch(/id="ww-tab-external".*?<span class="ww-tab-n">2<\/span> external/);
+    expect(h).toMatch(/id="ww-tab-ask".*?<span class="ww-tab-n">2<\/span> <span class="ww-tab-lab">to answer/);
+    expect(h).toMatch(/id="ww-tab-external".*?<span class="ww-tab-n">2<\/span> <span class="ww-tab-lab">external/);
+    expect(h).toMatch(/id="ww-tab-approved".*?aria-label="2 approved"/);
   });
   it("ask rows: the question, the owner agent's live state and what blocks it", () => {
     const h = render({ data, error: null, open: true, kind: "ask", agents: { data: agentsData, error: null } });
@@ -333,6 +371,22 @@ describe("the sheet", () => {
     expect(h).toContain("held: CI pending");
     expect(h).not.toContain("check the PR"); // a held gate card's handoff text is not why it waits
     expect(h).toContain('class="ww-row ww-k-external"');
+  });
+  it("approved rows: who carries it on and to where — merging on a final step, the next column otherwise", () => {
+    const h = render({ data, error: null, open: true, kind: "approved" });
+    expect(h).toContain("tl_lead merging");
+    expect(h).toContain("w_2 → Deploy check");
+    expect(h).toContain('class="ww-row ww-k-approved"');
+    expect(h).toContain("Awaiting merge");
+  });
+  it("an approved row without its next step is a server bug: it throws, never a guessed line", () => {
+    expect(() => approvedLine(card(1, "approved"))).toThrow(/: approved row without its agent's next step$/);
+  });
+  it("an approved card nobody owns waits for you (to review) and says why: approved · no agent", () => {
+    const orphan = card(5, "review", { approved: "2025-03-04T21:00:00Z", approved_by: "op" });
+    const w = { ...empty, total: 1, projects: [{ slug: "x", icon: null, count: 1, cards: [orphan] }] };
+    const h = render({ data: w, error: null, open: true, kind: "review" });
+    expect(h).toContain("approved · no agent");
   });
   it("a tab whose count dropped to 0 says so instead of an empty list", () => {
     const w = { ...data, held: [], external: [] };
@@ -418,10 +472,11 @@ describe("the open sheet across reads", () => {
 describe("keyboard and focus", () => {
   it("arrow keys: ←/→ wrap, Home/End jump, other keys are not ours", () => {
     expect(nextKind("ask", "ArrowRight")).toBe("review");
-    expect(nextKind("external", "ArrowRight")).toBe("ask");
-    expect(nextKind("ask", "ArrowLeft")).toBe("external");
+    expect(nextKind("external", "ArrowRight")).toBe("approved");
+    expect(nextKind("approved", "ArrowRight")).toBe("ask");
+    expect(nextKind("ask", "ArrowLeft")).toBe("approved");
     expect(nextKind("review", "Home")).toBe("ask");
-    expect(nextKind("ask", "End")).toBe("external");
+    expect(nextKind("ask", "End")).toBe("approved");
     expect(nextKind("ask", "Enter")).toBeNull();
   });
   it("a tab's arrow key selects the next tab and moves focus to it", () => {
@@ -496,7 +551,7 @@ describe("keyboard and focus", () => {
   it("every segment and tab is a real button (focusable, Enter/Space)", () => {
     const els = view({ data, error: null, open: true, kind: "ask" });
     const kinds = els.filter((e) => e.props["data-kind"]);
-    expect(kinds).toHaveLength(6);
+    expect(kinds).toHaveLength(8);
     expect(kinds.every((e) => e.type === "button" && e.props.type === "button")).toBe(true);
   });
 });
@@ -562,6 +617,8 @@ describe("contrast", () => {
         expect(ratio(val(`ww-t-${k}`), s("mat-thumb")), `${k} selected tab`).toBeGreaterThanOrEqual(4.5);
       }
       expect(ratio(val("ww-t-external"), bg)).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(val("ww-t-approved"), bg)).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(val("ww-t-approved"), s("mat-thumb")), "approved selected tab").toBeGreaterThanOrEqual(4.5);
       expect(ratio(s("ink-faint"), bg)).toBeGreaterThanOrEqual(4.5); // loading / zero
       expect(ratio(s("bad"), bg)).toBeGreaterThanOrEqual(4.5); // error flag
       expect(ratio(s("bad"), mix(s("bad"), 8, bg))).toBeGreaterThanOrEqual(4.5); // the "read failed" row
@@ -612,7 +669,7 @@ describe("width at 390 px", () => {
     const b = src.slice(src.indexOf(sel), src.indexOf("}", src.indexOf(sel)));
     return b.match(new RegExp(`${prop}:\\s*([\\d.]+)px`))?.[1];
   };
-  it("3 segments × (padding + glyph + 2 digits + 2 avatars + '+N' + gaps) + the plate's padding and border ≤ 358", () => {
+  it("ask + review × (padding + glyph + 2 digits + 2 avatars + '+N' + gaps) + external + approved (glyph + count) + the plate's padding and border ≤ 358", () => {
     const pad = Number(narrow.match(/\.ww-seg \{[^}]*padding: 0 ([\d.]+)px/)![1]);
     const gap = Number(px(narrow, ".ww-seg {", "gap"));
     const glyph = Number(px(css, ".ww-glyph {", "width"));
@@ -620,8 +677,18 @@ describe("width at 390 px", () => {
     const more = Number(px(css, ".ww-more {", "min-width")) + 2 * 4; // its padding: 0 4px for "+NN"
     const stack = 18 + (18 - 5) + (more - 5); // two 18 px avatars and "+N", each overlapping 5 px
     const seg = 2 * pad + glyph + digits + stack + 2 * gap; // glyph · count · stack (the label is hidden)
-    const plate = 3 * seg + 2 * 2 + 2 * 3 + 2 * 1; // 2 px between segments · 3 px padding · 1 px border
-    expect(narrow).toMatch(/\.ww-lab,\s*\.ww-av-wide,\s*\.ww-more-wide \{\s*display: none;/);
+    const small = 2 * pad + glyph + digits + gap; // external / approved: glyph · count (their stacks hidden)
+    const plate = 2 * seg + 2 * small + 3 * 2 + 2 * 3 + 2 * 1; // 2 px between segments · 3 px padding · 1 px border
+    expect(narrow).toMatch(
+      /\.ww-lab,\s*\.ww-av-wide,\s*\.ww-more-wide,\s*\.ww-seg-external \.ww-stack,\s*\.ww-seg-approved \.ww-stack \{\s*display: none;/,
+    );
     expect(plate).toBeLessThanOrEqual(390 - 32);
+  });
+  // 4 tabs in the sheet — QA saw the 4th clipped (1280 px) and off-screen (390 px)
+  it("the sheet's 4 tabs shrink, never wrap or overflow; narrow: only the selected tab keeps its label", () => {
+    expect(css).toMatch(/\.ww-tab \{\s*flex: 1 1 0;\s*min-width: 0;\s*white-space: nowrap;/);
+    expect(narrow).toMatch(/\.ww-tab\[aria-selected="false"\] \.ww-tab-lab \{\s*display: none;/);
+    // a label too long for its tab ellipsizes inside it: the row never grows past the sheet
+    expect(css).toMatch(/\.ww-tab-lab \{\s*min-width: 0;\s*overflow: hidden;\s*text-overflow: ellipsis;/);
   });
 });

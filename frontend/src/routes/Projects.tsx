@@ -259,12 +259,21 @@ function Boards() {
       <h2>
         Boards{data ? ` · ${data.boards.length}` : ""}
         {data && (
-          <span
-            className={`ak-root kb-waiting${data.waiting === 0 ? " zero" : ""}`}
-            style={data.theme}
-            title={`cards in ${data.waiting_columns.map((k) => data.columns.find((c) => c.key === k)?.label ?? k).join(" + ")} on every board`}
-          >
-            <b>{data.waiting}</b> waiting for you
+          <span className="ak-root kb-h2-pills" style={data.theme}>
+            <span
+              className={`kb-waiting${data.waiting === 0 ? " zero" : ""}`}
+              title={`cards in ${data.waiting_columns.map((k) => data.columns.find((c) => c.key === k)?.label ?? k).join(" + ")} on every board`}
+            >
+              <b>{data.waiting}</b> waiting for you
+            </span>
+            {data.approved > 0 && (
+              <span
+                className="kb-held kb-carried"
+                title="gate cards you approved that their agent carries on (merging, deploying): not counted"
+              >
+                <b>{data.approved}</b> approved · agent on it
+              </span>
+            )}
           </span>
         )}
       </h2>

@@ -14,6 +14,7 @@ const card = (id: number, column_label: string, gate_hold: string | null = null)
   column_type: null,
   gate_hold,
   blocked_external: null,
+  approved_carried_on: false,
   path: "/",
 });
 

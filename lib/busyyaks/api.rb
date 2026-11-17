@@ -121,7 +121,7 @@ module Busyyaks
         live: s.live.slice(:tool, :elapsed_s, :tokens, :card),
         cards: s.open_cards.map do |c|
           agent_card(c, column_label: c[:column_label], column_type: c[:column_type], gate_hold: c[:gate_hold],
-                        blocked_external: c[:blocked_external])
+                        blocked_external: c[:blocked_external], approved_carried_on: c[:approved_carried_on])
         end,
         cards_finished: s.finished_cards.size,
         subagents: s.subagents, engines: s.engines, title: s.title, cwd: s.cwd, model: s.model,

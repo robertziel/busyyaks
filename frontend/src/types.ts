@@ -175,6 +175,8 @@ export type AgentCard = {
   gate_hold: string | null;
   // flagged blocked_external only: its reason — it waits for the world, not for the operator
   blocked_external: string | null;
+  // approved in a gate, its agent carrying it on: not waiting for the operator
+  approved_carried_on: boolean;
   path: string;
 };
 // options = the question's choices (posted as the operator's comment = the answer); [] = answer with a comment, or a
@@ -281,6 +283,7 @@ export type BoardsData = {
   columns_order: string[];
   waiting_columns: string[];
   waiting: number;
+  approved: number; // gate cards the operator approved that their agent carries on: never in waiting
   theme: Record<string, string>;
   boards: {
     project: string;
@@ -290,6 +293,7 @@ export type BoardsData = {
     counts: Record<string, number>;
     total: number;
     waiting: number; // the waiting columns' cards + the needs_operator cards elsewhere (never a blocked_external-only one)
+    approved: number; // approved gate cards its agent carries on
     flagged: number;
     backlog_md: boolean;
   }[];

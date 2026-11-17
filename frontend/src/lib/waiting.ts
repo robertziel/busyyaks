@@ -1,5 +1,5 @@
 // The "waiting for you" widget's data (GET /api/waiting, the engine's Api#waiting) and the pure bits the view shows.
-import type { LaunchFailure, LeadEnd } from "../vendor/agents_kanban";
+import type { CarriedOn, LaunchFailure, LeadEnd } from "../vendor/agents_kanban";
 import { projectPath } from "./format";
 
 // kind: "ask" = flagged needs_operator (a question, in whatever column) · "review" = in a gate column (work to check, a
@@ -18,6 +18,11 @@ export type WaitingCard = {
   handoff_first_line?: string | null;
   gate_hold?: string | null;
   owner_session: string | null;
+  // every card, from the engine: when / who approved it (null = not approved) and — carried on by its agent —
+  // where the agent takes it next (final = it merges); an approved card nobody owns waits with carried_on null
+  approved: string | null;
+  approved_by: string | null;
+  carried_on: CarriedOn | null;
 };
 export type WaitingProject = { slug: string; icon: string | null; count: number; cards: WaitingCard[] };
 // projects: the cards waiting for the operator (total = their sum). held: gate cards CI holds (not approvable now);
@@ -32,18 +37,27 @@ export type Waiting = {
   projects: WaitingProject[];
   held: WaitingProject[];
   external: WaitingProject[];
+  // gate cards the operator approved that their agent carries on (Awaiting merge after the final Approve):
+  // shown, never counted as waiting for you
+  approved: WaitingProject[];
   launch_failures: LaunchFailure[];
   lead_ends: LeadEnd[];
 };
 
 export const cardHref = (slug: string, id: number) => `${projectPath(slug)}?tab=board&card=${id}`;
 
-// The widget's three segments, by what each asks of the operator, most important first: a question to
+// The widget's segments, by what each asks of the operator, most important first: a question to
 // answer · work to review (every other waiting card: ask + review = total) · waiting on CI or the world (held +
-// external: shown, never counted as waiting for you, never in the dock badge).
-export type Kind = "ask" | "review" | "external";
-export const KINDS: readonly Kind[] = ["ask", "review", "external"];
-export const KIND_LABEL: Record<Kind, string> = { ask: "to answer", review: "to review", external: "external" };
+// external) · approved, its agent carrying it on — the last two shown, never counted as waiting for you,
+// never in the dock badge.
+export type Kind = "ask" | "review" | "external" | "approved";
+export const KINDS: readonly Kind[] = ["ask", "review", "external", "approved"];
+export const KIND_LABEL: Record<Kind, string> = {
+  ask: "to answer",
+  review: "to review",
+  external: "external",
+  approved: "approved",
+};
 export type KindProject = { slug: string; name: string; icon: string | null; count: number };
 export type KindRow = { slug: string; name: string; icon: string | null; card: WaitingCard };
 export type KindGroup = { kind: Kind; count: number; projects: KindProject[]; rows: KindRow[] };
@@ -77,6 +91,7 @@ export function byKind(w: Waiting): Record<Kind, KindGroup> {
     ask: group("ask", w.projects, (c) => c.kind === "ask"),
     review: group("review", w.projects, (c) => c.kind !== "ask"),
     external: group("external", [...w.external, ...w.held], () => true),
+    approved: group("approved", w.approved, () => true),
   };
 }
 
@@ -86,15 +101,16 @@ export const segmentLabel = (g: KindGroup) =>
 
 // the tab list's arrow keys (roving focus): ←/→ wrap, Home/End jump; anything else → null (not ours)
 const STEP: Record<Kind, { next: Kind; prev: Kind }> = {
-  ask: { next: "review", prev: "external" },
+  ask: { next: "review", prev: "approved" },
   review: { next: "external", prev: "ask" },
-  external: { next: "ask", prev: "review" },
+  external: { next: "approved", prev: "review" },
+  approved: { next: "ask", prev: "external" },
 };
 export function nextKind(current: Kind, key: string): Kind | null {
   if (key === "ArrowRight") return STEP[current].next;
   if (key === "ArrowLeft") return STEP[current].prev;
   if (key === "Home") return "ask";
-  if (key === "End") return "external";
+  if (key === "End") return "approved";
   return null;
 }
 
@@ -118,4 +134,13 @@ export function age(iso: string | null, at: number): string {
   if (d < 3600) return `${Math.floor(d / 60)}m`;
   if (d < 86400) return `${Math.floor(d / 3600)}h`;
   return `${Math.floor(d / 86400)}d`;
+}
+
+// an approved row's line (the tab already says approved): who carries it on and to where — "shop_lead
+// merging" / "shop_lead → Deploy check". A row in the approved list without carried_on or an owner is a server bug: it
+// throws, never reads as a guess
+export function approvedLine(c: WaitingCard): string {
+  const on = c.carried_on;
+  if (!on || !c.owner_session) throw new Error(`card ${c.id}: approved row without its agent's next step`);
+  return on.final ? `${c.owner_session} merging` : `${c.owner_session} → ${on.next_label}`;
 }

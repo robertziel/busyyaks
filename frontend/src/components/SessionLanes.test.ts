@@ -46,6 +46,7 @@ const card = (id: number, title: string) => ({
   column_type: "working",
   gate_hold: null,
   blocked_external: null,
+  approved_carried_on: false,
   path: `/projects/p?tab=board&card=${id}`,
 });
 

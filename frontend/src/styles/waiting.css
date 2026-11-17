@@ -28,6 +28,7 @@
   --ww-f-review: var(--vivid-orange);
   --ww-t-review: color-mix(in srgb, var(--vivid-orange) 50%, var(--ink));
   --ww-t-external: var(--ink-faint);
+  --ww-t-approved: color-mix(in srgb, var(--ok) 60%, var(--ink));
 }
 :root[data-skin="dark"] .waiting-widget {
   --ww-plate: var(--panel-2);
@@ -114,13 +115,17 @@
 .ww-seg-external {
   color: var(--ww-t-external);
 }
+.ww-seg-approved {
+  color: var(--ww-t-approved);
+}
 .ww-seg-ask:hover {
   background: color-mix(in srgb, var(--ww-f-ask) 22%, var(--ww-plate));
 }
 .ww-seg-review:hover {
   background: color-mix(in srgb, var(--ww-f-review) 24%, var(--ww-plate));
 }
-.ww-seg-external:hover {
+.ww-seg-external:hover,
+.ww-seg-approved:hover {
   background: var(--mat-fill-2);
 }
 .ww-seg:active {
@@ -218,7 +223,7 @@
 
 /* ---- the sheet: tabs by kind, rows carry the project ---- */
 .ww-panel {
-  width: 380px;
+  width: 440px;
   max-width: 100%;
   max-height: min(64vh, 560px);
   overflow: hidden;
@@ -248,7 +253,9 @@
   background: var(--mat-fill);
 }
 .ww-tab {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
   display: inline-flex;
   justify-content: center;
   align-items: center;
@@ -266,6 +273,11 @@
   white-space: nowrap;
   cursor: pointer;
 }
+.ww-tab-lab {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .ww-tab .ww-glyph {
   width: 12px;
   height: 12px;
@@ -280,6 +292,9 @@
 }
 .ww-tab-review[aria-selected="true"] {
   color: var(--ww-t-review);
+}
+.ww-tab-approved[aria-selected="true"] {
+  color: var(--ww-t-approved);
 }
 .ww-tab:focus-visible {
   outline: 2px solid var(--ink);
@@ -501,7 +516,8 @@
     min-height: 48px;
   }
 }
-/* narrow: the labels go, the counts, glyphs and avatars stay (the plate's width never depends on the project count) */
+/* narrow: the labels go, the counts, glyphs and avatars stay (the plate's width never depends on the project count);
+   the two kinds never counted as waiting for you (external, approved) keep only glyph + count */
 @media (max-width: 600px) {
   .ww-seg {
     gap: 5px;
@@ -509,11 +525,16 @@
   }
   .ww-lab,
   .ww-av-wide,
-  .ww-more-wide {
+  .ww-more-wide,
+  .ww-seg-external .ww-stack,
+  .ww-seg-approved .ww-stack {
     display: none;
   }
   .ww-more-narrow {
     display: inline-grid;
+  }
+  .ww-tab[aria-selected="false"] .ww-tab-lab {
+    display: none;
   }
   .ww-panel {
     width: calc(100vw - 32px);

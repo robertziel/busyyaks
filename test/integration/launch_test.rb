@@ -238,6 +238,23 @@ mtime: Busyyaks::Clock.now.to_f, }],
     assert_equal ["blocked", [id], nil], [s["state"], s["asks"].map { |a| a["id"] }, s["cards"][0]["blocked_external"]]
   end
 
+  # a gate card the operator approved, its agent carrying it on (Ready to merge → Merged), is no review —
+  # its owner session is not in review, its card row says approved
+  def test_an_approved_gate_card_does_not_put_its_owner_session_in_review
+    fake_launcher
+    kb = Busyyaks::Kanban.default
+    id = kb.create(slug: "group/repo", title: "merging", by: "op", column: "ready")
+    kb.register_session(session: "elsewhere", project: "group/repo", type: "plain", launcher: "fullclaude", by: "op")
+    kb.set_owner(id, session: "elsewhere", by: "op")
+    s = agent(api(:get, "/api/agents"), "elsewhere")
+    assert_equal ["review", [id], false], [s["state"], s["reviews"].map { |r| r["id"] }, s["cards"][0]["approved_carried_on"]],
+                 "unapproved in the gate: the operator's to approve"
+    Hanami.app["db.gateway"].connection[:cards].where(id: id).update(approved_at: 1_700_000_000, approved_by: "op")
+    s = agent(api(:get, "/api/agents"), "elsewhere")
+    refute_equal "review", s["state"]
+    assert_equal [[], [[id, true]]], [s["reviews"], s["cards"].map { |c| c.values_at("id", "approved_carried_on") }]
+  end
+
   # a session's handed-over card (the handoff column) waits for the operator's review: state review, the card + its PR linked
   def test_a_handed_over_card_puts_its_owner_session_in_review
     fake_launcher

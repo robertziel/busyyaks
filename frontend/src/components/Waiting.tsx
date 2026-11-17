@@ -13,6 +13,7 @@ import { useLiveRev } from "../lib/live";
 import { readWaiting } from "../lib/appBadge";
 import {
   age,
+  approvedLine,
   byKind,
   cardHref,
   KIND_LABEL,
@@ -77,6 +78,16 @@ export function KindGlyph({ kind }: { kind: Kind }) {
           <circle cx="6" cy="6" r="1.7" fill="currentColor" />
         </>
       )}
+      {kind === "approved" && (
+        <path
+          d="M2 6.3 4.8 9 10 3.2"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
       {kind === "external" && (
         <>
           <circle cx="6" cy="6" r="4.7" fill="none" stroke="currentColor" strokeWidth="1.4" />
@@ -112,6 +123,9 @@ function Stack({ g }: { g: KindGroup }) {
 function rowLine(r: KindRow, kind: Kind): string | null {
   const c = r.card;
   if (kind === "external") return c.blocked_first_line ?? (c.gate_hold ? `held: ${c.gate_hold}` : null);
+  if (kind === "approved") return approvedLine(c);
+  // approved, but no session owns it to carry it on: it waits for you — say why first
+  if (c.approved && !c.carried_on && !c.needs_operator) return "approved · no agent";
   return c.question_first_line ?? c.handoff_first_line ?? null;
 }
 
@@ -250,13 +264,14 @@ export function WaitingView({
                 data-kind={k}
                 className={`ww-tab ww-tab-${k}`}
                 aria-selected={k === kind}
+                aria-label={`${groups[k].count} ${KIND_LABEL[k]}`}
                 aria-controls="ww-list"
                 tabIndex={k === kind ? 0 : -1}
                 onClick={() => onTab?.(k)}
                 onKeyDown={tabKey}
               >
                 <KindGlyph kind={k} />
-                <span className="ww-tab-n">{groups[k].count}</span> {KIND_LABEL[k]}
+                <span className="ww-tab-n">{groups[k].count}</span> <span className="ww-tab-lab">{KIND_LABEL[k]}</span>
               </button>
             ))}
           </div>
