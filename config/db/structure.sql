@@ -349,6 +349,7 @@ CREATE TABLE `gh_pr_checks`(
   `merge_state` varchar(255),
   `auto_merge` boolean,
   `dirty` integer,
+  `base_sha` varchar(255),
   UNIQUE(`repo`, `ref`)
 );
 CREATE TABLE `boards`(
@@ -533,5 +534,6 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261208046700_pr_closed_reason.rb'),
 ('20261208468000_pr_base_merge_flags.rb'),
 ('20261208472000_gh_hook_dirty.rb'),
+('20261208497000_pr_checks_base_sha.rb'),
 ('20261209492000_progress_watch.rb'),
 ('20261217523000_runtime_settings.rb');

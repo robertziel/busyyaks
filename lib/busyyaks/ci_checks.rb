@@ -135,7 +135,9 @@ module Busyyaks
       #   - the final step (the public merge) = the `public` PR, and only once the local PR is MERGED.
       # None assigned, one that is no PR of its repo, or an enrolment the scanner could not read → Unavailable with the
       # reason. An open PR a step reads must also be mergeable as it stands (#mergeable): not a draft, on its
-      # side's base branch, no conflicts, no GitHub auto-merge, its mergeability computed (behind: warned, not refused).
+      # side's base branch, no GitHub auto-merge, its mergeability computed (behind: warned, not refused). A conflict
+      # with its base does not refuse: the green answer carries rebase: and the engine accepts the approval marked
+      # needs rebase — the owner rebases, re-runs CI and merges on green.
       # Asked for a HANDOFF (the engine passes handoff_ci_url = its ci_url, a key only a handoff carries), a green
       # answer is also checked against that ci_url: it must be the build of a required context on the commit the answer
       # read (`builds`) — never an older build, nor a URL naming no build. An Approve or a watch pass asks only whether
@@ -245,8 +247,12 @@ module Busyyaks
       def step_checks(card, step)
         project = @projects.call(card[:project_slug])
         unless project && project[:local_mode]
-          row = pr_checks(card)
-          return mergeable(row, row && target(card).first, row&.dig(:number), nil, nil)
+          repo, ref = target(card)
+          row = repo ? read(repo, ref) : nil # pr_checks
+          merged = row.nil? && repo && merged_since_mark(card, repo, Integer(ref.delete_prefix("pr:")), nil)
+          return merged if merged
+
+          return mergeable(row, repo, row&.dig(:number), nil, nil)
         end
 
         repo, number = local_pr(card, project)
@@ -285,17 +291,22 @@ module Busyyaks
         _, number = PrStates.assigned(card, PrStates::ROLES[:public], repo)
         raise Unavailable, unassigned(card, PrStates::ROLES[:public], repo) unless number
 
-        mergeable(read(repo, "pr:#{number}"), repo, number, "public", -> { base_of(card, project, :public_base) })
+        merged_since_mark(card, repo, number, "public") ||
+          mergeable(read(repo, "pr:#{number}"), repo, number, "public", -> { base_of(card, project, :public_base) })
       rescue PrStates::Invalid => e
         raise Unavailable, e.message
       end
 
       # An open PR the approval would let through only when it can merge as it stands — refused (state
       # "blocked" + the reason) when it is a draft, is based on another branch than its side's (want_base; nil = a
-      # plain project's PR, any base; a Proc: asked only for a read PR), conflicts with its base, has GitHub's
-      # auto-merge on (GitHub would merge it on green, without the board's approval), or GitHub is still computing
-      # whether it merges (mergeable null: never guessed). `behind` is NOT refused: the working branch moves on every
-      # other card's merge, and a conflict never parks a card — the rail warns, the merge itself is where it counts.
+      # plain project's PR, any base; a Proc: asked only for a read PR), has GitHub's auto-merge on (GitHub would merge
+      # it on green, without the board's approval), or GitHub is still computing whether it merges (mergeable null:
+      # never guessed). `behind` is NOT refused: the working branch moves on every other card's merge, and a conflict
+      # never parks a card — the rail warns, the merge itself is where it counts. Conflicts with its base are not
+      # refused either: the row gains rebase: {state: "conflicts", base:, base_sha:} — the engine accepts the approval
+      # (its CI still decides: a red or pending one refuses first), marks the card needs rebase and holds its onward
+      # move until an answer comes back green without it. A conflicting row whose base commit was not read yet is
+      # refused as not read, never guessed.
       # Not read yet (unpolled) or no open PR → the row as it is.
       def mergeable(row, repo, number, role, want_base)
         return row unless row && CHECKED.include?(row[:state])
@@ -308,7 +319,6 @@ module Busyyaks
               elsif row[:draft] then "#{pr} is a draft"
               elsif want_base && row[:base] != want_base
                 "#{pr} is based on #{row[:base]}, not #{want_base}"
-              elsif row[:merge_state] == "conflicts" then "#{pr} has conflicts with #{row[:base]}"
               elsif row[:auto_merge]
                 "#{pr} has GitHub auto-merge on: GitHub would merge it on green CI without the board's approval — " \
                   "turn it off (gh pr merge --disable-auto #{number} -R #{repo})"
@@ -316,8 +326,14 @@ module Busyyaks
                 "GitHub is still computing whether #{pr} merges cleanly (asked now — try again in a minute)"
               elsif row[:merge_state]&.start_with?(PrStates::UNKNOWN) # a value busyyaks does not know: never passed
                 "#{pr}'s mergeability is #{row[:merge_state]}: GitHub answered a state busyyaks does not know"
+              elsif row[:merge_state] == "conflicts" && !row[:base_sha]
+                "#{pr} has conflicts with #{row[:base]}; its base commit is not read yet (asked now — try again in a " \
+                  "minute)"
               end
-        why ? blocked(number, why) : row
+        return blocked(number, why) if why
+        return row unless row[:merge_state] == "conflicts"
+
+        row.merge(rebase: { state: "conflicts", base: row[:base], base_sha: row[:base_sha] })
       end
 
       # The branch the card's `side` PR must be based on (the scanner's local_base / public_base); not known → the
@@ -400,14 +416,25 @@ module Busyyaks
       end
 
       # The merge:<N> answer; anything but green carries what was read (the shas) as the refusal's reason.
-      def merge_ci(repo, number)
+      def merge_ci(repo, number, role = "local")
         row = answer(repo, "merge:#{number}")
         return row if %w[success unpolled].include?(row[:state])
 
         # the CI's own state is kept (a red merge CI is "failure": the engine's gate watch pings the owner), the words
         # name what was read
         { number: number, state: row[:state], finished_at: row[:finished_at],
-          reason: "jenkins/ci for the local PR ##{number} merge is #{row[:state]}: #{row[:detail]}", }
+          reason: "#{role == 'local' ? 'jenkins/ci' : 'CI'} for the #{[role, 'PR'].compact.join(' ')} ##{number} merge " \
+                  "is #{row[:state]}: #{row[:detail]}", }
+      end
+
+      # A card the engine marked needs rebase (it carries `needs_rebase`) whose step PR has since MERGED —
+      # the rebase landed and the agent merged before a watch pass cleared the mark: the merge commit's CI answers (green
+      # clears the mark, red / pending holds it), never "no PR" (which would hold the card for good). Only for a marked
+      # card: an unmarked approval of a merged PR is refused as before. → nil when not marked or not merged.
+      def merged_since_mark(card, repo, number, role)
+        return nil unless card[:needs_rebase] && answer(repo, "pr:#{number}")[:state] == "merged"
+
+        merge_ci(repo, number, role)
       end
 
       # Did the operator approve the first step after the card's newest handoff INTO that step's gate? Read off the
@@ -521,7 +548,8 @@ module Busyyaks
       def answered(row)
         out = { number: row[:number], state: row[:state], finished_at: row[:finished_at] }
         out[:head] = row[:head] if row[:head] # the PR head sha (a pr: row; a merge: row has none)
-        %i[base draft merge_state auto_merge].each { |k| out[k] = row[k] unless row[k].nil? } # an open pr: row's
+        # an open pr: row's (base_sha: the base commit GitHub compared the PR with)
+        %i[base base_sha draft merge_state auto_merge].each { |k| out[k] = row[k] unless row[k].nil? }
         out[:builds] = JSON.parse(row[:builds]) if row[:builds] # the required checks' build URLs
         row[:detail] ? out.merge(detail: row[:detail]) : out
       end
@@ -595,7 +623,8 @@ module Busyyaks
         end
 
         rows.each_with_index do |row, i|
-          cleared = { detail: nil, head: nil, builds: nil, base: nil, draft: nil, merge_state: nil, auto_merge: nil }
+          cleared = { detail: nil, head: nil, builds: nil, base: nil, base_sha: nil, draft: nil, merge_state: nil,
+                      auto_merge: nil, }
           answer = cleared.merge(poll(row)).merge(checked_at: now, error: nil)
           @db[:gh_pr_checks].where(id: row[:id]).update(answer)
         rescue GithubNetwork::RateLimited => e # the token's limit: the rest of the batch would fail the same way
@@ -657,8 +686,10 @@ module Busyyaks
         end
 
         sha = pr.dig("head", "sha")
-        # head: the engine's approvable-now check; base · draft · merge_state · auto_merge: the gate's
-        { number: pr["number"], head: sha, base: pr.dig("base", "ref"), draft: pr["draft"] == true,
+        # head: the engine's approvable-now check; base · draft · merge_state · auto_merge: the gate's; base_sha: what a
+        # conflicting PR is rebased onto
+        { number: pr["number"], head: sha, base: pr.dig("base", "ref"), base_sha: pr.dig("base", "sha"),
+          draft: pr["draft"] == true,
           merge_state: PrStates.merge_state(pr), auto_merge: !pr["auto_merge"].nil?, }.merge(checks(repo, sha))
       end
 

@@ -356,11 +356,34 @@ class CiChecksTest < Minitest::Test
     assert_equal "success", @port.pr_checks(@kb.card(@id))[:state], "the idle watch still reads its checks"
   end
 
-  # conflicts are refused; GitHub's mergeable null (it is still computing) is refused as not read, never guessed either
-  # way; behind is NOT refused (the working branch moves on every merge — a conflict never parks a card)
+  # conflicts are NOT refused: the green answer carries rebase: with the base and the base commit, the engine accepts
+  # the approval marked needs rebase; GitHub's mergeable null (it is still computing) is refused as not read, never
+  # guessed either way; behind is NOT refused (the working branch moves on every merge — a conflict never parks a card)
   def test_mergeable_state_is_tagged_and_null_is_computing
-    row = local_gate(PR.merge("mergeable" => false, "mergeable_state" => "dirty"))
-    assert_equal "the local PR #112 has conflicts with local", row[:reason]
+    sha = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"
+    dirty = PR.merge("mergeable" => false, "mergeable_state" => "dirty", "base" => { "ref" => "local", "sha" => sha })
+    row = local_gate(dirty)
+    assert_equal ["success", { state: "conflicts", base: "local", base_sha: sha }], row.values_at(:state, :rebase)
+    assert_nil row[:reason]
+    # red CI still refuses first: the engine never sees the rebase: of a red answer as approvable
+    @http.statuses = [{ "state" => "failure", "updated_at" => finish_at(@now - 5) }]
+    @poller.run
+    assert_equal "failure", @port.approval_checks(@kb.card(@id), LOCAL_STEP)[:state]
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now - 5) }]
+    # a conflicting row whose base commit was not read (GitHub gave none) is refused as not read, never guessed
+    @http.pulls = [dirty.merge("base" => { "ref" => "local" })]
+    @poller.run
+    assert_equal ["blocked", "the local PR #112 has conflicts with local; its base commit is not read yet (asked now " \
+                             "— try again in a minute)",],
+                 @port.approval_checks(@kb.card(@id), LOCAL_STEP).values_at(:state, :reason)
+    # auto-merge on a conflicting PR still refuses (its own reason)
+    @http.pulls = [dirty.merge("auto_merge" => {})]
+    @poller.run
+    assert_match(/has GitHub auto-merge on/, @port.approval_checks(@kb.card(@id), LOCAL_STEP)[:reason])
+    # rebased: clean again → no rebase:
+    @http.pulls = [PR.merge("base" => { "ref" => "local", "sha" => sha })]
+    @poller.run
+    assert_nil @port.approval_checks(@kb.card(@id), LOCAL_STEP)[:rebase]
     @http.pulls = [PR.merge("mergeable_state" => "behind")]
     @poller.run
     assert_equal %w[success behind], @port.approval_checks(@kb.card(@id), LOCAL_STEP).values_at(:state, :merge_state),
@@ -474,6 +497,55 @@ class CiChecksTest < Minitest::Test
     @poller.run
     assert_equal [112, "success"], @port.approval_checks(card, deploy).values_at(:number, :state)
     assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason]
+  end
+
+  # a card approved with needs rebase whose PR then MERGED (the agent merged before a watch
+  # pass cleared the mark) is answered with the merge commit's CI — never "no PR", which would hold it for good; an
+  # unmarked card's merged PR is answered as before (nil = no open PR)
+  def test_a_marked_card_whose_pr_merged_is_answered_by_its_merge_commit
+    enrol!
+    @conn[:projects].where(slug: "o-r").update(local_mode: nil)
+    assign!("pr", "https://github.com/o/r_local/pull/112")
+    @http.pulls = [MERGED]
+    @http.statuses_by_sha["m1" * 20] = [{ "state" => "pending", "updated_at" => finish_at(@now) }]
+    card = @kb.card(@id)
+    marked = card.merge(needs_rebase: { "base" => "local", "base_sha" => "b0" * 20, "state" => "conflicts" })
+    @port.approval_checks(card, LOCAL_STEP)
+    @poller.run
+    assert_nil @port.approval_checks(card, LOCAL_STEP), "unmarked: a merged PR is no open PR, as before"
+    assert_equal "unpolled", @port.approval_checks(marked, LOCAL_STEP)[:state], "marked: its merge commit's CI is asked"
+    @poller.run
+    assert_equal "pending", @port.approval_checks(marked, LOCAL_STEP)[:state]
+    assert_match(/\ACI for the PR #112 merge is pending: merge commit m1m1m1m/,
+                 @port.approval_checks(marked, LOCAL_STEP)[:reason])
+    @http.statuses_by_sha["m1" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @poller.run
+    assert_equal [112, "success"], @port.approval_checks(marked, LOCAL_STEP).values_at(:number, :state)
+  end
+
+  # the public final step: a marked card whose public PR merged is answered by that merge's CI on
+  # the public repo; unmarked → the merged public PR is no open PR, as before
+  def test_a_marked_card_whose_public_pr_merged_is_answered_by_its_merge_commit
+    enrol!
+    assign!("local", "https://github.com/o/r_local/pull/112")
+    assign!("public", "https://github.com/o/r/pull/5")
+    merged_pub = PUB.merge("state" => "closed", "merged_at" => "2026-11-09T11:00:00Z", "merge_commit_sha" => "p5" * 20)
+    @http.pulls = [merged_pub, MERGED]
+    @http.statuses_by_sha["p5" * 20] = [{ "state" => "failure", "updated_at" => finish_at(@now) }]
+    card = @kb.card(@id)
+    marked = card.merge(needs_rebase: { "base" => "main", "base_sha" => "b0" * 20, "state" => "conflicts" })
+    3.times do # the local merge, the public PR, then its merge commit's CI
+      @port.approval_checks(marked, PUBLIC_STEP)
+      @poller.run
+    end
+    assert_nil @port.approval_checks(card, PUBLIC_STEP), "unmarked: a merged public PR is no open PR, as before"
+    red = @port.approval_checks(marked, PUBLIC_STEP)
+    assert_equal ["failure", 5], red.values_at(:state, :number)
+    assert_match(/\ACI for the public PR #5 merge is failure: merge commit p5p5p5p/, red[:reason])
+    assert(@http.requests.any? { |u| u.include?("/repos/o/r/commits/#{'p5' * 20}/status?") }, "on the public repo")
+    @http.statuses_by_sha["p5" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @poller.run
+    assert_equal [5, "success"], @port.approval_checks(marked, PUBLIC_STEP).values_at(:number, :state)
   end
 
   # Jenkins coalesces the working branch's builds: a merge commit with no checks of its own passes on the branch HEAD's
