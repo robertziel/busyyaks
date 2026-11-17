@@ -125,7 +125,10 @@ services:
                    HANAMI_WEB_CONCURRENCY: "${HANAMI_WEB_CONCURRENCY:?}", LAUNCHER_SOCKET: /launcher/launcher.sock,
                    # the speech server for the card dialog's mic (config/busyyaks.yml dictation): web only,
                    # declared in .env, empty with `dictation: none` (config/puma.rb checks they match)
-                   DICTATION_URL: "${DICTATION_URL?}", DICTATION_TOKEN: "${DICTATION_TOKEN?}" }
+                   DICTATION_URL: "${DICTATION_URL?}", DICTATION_TOKEN: "${DICTATION_TOKEN?}",
+                   # the GitHub webhook's HMAC secret (config/busyyaks.yml github_hook; card #472): web only,
+                   # declared in .env, empty with `github_hook: none` (config/puma.rb checks they match)
+                   GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET?}" }
     ports: ["127.0.0.1:${WEB_HOST_PORT:?}:${WEB_CONTAINER_PORT:?}"]
     depends_on:
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)

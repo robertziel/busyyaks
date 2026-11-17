@@ -9,7 +9,8 @@ class ConfigTest < Minitest::Test
   OK = { "roots" => [{ "path" => "/p", "prefix" => "" }], "search_depth" => 2, "owner_remotes" => ["github.com/me/"],
          "author_emails" => ["Me@x.io"], "window_days" => 7, "reap_protect" => [], "auth" => { "provider" => "none" },
          "agents" => { "collector" => "none" }, "dictation" => "none",
-         "terminal" => TERMINAL_DENY, "ci" => CI_SETTINGS, "skills" => SKILLS_SETTINGS, "launch" => LAUNCH_CLAUDE, }.freeze
+         "terminal" => TERMINAL_DENY, "github_hook" => "none", "ci" => CI_SETTINGS, "skills" => SKILLS_SETTINGS,
+         "launch" => LAUNCH_CLAUDE, }.freeze
 
   def test_valid = assert_equal ["me@x.io"], Busyyaks::Config.new(OK).author_emails
 
@@ -67,6 +68,17 @@ class ConfigTest < Minitest::Test
       e = assert_raises(Busyyaks::Config::Invalid, bad.inspect) { Busyyaks::Config.new(OK.merge("terminal" => bad)) }
       assert_match msg, e.message
     end
+  end
+
+  # card #472: the GitHub webhook is stated — none, or its limits (Busyyaks::GithubHook.parse!)
+  def test_github_hook_is_required_none_or_its_limits
+    assert_nil Busyyaks::Config.new(OK).github_hook
+    on = { "max_body_bytes" => 1_048_576, "wake_seconds" => 5 }
+    assert_equal 5, Busyyaks::Config.new(OK.merge("github_hook" => on)).github_hook.wake_seconds
+    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.except("github_hook")) }
+    assert_match(/missing keys: github_hook/, e.message)
+    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.merge("github_hook" => on.except("wake_seconds"))) }
+    assert_match(/github_hook must be `none` or a mapping with exactly/, e.message)
   end
 
   # sign-in is chosen, never defaulted

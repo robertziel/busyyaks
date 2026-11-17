@@ -98,6 +98,7 @@ agents: { collector: { snapshot: $w/collector/snapshot.json, read_socket: $w/col
 dictation: none
 terminal: { public_host: deny, max_open: 4 }
 skills: { max_bytes: 65536, max_start_bytes: 32768, project: deny, local_dir: null }
+github_hook: none
 ci:
   max_pending_minutes: 60
   required:
@@ -147,6 +148,7 @@ POSTGRES_PASSWORD=
 POSTGRES_LOCK_TIMEOUT_MS=
 GITHUB_LOGIN=dev-example
 GITHUB_TOKEN=unused
+GITHUB_WEBHOOK_SECRET=
 TEAM_TERMINAL_URL="https://terminal.example.com/#s={session}&sock={socket}"
 CLAUDE_SESSIONS_DIR=$w/session-records
 CLAUDE_SESSION_URL="https://claude.example.com/{id}"

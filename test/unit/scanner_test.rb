@@ -22,7 +22,7 @@ class ScannerTest < Minitest::Test
                          "owner_remotes" => owner_remotes, "author_emails" => ["me@x.io"], "window_days" => 7,
                          "reap_protect" => [], "auth" => { "provider" => "none" },
                          "agents" => { "collector" => "none" }, "dictation" => "none", "terminal" => TERMINAL_DENY,
-      "ci" => CI_SETTINGS, "skills" => SKILLS_SETTINGS,
+      "github_hook" => "none", "ci" => CI_SETTINGS, "skills" => SKILLS_SETTINGS,
                          "launch" => LAUNCH_CLAUDE)
   end
 

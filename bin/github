@@ -13,6 +13,7 @@ require "busyyaks/pr_states"
 require "busyyaks/github_pollers"
 require "busyyaks/github_prs"
 require "busyyaks/config"
+require "busyyaks/github_hook"
 require "busyyaks/clock"
 require "busyyaks/runtime_settings"
 
@@ -34,6 +35,10 @@ Thread.new do
   gate = Busyyaks::GithubPollers.new(db: data.db)
   loop do
     ci_interval = Busyyaks::RuntimeSettings.get(data.db)[:github_ci_interval_seconds]
+    # GitHub webhooks (config github_hook; card #472) mark rows dirty: between two full polls, every wake_seconds the
+    # dirty ones are polled at once. Off → a plain sleep.
+    waker = Busyyaks::GithubHook::Waker.new(db: data.db, settings: config.github_hook,
+                                             wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval))
     client = Busyyaks::GithubNetwork::Client.new(token: token) # one per tick: its counters are the tick's cost
     poller = Busyyaks::CiChecks::Poller.new(db: data.db, client: client, gate: gate,
                                             wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval),
@@ -59,7 +64,18 @@ Thread.new do
     rescue StandardError => e
       puts "pr pollers status FAILED #{e.class}: #{e.message}"
     end
-    sleep ci_interval
+    # the wakes until the next full poll: each its own client, so its cost is recorded as a tick of its own
+    waker.wait(ci_interval) do
+      wake = Busyyaks::GithubNetwork::Client.new(token: token)
+      n = Busyyaks::CiChecks::Poller.new(db: data.db, client: wake, gate: gate,
+                                         wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval), ci: config.ci).run(dirty: true) +
+          Busyyaks::PrStates::Poller.new(db: data.db, client: wake, gate: gate,
+                                         wanted_for: Busyyaks::PrStates.wanted_for(ci_interval)).run(dirty: true)
+      gate.finished(wake)
+      puts "hook woke the pollers polled=#{n}"
+    rescue StandardError => e
+      puts "hook wake FAILED #{e.class}: #{e.message}"
+    end
   end
 end
 loop do

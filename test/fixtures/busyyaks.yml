@@ -9,6 +9,7 @@ auth: { provider: test/fixtures/auth_stub, allowed_emails: [owner@example.com] }
 agents: { collector: none }
 dictation: none
 terminal: { public_host: deny, max_open: 4 }
+github_hook: none
 ci: { max_pending_minutes: 60, required: { o/r: [jenkins/ci] } }
 skills: { max_bytes: 65536, max_start_bytes: 32768, project: allow, local_dir: null }
 launch:

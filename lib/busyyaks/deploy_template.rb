@@ -28,10 +28,29 @@ module Busyyaks
       "TLS_KEY_PATH" => [->(v) { v.match?(PATH) }, "an absolute path without spaces or ; { } quotes $"],
     }.freeze
 
-    # Values computed from other .env entries (one place per value), never read from .env themselves: nginx's upload
-    # cap must cover the app's ATTACHMENT_MAX_BYTES plus multipart overhead (5 MiB).
+    HOOK_PATH = "/api/github/hook"
+
+    # Values computed from other entries (one place per value), never read from .env themselves: nginx's upload
+    # cap must cover the app's ATTACHMENT_MAX_BYTES plus multipart overhead (5 MiB); the GitHub webhook's location
+    # (card #472) takes config/busyyaks.yml `github_hook` — its max_body_bytes as nginx's cap there (nginx's default
+    # 1m would answer 413 first), or `none` → a 404 at the proxy as at the app. Each lambda: (env, config) where config
+    # = config/busyyaks.yml as read by bin/render-deploy (nil: not read).
     DERIVED = {
-      "NGINX_MAX_BODY" => lambda do |env|
+      "GITHUB_HOOK_NGINX" => lambda do |_env, config|
+        raise MissingValues, "config/busyyaks.yml not read: GITHUB_HOOK_NGINX needs its github_hook" unless config.is_a?(Hash)
+
+        hook = config.fetch("github_hook") do
+          raise MissingValues, "config/busyyaks.yml has no github_hook (none, or its limits)"
+        end
+        next "return 404; # config/busyyaks.yml github_hook: none (the app has no such route either)" if hook == "none"
+
+        bytes = hook.is_a?(Hash) ? hook["max_body_bytes"] : nil
+        raise MissingValues, "config/busyyaks.yml github_hook.max_body_bytes must be a whole number of bytes " \
+                             "(got #{bytes.inspect})" unless bytes.is_a?(Integer) && bytes.positive?
+
+        "client_max_body_size #{bytes}; # = config/busyyaks.yml github_hook.max_body_bytes"
+      end,
+      "NGINX_MAX_BODY" => lambda do |env, _config|
         bytes = env["ATTACHMENT_MAX_BYTES"]
         raise MissingValues, "ATTACHMENT_MAX_BYTES in .env must be a whole number of bytes (got #{bytes.to_s.inspect})" \
           unless bytes.to_s.match?(/\A\d+\z/)
@@ -40,13 +59,14 @@ module Busyyaks
       end,
     }.freeze
 
-    # env: the .env as KEY → value (Busyyaks::EnvFile, the one .env reader).
-    def self.render(template, env)
+    # env: the .env as KEY → value (Busyyaks::EnvFile, the one .env reader); config: config/busyyaks.yml (a Hash), or
+    # nil when not read — a template naming a placeholder derived from it then fails naming it.
+    def self.render(template, env, config = nil)
       own = env.keys & DERIVED.keys
       raise MissingValues, "#{own.join(', ')} must not be set in .env: computed by bin/render-deploy" unless own.empty?
 
       names = template.scan(PLACEHOLDER).flatten.uniq
-      values = names.to_h { |k| [k, DERIVED.key?(k) ? DERIVED[k].call(env) : env[k].to_s.strip] }
+      values = names.to_h { |k| [k, DERIVED.key?(k) ? DERIVED[k].call(env, config) : env[k].to_s.strip] }
       missing = names.select { |k| values[k].empty? }
       raise MissingValues, "missing in .env: #{missing.join(', ')}" unless missing.empty?
 

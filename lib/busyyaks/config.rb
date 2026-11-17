@@ -10,6 +10,7 @@ require_relative "launcher_rules"
 require_relative "agent_settings"
 require_relative "dictation"
 require_relative "terminal"
+require_relative "github_hook"
 require_relative "ci_settings"
 require_relative "skills"
 
@@ -20,11 +21,11 @@ module Busyyaks
     class Invalid < StandardError; end
 
     KEYS = %w[roots search_depth owner_remotes author_emails window_days reap_protect auth agents launch dictation
-              terminal ci skills].freeze
+              terminal github_hook ci skills].freeze
     OPTIONAL = %w[engines daily_report_runners].freeze
     attr_reader :roots, :search_depth, :owner_remotes, :author_emails, :window_days, :reap_protect, :engines,
                 :daily_report_runners, :auth, :agent_collector, :trusted_paths, :launch_commands,
-                :launch_start_seconds, :launch_scopes, :dictation, :terminal, :ci, :skills
+                :launch_start_seconds, :launch_scopes, :dictation, :terminal, :github_hook, :ci, :skills
 
     # mount: where compose mounts PROJECTS_ROOT (.env PROJECTS_MOUNT, the one place it is set): every root is under it.
     def self.load(path = ENV.fetch("BUSYYAKS_CONFIG"), mount: ENV.fetch("PROJECTS_MOUNT"))
@@ -122,6 +123,12 @@ module Busyyaks
         # an agent's live terminal in the dashboard (Terminal): {public_host: allow|deny, max_open}
         @terminal = Terminal.parse!(hash["terminal"])
       rescue Terminal::Invalid => e
+        raise Invalid, e.message
+      end
+      begin
+        # GitHub webhooks wake the PR / CI pollers (GithubHook; card #472): none, or {max_body_bytes, wake_seconds}
+        @github_hook = GithubHook.parse!(hash["github_hook"])
+      rescue GithubHook::Invalid => e
         raise Invalid, e.message
       end
       begin

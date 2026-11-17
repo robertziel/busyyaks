@@ -3,6 +3,9 @@
 require_relative "../lib/busyyaks/terminal_endpoint"
 require_relative "../lib/busyyaks/host_guard"
 require_relative "../lib/busyyaks/config"
+require_relative "../lib/busyyaks/github_hook"
+require_relative "../lib/busyyaks/ci_checks"
+require_relative "../lib/busyyaks/kanban"
 
 module Busyyaks
   class Routes < Hanami::Routes
@@ -53,6 +56,15 @@ module Busyyaks
       origins: -> { Busyyaks::HostGuard.origins(ENV, provider: Busyyaks::Auth.provider) },
       settings: Busyyaks::Config.load.terminal, public_host: ENV.fetch("PUBLIC_HOST")
     )
+    # GitHub webhooks wake the PR / CI pollers (card #472): only when config/busyyaks.yml github_hook is on (else no
+    # route: 404); the HMAC signature is its only auth (no session, no CSRF), HostGuard still in front
+    hook = Busyyaks::Config.load.github_hook
+    if hook
+      post Busyyaks::GithubHook::PATH, to: Busyyaks::GithubHook::Endpoint.new(
+        secret: Busyyaks::GithubHook.boot!(hook, ENV), settings: hook,
+        wanted_for: -> { Busyyaks::Kanban.ci_window } # Settings → Runtime github_ci_interval_seconds, per delivery
+      )
+    end
     get "/api/boards", to: "api.board.index"
     get "/api/waiting/rev", to: "api.waiting.rev"                # the "waiting for you" widget: poll, refetch on change
     get "/api/waiting", to: "api.waiting.index"

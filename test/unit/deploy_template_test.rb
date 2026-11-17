@@ -4,6 +4,7 @@ require "minitest/autorun"
 require "tmpdir"
 require "fileutils"
 require "open3"
+require "yaml"
 require_relative "../../lib/busyyaks/deploy_template"
 require_relative "../../lib/busyyaks/env_file"
 
@@ -13,6 +14,8 @@ class DeployTemplateTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
   T = Busyyaks::DeployTemplate
   ENV_EXAMPLE = Busyyaks::EnvFile.read(File.join(ROOT, ".env.example"))
+  HOOK_OFF = { "github_hook" => "none" }.freeze
+  HOOK_ON = { "github_hook" => { "max_body_bytes" => 524_288, "wake_seconds" => 5 } }.freeze
 
   def templates = Dir[File.join(ROOT, "deploy/*.template")]
 
@@ -41,7 +44,7 @@ class DeployTemplateTest < Minitest::Test
 
   def test_localhost_default_env_refuses_to_render
     err = assert_raises(T::MissingValues) do
-      T.render(File.read(File.join(ROOT, "deploy/nginx-busyyaks.conf.template")), ENV_EXAMPLE)
+      T.render(File.read(File.join(ROOT, "deploy/nginx-busyyaks.conf.template")), ENV_EXAMPLE, HOOK_OFF)
     end
     assert_match(/PUBLIC_HOST/, err.message)
   end
@@ -50,13 +53,37 @@ class DeployTemplateTest < Minitest::Test
     out = T.render(File.read(File.join(ROOT, "deploy/nginx-busyyaks.conf.template")),
                    ENV_EXAMPLE.merge("PUBLIC_HOST" => "dash.test", "PROXY_UPSTREAM" => "127.0.0.1:9999",
                                      "TLS_CERT_PATH" => "/c.pem", "TLS_KEY_PATH" => "/k.pem",
-                                     "ATTACHMENT_MAX_BYTES" => "26214400"))
+                                     "ATTACHMENT_MAX_BYTES" => "26214400"), HOOK_OFF)
     assert_includes out, "server_name dash.test;"
     assert_includes out, "proxy_pass http://127.0.0.1:9999;"
     assert_includes out, "client_max_body_size 30m;"
     assert_includes out, "return 301 https://$host$request_uri;"
     # the TLS hop is told to the app in a header frps keeps (it rewrites X-Forwarded-Proto to http)
     assert_includes out, "proxy_set_header X-Forwarded-Ssl on;"
+  end
+
+  # card #472: the webhook's location — nginx's body cap there is the app's github_hook.max_body_bytes (one source:
+  # config/busyyaks.yml), off → a 404 at the proxy; the Host is passed unchanged (HostGuard answers only PUBLIC_HOST)
+  def test_the_github_hook_location_takes_the_apps_body_cap
+    tpl = File.read(File.join(ROOT, "deploy/nginx-busyyaks.conf.template"))
+    env = ENV_EXAMPLE.merge("PUBLIC_HOST" => "dash.test", "PROXY_UPSTREAM" => "127.0.0.1:9999",
+                            "TLS_CERT_PATH" => "/c.pem", "TLS_KEY_PATH" => "/k.pem", "ATTACHMENT_MAX_BYTES" => "26214400")
+    on = T.render(tpl, env, HOOK_ON)
+    hook = on[%r{location = /api/github/hook \{(.*?)\n  \}}m, 1]
+    assert hook, on
+    assert_includes hook, "client_max_body_size 524288;"
+    assert_includes hook, "proxy_set_header Host $host;"
+    assert_includes hook, "proxy_pass http://127.0.0.1:9999;"
+    off = T.render(tpl, env, HOOK_OFF)[%r{location = /api/github/hook \{(.*?)\n  \}}m, 1]
+    assert_match(/^    return 404;/, off)
+    refute_includes off, "client_max_body_size"
+
+    { nil => /not read/, {} => /has no github_hook/, { "github_hook" => { "max_body_bytes" => "1m" } } => /whole number/,
+      { "github_hook" => "on" } => /whole number/, }.each do |config, msg|
+      err = assert_raises(T::MissingValues, config.inspect) { T.render("{{GITHUB_HOOK_NGINX}}", {}, config) }
+      assert_match msg, err.message
+    end
+    assert_equal "x", T.render("x", {}), "a template that needs no config reads none"
   end
 
   def test_missing_or_empty_value_is_an_error_naming_it
@@ -106,6 +133,8 @@ class DeployTemplateTest < Minitest::Test
       FileUtils.mkdir_p(File.join(dir, "deploy"))
       templates.each { FileUtils.cp(_1, File.join(dir, "deploy")) }
       File.write(File.join(dir, ".env"), env_text) if env_text
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config/busyyaks.yml"), YAML.dump(HOOK_ON))
       extra.each { |name, body| File.write(File.join(dir, "deploy", name), body) }
       before&.call(dir)
       out, status = Open3.capture2e(RbConfig.ruby, File.join(dir, "bin/render-deploy"), *args)
@@ -131,6 +160,7 @@ class DeployTemplateTest < Minitest::Test
     assert_equal %w[frpc-busyyaks.ini nginx-busyyaks.conf], files.keys.sort
     assert_includes files["nginx-busyyaks.conf"], "server_name busyyaks.home.test;"
     assert_includes files["frpc-busyyaks.ini"], "local_port = 4100"
+    assert_includes files["nginx-busyyaks.conf"], "client_max_body_size 524288;", "read from config/busyyaks.yml"
   end
 
   def test_render_deploy_one_template_by_name

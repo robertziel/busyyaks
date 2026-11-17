@@ -3,6 +3,7 @@
 require "time"
 require_relative "github_network"
 require_relative "github"
+require_relative "github_hook"
 require_relative "clock"
 
 module Busyyaks
@@ -142,15 +143,21 @@ module Busyyaks
         @clock = clock
       end
 
-      # → number of rows read (0 while paused)
-      def run
+      # → number of rows read (0 while paused). dirty: only the rows a GitHub webhook marked (GithubHook; card #472);
+      # every selected row's mark is cleared unless a hook marked it again since.
+      def run(dirty: false)
         now = @clock.call
         # in id order: one batch, the same order on every database (PostgreSQL returns an updated row last)
-        rows = @db[:gh_pr_states].where(Sequel.lit("requested_at >= ?", now - @wanted_for)).order(:id).all
-                                 .reject { |r| FINAL.include?(r[:state]) && r[:checked_at] && r[:error].nil? }
+        scope = @db[:gh_pr_states].where(Sequel.lit("requested_at >= ?", now - @wanted_for))
+        scope = scope.exclude(dirty: nil) if dirty
+        rows, final = scope.order(:id).all.partition { |r| !(FINAL.include?(r[:state]) && r[:checked_at] && r[:error].nil?) }
+        # a final row is never read again: a mark it still carries (a hook landed while the pass that made it final
+        # read it) is cleared here, or the waker would wake for it every wake_seconds
+        clean(final)
         paused = @gate.paused
         if paused
           rows.each { |row| fail_row(row, paused) }
+          clean(rows)
           return 0
         end
 
@@ -163,6 +170,7 @@ module Busyyaks
         rescue StandardError => e # stored on the row and said on the link; the rest of the batch still runs
           fail_row(row, e.is_a?(GithubNetwork::Error) ? e.message : "#{e.class}: #{e.message}")
         end
+        clean(rows)
         @db[:gh_pages].where(Sequel.like(:url, "#{PAGE}%")).where(Sequel.lit("at < ?", now - @wanted_for)).delete
         rows.size
       end
@@ -170,6 +178,8 @@ module Busyyaks
       private
 
       def fail_row(row, error) = @db[:gh_pr_states].where(id: row[:id]).update(error: error[0, 500], checked_at: nil)
+
+      def clean(rows) = rows.each { |row| GithubHook.clean(@db[:gh_pr_states], row) }
 
       def poll(row)
         kind, name = row[:ref].split(":", 2)
