@@ -49,7 +49,8 @@ export function busyyaksKanbanApi(): KanbanApi {
     assign: (id, assignee) => apiPost<CardData>(`/api/cards/${id}/assign`, { assignee }),
     archive: (id, archived) => apiPost<CardData>(`/api/cards/${id}/archive`, { archived }),
     setOwner: (id, session) => apiPost<CardData>(`/api/cards/${id}/owner`, { session }),
-    approve: (id, approved) => apiPost<CardData>(`/api/cards/${id}/approve`, { approved }),
+    approve: (id, approved, force) =>
+      apiPost<CardData>(`/api/cards/${id}/approve`, force ? { approved, force } : { approved }),
     dialogAnswer: (id, key) => apiPost<CardData>(`/api/cards/${id}/dialog-answer`, { key }),
     comment: (id, body) => apiPost<CardData>(`/api/cards/${id}/comment`, { body }),
     commentUpdate: (id, body) => apiPost<CardData>(`/api/comments/${id}`, { body }),
