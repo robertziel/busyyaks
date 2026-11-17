@@ -258,6 +258,48 @@ the migration's uses `under` / `standalone` (import a pre-463 revision with `bin
 stays the newest). With no later revision it writes the one from before the migration as the newest again; then it
 drops the three columns.
 
+## Skills (what a launched session is told)
+
+busyyaks's board workflow is a set of skills, handed to each session busyyaks launches or spawns — **for that session
+only**. Nothing is installed user-wide: a `claude` or `hermes` you start yourself on this host sees none of them.
+
+| layer | where | loads for |
+|---|---|---|
+| busyyaks's own | `skills/manifest.yml` + `skills/<name>/SKILL.md` of this checkout | every launch, by agent type |
+| this deployment's | `config/busyyaks.yml` `skills.local_dir` (same format), or `null` | every launch, by agent type |
+| a project's | `<repo>/.busyyaks/skills.yml` + `.busyyaks/skills/<name>/SKILL.md` | launches in that repo, only when `skills.project: allow` and the repo is trusted (row Folder trust); else the launch says `project_skills: left: <why>` and reads none of it |
+
+A manifest: `version: 1`, `skills: {<name>: {types: all | [<agent type>…], load: start | on_demand}}`. A skill =
+regular `.md` files, `SKILL.md` with frontmatter exactly `name` (= its dir) + `description`. `load: start` bodies are
+folded into the entry skill `session` the session opens with; `on_demand` ones are listed there by name.
+
+Per launch, `bin/launcher` selects the type's skills, validates them (a bad manifest, an unknown type, a link, a size
+over `skills.max_bytes` / `max_start_bytes`, a project skill named like a busyyaks one → the launch is refused, nothing
+started), stages a copy in `LAUNCHER_STATE_DIR/skills/<session>/` (0700; removed once the session is gone) and hands it
+to the CLI:
+
+| kind | how | checked after the start |
+|---|---|---|
+| claude_code | `--plugin-dir <stage>` (plugin `busyyaks`) + the prompt opens with `/busyyaks:session` | the `claude` process's argv carries `--plugin-dir <stage>` |
+| hermes | `tmux new-session -e BUSYYAKS_SKILLS_DIR=<stage>` + `-s busyyaks-session`; the skills in `<stage>/busyyaks-skills/`, reached by the line `- ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills` under `skills.external_dirs` of hermes's `config.yaml` | `hermes skills list`, run in the session process's own environment (its `HERMES_HOME`, its variable), lists `busyyaks-session`; else killed + refused with the file and the line to add |
+
+Hermes, measured on v0.21.5: an `external_dirs` entry passes `os.path.expandvars`, a relative one is anchored at
+`HERMES_HOME`, a missing dir is skipped. So for every run busyyaks does not start (variable unset) the line stays
+literal and points nowhere; set empty it is `/busyyaks-skills`, nothing either. (A bare `${BUSYYAKS_SKILLS_DIR}` line
+would be `HERMES_HOME` itself when empty: do not use it.) `-s` naming a skill hermes cannot find makes it exit with
+"Unknown skill(s)", which the start check reports as a failed start.
+
+An agent that comes up without its stage (a launcher function that drops the flags) is killed and the launch refused.
+No skill may be a symlink or pass through one (every path component under the checkout / the repo is checked, and
+its real path stays inside), and no skill file may hold Claude Code's `` !`command` `` syntax (it runs the command
+when the skill loads): refused with the file and line, never stripped. `skills.project: allow` still means a trusted
+repo's committers write text the launched agent follows — the same trust its `.claude/` settings already have.
+The launch result and the launcher log name each skill with its source, load and sha256.
+
+Setup: add `skills:` to `config/busyyaks.yml` (example in `config/busyyaks.example.yml`), and for hermes launchers the
+line `- ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills` under `skills.external_dirs` of the `config.yaml` hermes reads; restart
+the launcher.
+
 ## Folder trust (the launcher)
 
 The launcher answers Claude Code's "Yes, I trust this folder" prompt, which lets the repo's `.claude` settings, hooks

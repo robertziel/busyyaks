@@ -91,6 +91,7 @@ class McpTest < Minitest::Test
     base = { "roots" => [{ "path" => "/p", "prefix" => "" }], "search_depth" => 1, "owner_remotes" => ["example.com/x/"],
              "author_emails" => ["a@x"], "window_days" => 1, "reap_protect" => [], "auth" => { "provider" => "none" },
              "agents" => { "collector" => "none" }, "dictation" => "none", "terminal" => TERMINAL_DENY, "ci" => CI_SETTINGS,
+             "skills" => SKILLS_SETTINGS,
              "launch" => LAUNCH_CLAUDE, }
     runners = [{ "type" => "hermes", "command" => "hermes", "home" => "/h" }]
     server = ->(cfg) { Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: 60, store: store, config: cfg) }

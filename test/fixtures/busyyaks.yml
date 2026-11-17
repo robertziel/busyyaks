@@ -10,6 +10,7 @@ agents: { collector: none }
 dictation: none
 terminal: { public_host: deny, max_open: 4 }
 ci: { max_pending_minutes: 60, required: { o/r: [jenkins/ci] } }
+skills: { max_bytes: 65536, max_start_bytes: 32768, project: allow, local_dir: null }
 launch:
   trusted_paths: []
   start_seconds: 30

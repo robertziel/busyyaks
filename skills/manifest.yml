@@ -1,0 +1,11 @@
+# busyyaks's own skills, handed to every session busyyaks launches or spawns — per launch only, never
+# installed user-wide (lib/busyyaks/skills.rb; docs/DEPLOY.md § Skills). types = agent type keys of the agent
+# settings (or all); load: start = folded into the entry skill the session opens with, on_demand = listed there,
+# loaded by the session when the work needs it. A deployment adds its own in config/busyyaks.yml skills.local_dir
+# (same format), a project in <repo>/.busyyaks/skills.yml.
+version: 1
+skills:
+  workflow: { types: all, load: start }
+  lead: { types: [lead], load: start }
+  author: { types: [worker], load: start }
+  reviewer: { types: [lead, worker], load: on_demand }

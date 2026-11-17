@@ -117,6 +117,18 @@ launch:
   # first needs longer than a plain `claude`. Integer 1..600, required. Not up by then → the session is killed and the
   # launch refused with the pane's last lines; a command that exits into the pane's bare shell is refused at once.
   start_seconds: 30
+# skills:        the skills bin/launcher hands every session it launches or spawns (docs/DEPLOY.md
+#                § Skills) — per launch only (Claude Code --plugin-dir, hermes ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills in
+#                its config's skills.external_dirs), never installed
+#                for every session of the user. busyyaks's own = skills/ of this checkout.
+#                  max_bytes        one skill dir's size limit (bytes)
+#                  max_start_bytes  the `load: start` bodies of one launch together (the entry skill)
+#                  project          allow | deny: a repo's own .busyyaks/skills.yml skills load (allow) — only in a
+#                                   repo the folder trust trusts (launch.trusted_paths, or made by the launcher);
+#                                   any other repo starts with busyyaks's skills and the launch says "left: <why>"
+#                  local_dir        this deployment's own skills (a dir of this checkout holding a manifest.yml +
+#                                   skill dirs, the skills/ format), or null
+skills: { max_bytes: 65536, max_start_bytes: 32768, project: allow, local_dir: null }
 # engines:       (optional) more engine names your agent_engines collector reports → {label, family}, merged
 #                 over the committed config/engines.yml (claude, claudeapi, localclaude, hermes); an entry with
 #                 a name from there relabels it. family: claude (Claude Code) · hermes. A pane whose engine is in

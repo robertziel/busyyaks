@@ -97,6 +97,7 @@ reap_protect: []
 agents: { collector: { snapshot: $w/collector/snapshot.json, read_socket: $w/collector/read.sock } }
 dictation: none
 terminal: { public_host: deny, max_open: 4 }
+skills: { max_bytes: 65536, max_start_bytes: 32768, project: deny, local_dir: null }
 ci:
   max_pending_minutes: 60
   required:

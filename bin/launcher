@@ -56,6 +56,8 @@ require_relative "../lib/busyyaks/private_socket"
 require_relative "../lib/busyyaks/launcher_rules"
 require_relative "../lib/busyyaks/launch_trust"
 require_relative "../lib/busyyaks/agent_settings"
+# the skills every launch hands its session: busyyaks's own + the project's, staged per launch
+require_relative "../lib/busyyaks/skills"
 # the live terminal's stream: its frames, names and limits — the same file the web relays it with
 require_relative "../lib/busyyaks/terminal"
 
@@ -111,6 +113,19 @@ START_SECONDS = begin
 rescue Busyyaks::LauncherRules::Invalid => e
   abort "config/busyyaks.yml: #{e.message}"
 end
+# config/busyyaks.yml skills (required, Skills.settings!): the size limits, whether a repo's .busyyaks skills may load,
+# the deployment's own skills dir. Each launch stages its session's skills under STAGES/<session> (0700, the launcher's
+# own state dir: no container mounts it); a stage whose session is gone is removed at the next launch and at start.
+SKILLS = begin
+  Busyyaks::Skills.settings!(YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["skills"])
+rescue Busyyaks::Skills::Invalid => e
+  abort "config/busyyaks.yml: #{e.message}"
+end
+STAGES = File.join(STATE_DIR, "skills")
+FileUtils.mkdir_p(STAGES, mode: 0o700)
+# launches run on their own threads: a sweep never removes the stage of a launch still in flight
+STAGE_LOCK = Mutex.new
+IN_FLIGHT = []
 # config/busyyaks.yml launch.scopes (required key, LauncherRules.scopes!): null or each session in its own
 # systemd user scope — a lead's with the oomd preference, the others' with a memory cap.
 SCOPES = begin
@@ -342,6 +357,63 @@ def command_running?(pane_pid, command)
   end
 end
 
+# claude_code: the `claude` running with --remote-control <name> carries --plugin-dir <stage> (the session's skills)
+# → nil, else why
+def claude_skills_on(name, stage)
+  pane_pid = tmux("list-panes", "-t", "=#{name}", "-F", "\#{pane_pid}")[0].lines.first.to_i
+  on = tree(pane_pid).any? do |pid|
+    argv = (File.read("/proc/#{pid}/cmdline") rescue "").split("\0")
+    i = argv.rindex("--remote-control")
+    next false unless i && argv[i + 1] == name
+
+    argv.each_cons(2).any? { |a, b| a == "--plugin-dir" && b == stage }
+  end
+  on ? nil : "the agent runs without its skills: no --plugin-dir #{stage} on its claude (its launcher command drops busyyaks's flags)"
+end
+
+# hermes: asks hermes itself, in the session process's OWN environment (its HERMES_HOME as the pane resolved it, its
+# BUSYYAKS_SKILLS_DIR), whether the entry skill is listed — `hermes skills list` through the same interpreter + script
+HERMES_PROBE_SECONDS = 60
+
+def hermes_skills_on(name, command, delivery)
+  pane_pid = tmux("list-panes", "-t", "=#{name}", "-F", "\#{pane_pid}")[0].lines.first.to_i
+  pid, argv = tree(pane_pid).lazy.map { |p| [p, (File.read("/proc/#{p}/cmdline") rescue "").split("\0")] }
+                              .find { |_p, a| a.first(2).any? { |x| File.basename(x) == command } }
+  return "no #{command} process in the pane to ask for its skills" unless pid
+
+  env = (File.read("/proc/#{pid}/environ") rescue "").split("\0").to_h { |kv| kv.split("=", 2) }
+  prog = argv[0..argv.index { |x| File.basename(x) == command }]
+  out, err, st = Open3.capture3(env, "timeout", HERMES_PROBE_SECONDS.to_s, *prog, "skills", "list", unsetenv_others: true,
+                                                                                                   chdir: "/")
+  return "hermes skills list failed (exit #{st.exitstatus}): #{err.strip[0, 300]}" unless st.success?
+
+  home = env["HERMES_HOME"].to_s.empty? ? File.join(env.fetch("HOME", "~"), ".hermes") : env["HERMES_HOME"]
+  why = delivery.listed(out, home)
+  why && "the agent runs without its skills: #{why}"
+end
+
+# tmux's session names → [names, nil]; [[], nil] when no server runs; [nil, why] when tmux cannot be read
+def live_session_names
+  out, err, ok = tmux("ls", "-F", "\#{session_name}")
+  return [out.lines.map(&:chomp), nil] if ok
+  # no server (measured, tmux 3.x): "no server running on <socket>", or the socket missing — "error connecting to
+  # <socket> (No such file or directory)". Anything else (Permission denied, …) is an error, never "no sessions"
+  return [[], nil] if err.match?(/no server running on |error connecting to .* \(No such file or directory\)/)
+
+  [nil, "tmux ls failed: #{err.strip.empty? ? 'no output' : err.strip[0, 200]}"]
+end
+
+# Removes the stages of sessions tmux no longer lists — at launcher start, before each launch's stage and
+# on every `sessions` op (the notifier's watch pass asks it, so a stage goes within a pass of its session's end).
+# tmux unreadable → nothing removed, said in the log (never read as "no sessions"). Call under STAGE_LOCK.
+def sweep_stages(where)
+  live, why = live_session_names
+  return puts("#{Busyyaks::Clock.now.iso8601} skills sweep skipped (#{where}): #{why}") unless live
+
+  gone = Busyyaks::Skills.sweep(STAGES, live + IN_FLIGHT)
+  puts "#{Busyyaks::Clock.now.iso8601} skills sweep (#{where}): removed #{gone.join(', ')}" if gone.any?
+end
+
 def tree(root)
   kids = Hash.new { |h, k| h[k] = [] }
   Dir.glob("/proc/[0-9]*/stat").each do |f|
@@ -366,12 +438,16 @@ end
 
 # What this host checks after a start, per launcher KIND (the engine's Launch::KINDS; a kind missing here refuses the
 # launch): claude_code = Claude Code's folder-trust prompt answered (LaunchTrust) + `claude --remote-control <name>`
-# up; hermes = no trust prompt, no remote control: its command running in the pane.
+# up; hermes = no trust prompt, no remote control: its command running in the pane. skills_why = nil when the started
+# agent has the session's staged skills, else why: claude_code --plugin-dir <stage> on its argv; hermes
+# lists busyyaks-session when asked in the session's own environment.
 HOST_KINDS = {
   "claude_code" => { trust: true, up: ->(name, _launcher, clock) { confirm_remote_control(name, clock) },
-                     up?: ->(r) { r[:remote_control] == "on" }, },
+                     up?: ->(r) { r[:remote_control] == "on" },
+                     skills_why: ->(name, _launcher, stage, _delivery) { claude_skills_on(name, stage) }, },
   "hermes" => { trust: false, up: ->(name, launcher, clock) { confirm_process(name, launcher.command, clock) },
-                up?: ->(r) { r[:process] == "on" }, },
+                up?: ->(r) { r[:process] == "on" },
+                skills_why: ->(name, launcher, _stage, delivery) { hermes_skills_on(name, launcher.command, delivery) }, },
 }.freeze
 
 # The start of a session the engine already registered (Api#launch → this): the type's argv from the board config
@@ -393,23 +469,67 @@ def launch(req)
     host_kind = HOST_KINDS.fetch(launcher.kind) do
       raise ArgumentError, "launcher #{launcher.key}: kind #{launcher.kind} has no start check on this host (#{HOST_KINDS.keys.join(', ')})"
     end
-    prompt = t.prompt && AgentsKanban::Launch.render(t.prompt, **vars)
-    argv = AgentsKanban::Launch.argv(cfg, type: t.key, launcher: launcher.key, session: name, prompt: prompt)
   rescue AgentsKanban::Invalid => e
     raise ArgumentError, e.message
   end
+  # lead-first: refused here, before anything is staged or started
   lead_key = lead_first!(cfg, t, req, dir)
-  argv = Busyyaks::LauncherRules.scoped(argv, scopes: SCOPES, session: name, lead: cfg.lead_type?(t))
-  cmd = Shellwords.join(argv)
-  # `bash -ic` so ~/.bashrc functions (fullclaude, …) exist; `exec bash` keeps the pane open after claude exits.
-  # the folder-trust decision first: a record it cannot read refuses the launch before anything starts
+  # the folder-trust decision first: a record it cannot read refuses the launch before anything starts. It also decides
+  # whether the repo's own skills load (Skills.plan!: an untrusted repo gets busyyaks's skills, "left: <why>")
   refusal = begin
     Busyyaks::LaunchTrust.refusal(dir, trusted: TRUSTED, created: CREATED)
   rescue Busyyaks::LaunchTrust::Invalid => e
     raise ArgumentError, "folder trust: #{e.message}"
   end
-  _out, err, ok = tmux("new-session", "-d", "-s", name, "-c", dir, "bash", "-ic", "#{cmd}; exec bash")
-  raise "tmux failed: #{err.strip}" unless ok
+  # the session's skills: selected, validated, staged as a copy — any failure refuses the launch, nothing started
+  stage = File.join(STAGES, name)
+  delivery, receipt, project_skills = begin
+    d = Busyyaks::Skills.delivery(launcher.kind)
+    selected, ps = Busyyaks::Skills.plan!(checkout: ROOT, repo: dir, type: t.key, types: cfg.agent_type_keys,
+                                          settings: SKILLS, trust_refusal: refusal)
+    STAGE_LOCK.synchronize do
+      raise ArgumentError, "a launch of #{name} is already in flight" if IN_FLIGHT.include?(name)
+
+      sweep_stages("launch #{name}")
+      IN_FLIGHT << name
+    end
+    [d, Busyyaks::Skills.stage!(selected, stage, d), ps]
+  rescue Busyyaks::Skills::Invalid, SystemCallError => e
+    STAGE_LOCK.synchronize { IN_FLIGHT.delete(name) }
+    FileUtils.rm_rf(stage)
+    raise ArgumentError, "skills: #{e.message}"
+  end
+  begin
+    launch_staged(StagedLaunch.new(cfg, dir, name, vars, t, launcher, host_kind, refusal, stage, delivery, receipt,
+                                   project_skills, lead_key))
+  ensure
+    STAGE_LOCK.synchronize { IN_FLIGHT.delete(name) }
+  end
+end
+
+# The rest of a launch once its skills are staged (IN_FLIGHT holds its name until it returns)
+StagedLaunch = Struct.new(:cfg, :dir, :name, :vars, :type, :launcher, :host_kind, :refusal, :stage, :delivery, :receipt,
+                          :project_skills, :lead_key)
+
+def launch_staged(job)
+  cfg, dir, name, vars, t, launcher, host_kind, refusal, stage, delivery, receipt, project_skills, lead_key = job.to_a
+  begin
+    prompt = delivery.prompt(t.prompt && AgentsKanban::Launch.render(t.prompt, **vars))
+    argv = AgentsKanban::Launch.argv(cfg, type: t.key, launcher: launcher.key, session: name, prompt: prompt,
+                                          extra: delivery.extra(stage))
+  rescue AgentsKanban::Invalid => e
+    FileUtils.rm_rf(stage)
+    raise ArgumentError, e.message
+  end
+  argv = Busyyaks::LauncherRules.scoped(argv, scopes: SCOPES, session: name, lead: cfg.lead_type?(t))
+  cmd = Shellwords.join(argv)
+  # `bash -ic` so ~/.bashrc functions (fullclaude, …) exist; `exec bash` keeps the pane open after claude exits.
+  env = delivery.env(stage).flat_map { |k, v| ["-e", "#{k}=#{v}"] }
+  _out, err, ok = tmux("new-session", "-d", "-s", name, "-c", dir, *env, "bash", "-ic", "#{cmd}; exec bash")
+  unless ok
+    FileUtils.rm_rf(stage)
+    raise "tmux failed: #{err.strip}"
+  end
 
   clock = start_clock
   trust = host_kind[:trust] ? accept_trust(name, refusal, clock) || {} : {}
@@ -419,7 +539,13 @@ def launch(req)
   # reported to the operator as the result's verdict + reason (information only: it never decides the keep)
   waiting = up ? dialog_on_screen(name) : nil
   rc = rc.merge(remote_control: "failed", reason: "waiting on a dialog: #{waiting}") if waiting && rc[:remote_control] == "on"
-  puts "#{Busyyaks::Clock.now.iso8601} launched #{name} (#{t.key}/#{launcher.key}, #{launcher.kind}) in #{dir} · trust #{trust[:trust] || 'not asked'} · #{rc.except(:reason).map { |k, v| "#{k} #{v}" }.join(' · ')}#{rc[:reason] ? " (#{rc[:reason]})" : ''}"
+  # an agent that is up without the stage (a shell function that drops the extra flags, an env reset): refused loudly
+  if up && (why = host_kind[:skills_why].call(name, launcher, stage, delivery))
+    up = false
+    rc = rc.merge(reason: why)
+  end
+  skills = receipt.map { |r| "#{r[:name]}(#{r[:source]},#{r[:load]},#{r[:sha][0, 12]})" }.join(" ")
+  puts "#{Busyyaks::Clock.now.iso8601} launched #{name} (#{t.key}/#{launcher.key}, #{launcher.kind}) in #{dir} · trust #{trust[:trust] || 'not asked'} · skills #{skills} · project_skills #{project_skills} · #{rc.except(:reason).map { |k, v| "#{k} #{v}" }.join(' · ')}#{rc[:reason] ? " (#{rc[:reason]})" : ''}"
   # the kind's start check failed (claude: no `claude --remote-control <name>` came up — it refused to start, exited,
   # the pane is a bare shell; hermes: no hermes process): the launch FAILED — the session is killed and refused, so
   # the engine ends the registration and releases what it adopted (never a registered owner nobody runs). Only a
@@ -429,12 +555,14 @@ def launch(req)
     gone = killed || !tmux("has-session", "-t", "=#{name}")[2]
     error = "#{name} did not start: #{rc[:reason]}"
     error += " — and kill-session failed (#{kerr.strip}): the tmux session #{name} is still running" unless gone
+    FileUtils.rm_rf(stage) if gone
     return { ok: false, error: error, status: 422 }
   end
   # a lead that came up: its key into LEADS (the launcher's state only)
   alive = ->(s) { tmux("has-session", "-t", "=#{s}")[2] }
   LEADS.record(session: name, type: t.key, dir: dir, key: lead_key, alive: alive) if lead_key
-  { ok: true, session: name, type: t.key, launcher: launcher.key, kind: launcher.kind, dir: dir, prompt: !prompt.nil?, **trust, **rc }
+  { ok: true, session: name, type: t.key, launcher: launcher.key, kind: launcher.kind, dir: dir, prompt: !prompt.nil?,
+    skills: receipt, project_skills: project_skills, **trust, **rc }
 end
 
 # LEAD-FIRST BOARDS, checked here too — the engine's registration is not trusted past this socket:
@@ -1067,7 +1195,9 @@ def handle(line)
   when "name" then name_op(req)
   when "launch" then launch(req)
   when "lead_key" then lead_key_op(req)
-  when "sessions" then { ok: true, sessions: sessions }
+  when "sessions"
+    STAGE_LOCK.synchronize { sweep_stages("sessions") }
+    { ok: true, sessions: sessions }
   when "create" then create(req)
   when "jobs" then { ok: true, jobs: jobs }
   when "agents" then agents
@@ -1092,6 +1222,8 @@ if File.symlink?(SOCKET) || (File.exist?(SOCKET) && !File.socket?(SOCKET))
   abort "#{SOCKET} exists and is not a socket (a symlink or a file): remove it"
 end
 File.unlink(SOCKET) if File.socket?(SOCKET)
+# stages of sessions that ended while no launcher ran
+STAGE_LOCK.synchronize { sweep_stages("start") }
 server = Busyyaks::PrivateSocket.bind(SOCKET) # owner-only from the moment it exists; the umask restored
 puts "launcher listening on #{SOCKET}"
 puts COLLECTOR ? "agent-session collector: #{COLLECTOR.snapshot} · #{COLLECTOR.read_socket}" : Busyyaks::AgentCollector::OFF
