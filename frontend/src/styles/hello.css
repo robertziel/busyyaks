@@ -17,6 +17,13 @@
 }
 .hello-top .btn {
   white-space: nowrap;
+  margin-left: auto;
+}
+.hello-top {
+  flex-wrap: wrap;
+}
+.hello-top nav {
+  min-width: 0;
 }
 .hello-steps {
   display: flex;
@@ -28,6 +35,32 @@
   font-size: 13px;
   color: var(--ink-faint);
 }
+.hello-steps button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 2px 6px 2px 2px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.hello-steps button:hover:not(:disabled) {
+  color: var(--ink);
+}
+.hello-steps button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.hello-steps button:disabled {
+  cursor: default;
+}
+.hello-steps em {
+  font-style: normal;
+}
 .hello-steps li span {
   display: inline-grid;
   place-items: center;
@@ -36,7 +69,6 @@
   border-radius: 50%;
   border: 1px solid var(--line-strong);
   font-size: 11px;
-  margin-right: 4px;
 }
 .hello-steps li.now {
   color: var(--ink);
@@ -45,12 +77,26 @@
 .hello-steps li.now span {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--bg); /* the page's own background on the accent: ≥ 4.5:1 in Light and Dark (white was 2.35:1 in Dark) */
 }
 .hello-steps li.past span {
-  background: var(--ok);
   border-color: var(--ok);
-  color: #fff;
+  color: var(--ok);
+}
+.hello-steps li.mark span {
+  border-color: var(--warn);
+  color: var(--warn);
+  font-weight: 700;
+}
+.hello-steps li.now.mark span {
+  background: var(--warn);
+  color: var(--bg);
+}
+.hello-dirty {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
 }
 
 /* boot */
@@ -130,6 +176,16 @@
 .hello-bad {
   color: var(--bad);
 }
+.hello-ok {
+  color: var(--ok);
+}
+.hello-warn {
+  color: var(--warn);
+}
+.hello .dot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(var(--warn-rgb), 0.14);
+}
 .hello-checks li.pending {
   color: var(--ink-faint);
 }
@@ -164,6 +220,146 @@
 }
 .hello-step h2 {
   margin: 0 0 12px;
+}
+.hello-step h2:focus {
+  outline: none;
+}
+.hello-step .hello-checks li {
+  animation: none;
+}
+.hello-step .flash {
+  margin-top: 10px;
+  flex-wrap: nowrap;
+  align-items: baseline;
+}
+.hello-step .flash > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.hello-step .flash > .dot {
+  flex: none;
+}
+
+/* agents: the harnesses the launcher found, then the launchers */
+.hello-subhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 4px 0 10px;
+  font-size: 13px;
+}
+.hello-subhead .btn {
+  margin-left: auto;
+}
+.hello-harnesses {
+  margin-bottom: 18px;
+}
+.hello-harness-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.hello-harness-grid.stale {
+  opacity: 0.55;
+}
+.hello-harness {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: var(--radius-ctl-sm);
+  background: var(--panel);
+  font-size: 13px;
+}
+.hello-harness.ok {
+  border-left-color: var(--ok);
+}
+.hello-harness.warn {
+  border-left-color: var(--warn);
+}
+.hello-harness.bad {
+  border-left-color: var(--bad);
+}
+.hello-harness.skeleton {
+  min-height: 96px;
+  background: var(--panel-2);
+}
+.hello-harness header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.hello-harness header b {
+  margin-right: auto;
+}
+.hello-harness .btn {
+  align-self: flex-start;
+}
+.hello-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.hello-badge.ok {
+  color: var(--ok);
+}
+.hello-badge.warn {
+  color: var(--warn);
+}
+.hello-badge.bad {
+  color: var(--bad);
+}
+.hello-ver {
+  font-family: var(--mono);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hello-path {
+  font-size: 12px;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.hello-allow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-ctl-sm);
+}
+.hello-allow pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.hello-allowed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hello-allowed code {
+  overflow-wrap: anywhere;
+}
+.hello-unavailable {
+  flex-wrap: wrap;
+}
+.hello-agents tr.group th {
+  padding: 10px 6px 2px;
+  color: var(--ink-dim);
+  font-weight: 600;
+  font-size: 12px;
 }
 .hello-facts {
   display: grid;
@@ -207,6 +403,10 @@
   border-top: 1px solid var(--row-rule);
   vertical-align: middle;
 }
+.hello-agents td:nth-child(2),
+.hello-agents td:nth-child(3) {
+  white-space: nowrap;
+}
 .hello-agents tr.off td {
   color: var(--ink-faint);
 }
@@ -241,6 +441,11 @@
   font-weight: 500;
   padding: 3px 6px;
 }
+.hello-changes caption {
+  caption-side: bottom;
+  text-align: left;
+  padding: 4px 6px;
+}
 .hello-changes td {
   padding: 4px 6px;
   border-top: 1px solid var(--row-rule);
@@ -269,9 +474,20 @@
   padding: 14px 16px;
   font-size: 13px;
 }
+.hello-ask summary {
+  cursor: pointer;
+  list-style: none;
+}
+.hello-ask summary::-webkit-details-marker {
+  display: none;
+}
+.hello-ask[open] summary {
+  margin-bottom: 4px;
+}
 .hello-ask pre {
   margin: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-family: var(--mono);
   font-size: 12px;
   color: var(--ink-dim);
@@ -283,6 +499,94 @@
 @media (max-width: 760px) {
   .hello-body {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .hello-top {
+    align-items: flex-start;
+    margin-bottom: 16px;
+  }
+  .hello-steps {
+    flex-wrap: nowrap;
+    gap: 2px;
+  }
+  .hello-steps button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 4px;
+    justify-content: center;
+  }
+  .hello-top nav {
+    flex: 1 1 100%;
+  }
+  .hello-steps li:not(.now) em {
+    display: none;
+  }
+  .hello-steps li span {
+    width: 26px;
+    height: 26px;
+  }
+  .hello-step {
+    padding: 14px;
+  }
+  /* the save bar stays on screen on a long Agents step: opaque (the page's own --bg), a rule above it */
+  .hello-savebar {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    padding: 6px 0;
+    font-size: 12px;
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+  }
+  /* sticky only while there is something to save */
+  .hello-savebar.dirty {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+  }
+  /* 44 px touch targets */
+  .hello .btn,
+  .hello .copychip,
+  .hello-ask summary {
+    min-height: 44px;
+  }
+  .hello .copychip {
+    display: inline-flex;
+    align-items: center;
+  }
+  .hello-ask summary {
+    display: flex;
+    align-items: center;
+  }
+  .hello-agents input[type="checkbox"],
+  .hello-agents input[type="radio"] {
+    width: 24px;
+    height: 24px;
+  }
+  /* the "ask your agent" helper above Back / Next on a phone (its children join the body's one column) */
+  .hello-main {
+    display: contents;
+  }
+  .hello-main > .hello-step {
+    order: 1;
+  }
+  .hello-ask {
+    order: 2;
+  }
+  .hello-nav,
+  .hello-main > .flash {
+    order: 3;
+  }
+  /* the table head is hidden here: each input says what it is */
+  .hello-agents td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 11px;
+    color: var(--ink-faint);
+  }
+  .hello-savebar .hello-chips {
+    margin-left: auto;
+  }
+  .hello-agents tr.group {
+    display: block;
   }
   .hello-checks li {
     grid-template-columns: 20px minmax(0, 1fr);
@@ -303,7 +607,7 @@
   .hello-agents tr {
     display: grid;
     grid-template-columns: 24px minmax(0, 1fr) minmax(0, 1fr) 24px;
-    grid-template-areas: "use cmd cmd cmd" ". key label def";
+    grid-template-areas: "use cmd cmd host" ". key label def";
     gap: 6px 8px;
     padding: 8px 0;
     border-top: 1px solid var(--row-rule);
@@ -320,14 +624,28 @@
     overflow-wrap: anywhere;
   }
   .hello-agents td:nth-child(3) {
-    grid-area: key;
+    grid-area: host;
+    white-space: nowrap;
+    justify-self: end;
   }
   .hello-agents td:nth-child(4) {
-    grid-area: label;
+    grid-area: key;
   }
   .hello-agents td:nth-child(5) {
+    grid-area: label;
+  }
+  .hello-agents td:nth-child(6) {
     grid-area: def;
   }
+}
+
+/* a disabled primary reads as unavailable (dashed, no fill) and keeps its text readable; the status beside it says why */
+.hello .btn.primary:disabled {
+  opacity: 1;
+  background: transparent;
+  color: var(--ink-dim);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  border: 1px dashed var(--line-strong);
 }
 
 /* skin step: the settings menu's switch (Skin.tsx), larger — a choice applies to the page at once */

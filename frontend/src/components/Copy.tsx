@@ -30,7 +30,7 @@ export function CopyChip({
       className={`copychip ${state} ${className}`}
       onClick={copy}
       title={title ?? `Copy: ${text}`}
-      aria-label={`Copy ${text}`}
+      aria-label={title ?? `Copy ${text}`}
     >
       {children ?? <code>{text}</code>}
       <span className="copystate" aria-live="polite">

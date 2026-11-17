@@ -1,0 +1,31 @@
+# The agent harnesses (coding-agent CLIs) busyyaks knows (committed, card 520), each {label, command, version_args,
+# version_pattern, install_url, kind, launch_args}. bin/launcher's `harnesses` op resolves `command` in the shell a
+# launch runs in (bash -ic) and, for a program file, runs `command version_args`: the version = version_pattern's one
+# capture (lib/busyyaks/harnesses.rb). kind = the engine launch kind it runs as (vendor/agents_kanban Launch::KINDS:
+# claude_code · hermes), or null when the engine has none yet — shown as detected, never offered as a launcher.
+# launch_args = the args its config/busyyaks.yml launch.commands entry needs: the line the hello screen offers to copy
+# (the allowlist stays a host file, never written from the dashboard).
+claude:
+  label: Claude Code
+  command: claude
+  version_args: ["--version"]
+  version_pattern: '(\d+\.\d+\.\d+[\w.+-]*)'
+  install_url: https://code.claude.com/docs/en/setup
+  kind: claude_code
+  launch_args: []
+hermes:
+  label: Hermes Agent
+  command: hermes
+  version_args: ["--version"]
+  version_pattern: '(\d+\.\d+\.\d+[\w.+-]*)'
+  install_url: https://github.com/NousResearch/hermes-agent#quick-install
+  kind: hermes
+  launch_args: [chat]
+codex:
+  label: Codex CLI
+  command: codex
+  version_args: ["--version"]
+  version_pattern: '(\d+\.\d+\.\d+[\w.+-]*)'
+  install_url: https://github.com/openai/codex#installing-and-running-codex-cli
+  kind: null
+  launch_args: []

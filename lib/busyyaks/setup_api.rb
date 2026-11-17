@@ -4,6 +4,8 @@ require_relative "agent_settings_api"
 require_relative "config"
 require_relative "launcher_client"
 require_relative "clock"
+require_relative "daily_report_settings"
+require_relative "harnesses"
 
 module Busyyaks
   # The first-run hello screen (/hello): the boot checks, where the projects come from, and the agent
@@ -37,7 +39,74 @@ module Busyyaks
                     roots: config.roots, search_depth: config.search_depth, repos: projects.size,
                     sample: projects.map { |p| p[:slug] }.sort.first(12), },
         agents: agents,
+        daily_report: daily_report(db, config.daily_report_runners),
+        kinds: kind_labels,
       },]
+    end
+
+    # GET /api/setup/harnesses (card 520): bin/launcher's `harnesses` probe joined with this host's allowlist (the
+    # web's own config: launch.commands, the same list GET /api/setup's agents.commands carries):
+    #   harnesses[]: the catalogue entry + {found, type, path, version, version_error} + launchable (an engine kind),
+    #     allowed = the indexes of the launch.commands entries of its kind, allow_line = the exact launch.commands item
+    #     to add (null: no engine kind — nothing to add)
+    #   commands[]: each launch.commands entry's own command as the launch shell resolves it ({at, found, type, path})
+    #   allowlist_in_sync: the launcher enforces the same launch.commands this process read. The launcher reads the file
+    #     at its start; the web on every request, but through a single-file bind mount (a file an editor replaces on
+    #     save stays the old one in a running container) — so after an edit either can be stale: false = restart both
+    # The launcher down → 503 (only that: the page says "not running" by the status), a launcher started before this op
+    # → 501, its probe failing → 500: the reason, never a partial "not found".
+    def harnesses(launcher:, commands:, clock: Busyyaks::Clock)
+      t = clock.monotonic
+      res = launcher.harnesses
+      by_name = res["commands"].to_h { |c| [c["command"], c] }
+      list = res["harnesses"].map do |h|
+        kind = h["kind"]
+        allowed = kind ? commands.each_index.select { |i| commands[i]["kind"] == kind } : []
+        line, note = kind ? allow_line(h) : [nil, nil]
+        h.transform_keys(&:to_sym).merge(launchable: !kind.nil?, allowed: allowed, allow_line: line, allow_note: note)
+      end
+      # a command the launcher did not resolve = one it does not enforce yet (it read launch.commands before the edit):
+      # unknown (found nil), never "not found"; the allowlist is then out of sync and the page says restart
+      cmds = commands.each_with_index.map do |c, at|
+        r = by_name[c["command"]]
+        r ? { at: at, found: r["found"], type: r["type"], path: r["path"] } : { at: at, found: nil, type: nil, path: nil }
+      end
+      in_sync = res["allowlist"] == commands && cmds.none? { |c| c[:found].nil? }
+      [200, { checked_at: clock.epoch, elapsed_ms: ((clock.monotonic - t) * 1000).round, shell: res["shell"],
+              harnesses: list, commands: cmds, allowlist_in_sync: in_sync, },]
+    rescue LauncherClient::Unavailable => e
+      [503, { error: e.message }]
+    rescue LauncherClient::Refused => e
+      return [501, { error: "the launcher does not know the harnesses op: restart it (deploy/install-launcher.sh)" }] \
+        if e.message == "unknown op"
+
+      [500, { error: e.message }]
+    end
+
+    # [the launch.commands item to add, nil] or [nil, why there is none]: a program file runs as is; a shell function or
+    # alias exists only in `bash -ic`, so its line says via_shell: true — allowed only for a kind whose start is
+    # confirmed by remote control (AgentSettings refuses via_shell for the others: their process is the command)
+    def allow_line(h)
+      via_shell = h["found"] == true && h["type"] != "file"
+      if via_shell && !AgentsKanban::Launch::KINDS.fetch(h["kind"]).remote_control?
+        return [nil, "#{h['command']} is a shell #{h['type']}: #{h['kind']} needs a program on PATH to launch"]
+      end
+
+      args = h["launch_args"].map { |a| a.match?(/\A[\w.-]+\z/) ? a : a.inspect }.join(", ")
+      ["- { kind: #{h['kind']}, command: #{h['command']}, args: [#{args}], via_shell: #{via_shell} }", nil]
+    end
+
+    # the engine kinds' labels (config/harnesses.yml, read here — no launcher needed): the launcher table's groups
+    def kind_labels = Harnesses.load.select(&:kind).to_h { |h| [h.kind, h.label] }
+
+    # the Summary's daily report row: the current Settings → Daily report revision, validated as the host runs it
+    # saved: a revision exists (none = never set up: the page says "not set up" + Edit, not the host's sentence)
+    def daily_report(db, runners)
+      saved = !DailyReportSettings.current_id(db).nil?
+      state, out = DailyReportSettings.resolve(db, runners)
+      return { configured: false, saved: saved, schedule: nil, reason: out } unless state == :ok
+
+      { configured: true, saved: true, schedule: out.to_h[:schedule], reason: nil }
     end
 
     def complete(by:, db:, **)

@@ -9,6 +9,14 @@ import {
   rowsError,
   rowsFrom,
   setupPending,
+  stepFrom,
+  harnessState,
+  harnessLine,
+  usedMissing,
+  draftDirty,
+  keepDefault,
+  type Harness,
+  type HarnessesData,
   type SetupData,
 } from "./hello";
 
@@ -155,13 +163,171 @@ describe("agentPrompt", () => {
     };
     const text = agentPrompt(p, [claude, hermes], "https://dash.example");
     expect(text).toContain("the dashboard at https://dash.example");
-    expect(text).toContain("PROJECTS_ROOT is /srv/code (3 repos found)");
+    expect(text).toContain("PROJECTS_ROOT /srv/code holds 3 repos — leave it.");
+    expect(text).toContain("then restart both: deploy/install-launcher.sh && docker compose restart web.");
     expect(text).toContain("launch.commands allows claude, hermes chat.");
+  });
+
+  it("carries the harness detection: what is found, what to install, the exact line to add", () => {
+    const p = { host_root: "/srv", mount: "/p", roots: [], search_depth: 2, repos: 0, sample: [] };
+    const data: HarnessesData = {
+      checked_at: 0,
+      elapsed_ms: 1,
+      shell: "bash -ic",
+      harnesses: [
+        h({ key: "claude", command: "claude", version: "2.1.3", allowed: [0] }),
+        h({ key: "hermes", command: "hermes", kind: "hermes", allow_line: "- { kind: hermes, command: hermes }" }),
+        h({ key: "codex", command: "codex", found: false, kind: null, launchable: false, allow_line: null }),
+      ],
+      commands: [],
+      allowlist_in_sync: true,
+    };
+    const text = agentPrompt(p, [claude], "https://d", { data });
+    expect(text).toContain("/srv and holds no git repo. Point it at the folder");
+    expect(text).toContain("Ask me before adding anything else");
+    expect(text).toContain("Harnesses on this host: claude 2.1.3, hermes 1.0 (not allowed), codex not found.");
+    expect(text).toContain("Install if I want them: codex https://x.example");
+    expect(text).toContain("Add exactly: - { kind: hermes, command: hermes }");
+    expect(agentPrompt(p, [claude], "https://d", { error: "503 · launcher down" })).toContain(
+      "Harness check unavailable: 503 · launcher down. Start the launcher first",
+    );
+  });
+});
+
+const h = (over: Partial<Harness>): Harness => ({
+  key: "x",
+  label: "X",
+  command: "x",
+  install_url: "https://x.example",
+  kind: "claude_code",
+  launch_args: [],
+  launchable: true,
+  found: true,
+  type: "file",
+  path: "/bin/x",
+  version: "1.0",
+  version_error: null,
+  allowed: [],
+  allow_line: "- { kind: claude_code, command: x, args: [], via_shell: false }",
+  allow_note: null,
+  ...over,
+});
+
+describe("stepFrom", () => {
+  it("the URL's step, else Checks on a first run and Summary on a reopen", () => {
+    expect(stepFrom("agents", false)).toBe("agents");
+    expect(stepFrom(null, false)).toBe("checks");
+    expect(stepFrom(null, true)).toBe("summary");
+    expect(stepFrom("nope", true)).toBe("summary");
+  });
+});
+
+describe("harnessState", () => {
+  it("every card state, glyph + word", () => {
+    expect(harnessState(h({ allowed: [0] }))).toEqual({ key: "found", badge: "✓ found", tone: "ok" });
+    expect(harnessState(h({ allowed: [] })).key).toBe("not_allowed");
+    expect(harnessState(h({ allowed: [0], version: null, version_error: "timed out after 5 s" })).tone).toBe("warn");
+    expect(harnessState(h({ allowed: [0], type: "function", path: null })).key).toBe("shell");
+    expect(harnessState(h({ found: false })).key).toBe("missing");
+    expect(harnessState(h({ found: false, allowed: [1] })).key).toBe("missing_allowed");
+    // the program is not on PATH but an allowlisted command of its kind is: a warning, not "nothing runs"
+    const found = [{ at: 1, found: true, type: "file", path: "/b/readme-agent" }];
+    expect(harnessState(h({ found: false, allowed: [1] }), found)).toEqual({
+      key: "missing_runs",
+      badge: "! not on PATH · allowed command found",
+      tone: "warn",
+    });
+    expect(harnessState(h({ found: false, allowed: [1] }), [{ ...found[0]!, found: false }]).key).toBe(
+      "missing_allowed",
+    );
+    expect(harnessState(h({ kind: null, launchable: false, allowed: [] })).key).toBe("found");
+    // a shell function of a kind that needs a program: never launchable, whatever else of its kind is allowed
+    const fn = h({
+      type: "function",
+      path: null,
+      allowed: [0],
+      allow_line: null,
+      allow_note: "hermes is a shell function",
+    });
+    expect(harnessState(fn)).toEqual({
+      key: "shell_unlaunchable",
+      badge: "! shell function · not launchable",
+      tone: "warn",
+    });
+    expect(harnessLine({ ...fn, command: "hermes", version: null })).toBe("hermes shell function (not launchable)");
+  });
+
+  it("one line: version, shell kind, not found, not launchable", () => {
+    expect(harnessLine(h({ command: "claude", version: "2.1", allowed: [0] }))).toBe("claude 2.1");
+    expect(harnessLine(h({ command: "claude", version: "2.1" }))).toBe("claude 2.1 (not allowed)");
+    expect(
+      harnessLine(h({ command: "claude", version: "2.1", allowed: [0] }), [
+        { at: 0, found: false, type: null, path: null },
+      ]),
+    ).toBe("claude 2.1 (allowed command ✗)");
+    expect(harnessLine(h({ command: "f", version: null, type: "function", allowed: [0] }))).toBe("f shell function");
+    expect(harnessLine(h({ command: "c", found: false }))).toBe("c not found");
+    expect(harnessLine(h({ command: "codex", launchable: false }))).toBe("codex 1.0 (not supported yet)");
+    expect(harnessLine(h({ command: "x", version: null, version_error: "timed out after 5 s", allowed: [0] }))).toBe(
+      "x version ✗ (timed out after 5 s)",
+    );
+    const found = [{ at: 1, found: true, type: "file", path: "/b/w" }];
+    expect(harnessLine(h({ command: "hermes", found: false, allowed: [1] }), found)).toBe(
+      "hermes not on PATH (allowed command found)",
+    );
+  });
+
+  it("found, but one of its allowed commands is not: a warning", () => {
+    const resolved = [
+      { at: 0, found: true, type: "file", path: "/b/claude" },
+      { at: 1, found: false, type: null, path: null },
+    ];
+    expect(harnessState(h({ allowed: [0, 1] }), resolved)).toEqual({
+      key: "allowed_missing",
+      badge: "✓ found · allowed command ✗",
+      tone: "warn",
+    });
+    expect(harnessState(h({ allowed: [0] }), resolved).key).toBe("found");
+  });
+});
+
+describe("usedMissing + draftDirty", () => {
+  const rows = rowsFrom(doc(), commands);
+  it("the launchers in use whose command the launch shell does not find", () => {
+    const resolved = [
+      { at: 0, found: false, type: null, path: null },
+      { at: 1, found: true, type: "function", path: null },
+    ];
+    expect(usedMissing(rows, resolved)).toEqual(["claude"]);
+    expect(usedMissing(rows, null)).toEqual([]);
+  });
+  it("the default follows the launchers in use", () => {
+    const one = rows.map((r) => ({ ...r, use: r.key === "localclaude" }));
+    expect(keepDefault(one, "claude")).toBe("localclaude");
+    expect(keepDefault(rows, "claude")).toBe("claude");
+    expect(
+      keepDefault(
+        rows.map((r) => ({ ...r, use: false })),
+        "claude",
+      ),
+    ).toBe("");
+  });
+  it("a draft differs from its revision's rows", () => {
+    expect(draftDirty(rows, "claude", rows, "claude")).toBe(false);
+    expect(draftDirty(rows, "localclaude", rows, "claude")).toBe(true);
+    expect(
+      draftDirty(
+        rows.map((r) => ({ ...r, use: true })),
+        "claude",
+        rows,
+        "claude",
+      ),
+    ).toBe(true);
   });
 });
 
 describe("typeChanges", () => {
-  it("lists each type whose launchers a save changes, before → after", () => {
+  it("lists each type whose launchers a save changes, before → after (a type under a lead marked)", () => {
     const d = doc();
     const rows = rowsFrom(d, commands).map((r) => (r.key === "hermes" ? { ...r, use: true } : r));
     expect(typeChanges(d, applyRows(d, commands, rows, "hermes"))).toEqual([
@@ -172,8 +338,10 @@ describe("typeChanges", () => {
           ["claude", "old"],
           ["hermes", "claude"],
         ],
+        under: null,
       },
-      { type: "worker", label: "worker", launchers: [["claude"], ["hermes", "claude"]] },
+      // worker runs under the lead: listed, marked as following the lead's launcher
+      { type: "worker", label: "worker", launchers: [["claude"], ["hermes", "claude"]], under: "lead" },
     ]);
   });
 
