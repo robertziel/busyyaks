@@ -1061,4 +1061,103 @@ class CiChecksTest < Minitest::Test
                             local_repo: "https://github.com/p/x_local.git", public_repo: "git@github.com:Up/X.git")
     assert_equal %w[Up/X p/x_local], CK.unlisted(@conn, ci)
   end
+
+  # ── card #511: a card that waited in an approval gate longer than the poll window is approved on the first click ──
+
+  # One card per approval gate of the local_v4 board, each with green CI as its step reads it: Local: Human review (the
+  # open local PR), Local: Deploy check (the local PR merged + its merge commit's CI), Public: Human review and
+  # Awaiting merge — the operator dragged that card there, unapproved: Approve approves it in place (card #499) — (the
+  # local PR merged + the open public PR). → {gate => card id}
+  def gated_cards
+    enrol!
+    @kb.board_save("o-r", JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/" \
+                                                                 "local_v4.board.json", __dir__))), by: "operator")
+    merged = ->(n) { MERGED.merge("number" => n, "merge_commit_sha" => format("%040d", n)) }
+    @http.pulls = [PR, merged[113], merged[114], merged[115], PR.merge("number" => 5), PR.merge("number" => 6)]
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    { "local_human_review" => [112, nil], "deploy_check" => [113, nil], "public_human_review" => [114, 5],
+      "awaiting_merge" => [115, 6], }.to_h do |gate, (local, public)|
+      id = @kb.create(slug: "o-r", title: gate, by: "lead", column: gate)
+      @kb.assign_pr(id, url: "https://github.com/o/r_local/pull/#{local}", role: "local", by: "lead")
+      @kb.assign_pr(id, url: "https://github.com/o/r/pull/#{public}", role: "public", by: "lead") if public
+      [gate, id]
+    end
+  end
+
+  def wait_in_the_gates(notifier, seconds)
+    (seconds / 30).times do # NOTIFIER_WATCH_SECONDS = 30; the github service polls what was asked
+      @now += 30
+      notifier.watch
+      @poller.run
+    end
+  end
+
+  def test_each_approval_gate_s_first_approve_succeeds_after_waiting_longer_than_the_poll_window
+    gates = gated_cards
+    n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: StringIO.new)
+    wait_in_the_gates(n, 2 * 600) # twice wanted_for
+    assert_empty CK.stale_gates(@kb, @port), "the guard: every gated card's reads are inside the window"
+    gates.each do |gate, id|
+      @kb.approve(id, by: "operator") # card #499: "not read yet (asked now — try again in a minute)"
+      assert @kb.card(id)[:approved_at], "#{gate}: approved on the first click"
+    end
+  end
+
+  # the live guard: a card the operator can Approve whose reads fell out of the poll window is listed with each read
+  # (never asked, or how long ago) and said by the notifier once per change, and once when fresh again
+  def test_the_gate_guard_names_a_gated_card_whose_reads_left_the_window
+    gates = gated_cards
+    n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: StringIO.new)
+    final = gates.fetch("awaiting_merge")
+    never = CK.stale_gates(@kb, @port).find { |g| g[:card] == final }
+    assert_equal({ card: final, project: "o-r", column: "awaiting_merge",
+                   reads: [{ repo: "o/r_local", ref: "pr:115", age: nil }], }, never, "never asked")
+    wait_in_the_gates(n, 120)
+    assert_empty CK.stale_gates(@kb, @port)
+    @now += 601 # no watch pass for longer than the window (the prefetch skipped them)
+    stale = CK.stale_gates(@kb, @port).to_h { |g| [g[:card], g[:reads]] }
+    assert_equal gates.values.sort, stale.keys.sort
+    assert_equal [{ repo: "o/r_local", ref: "pr:115", age: 601 }, { repo: "o/r", ref: "pr:6", age: 601 }], stale[final]
+    assert_equal [{ repo: "o/r_local", ref: "pr:113", age: 601 }, { repo: "o/r_local", ref: "merge:113", age: 601 }],
+                 stale[gates.fetch("deploy_check")]
+    assert_equal 0, @conn[:gh_pr_checks].where(Sequel.lit("requested_at > ?", @now - 601)).count, "the guard asks nothing"
+
+    log = StringIO.new
+    guard = CK::GateGuard.new(log: log, window: 600)
+    guard.check(CK.stale_gates(@kb, @port))
+    @now += 30 # review round 1: the ages grow every pass — not a change, nothing said again
+    guard.check(CK.stale_gates(@kb, @port))
+    n.watch
+    guard.check(CK.stale_gates(@kb, @port))
+    lines = log.string.lines.map(&:chomp)
+    assert_equal 8, lines.size, log.string
+    assert_includes lines, "gate guard: card #{final} (awaiting_merge): o/r_local pr:115 last asked 601s ago; o/r pr:6 " \
+                           "last asked 601s ago — not answered inside the 600s poll window: its Approve is refused " \
+                           "until each is read"
+    assert_includes lines, "gate guard: card #{final} reads fresh again"
+  end
+
+  # review round 1: a row the github service failed to read refuses the Approve (Unavailable) — the guard names it
+  # with the poll's error, said again only when the error changes
+  def test_the_gate_guard_names_a_failed_poll
+    gates = gated_cards
+    n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: StringIO.new)
+    wait_in_the_gates(n, 60)
+    first = gates.fetch("local_human_review")
+    @conn[:gh_pr_checks].where(repo: "o/r_local", ref: "pr:112").update(error: "403 rate limited")
+    stale = CK.stale_gates(@kb, @port).to_h { |g| [g[:card], g[:reads]] }
+    assert_equal({ first => [{ repo: "o/r_local", ref: "pr:112", age: 0, error: "403 rate limited" }] }, stale)
+    log = StringIO.new
+    guard = CK::GateGuard.new(log: log, window: 600)
+    guard.check(CK.stale_gates(@kb, @port))
+    @now += 30
+    guard.check(CK.stale_gates(@kb, @port))
+    @conn[:gh_pr_checks].where(repo: "o/r_local", ref: "pr:112").update(error: "502 bad gateway")
+    guard.check(CK.stale_gates(@kb, @port))
+    assert_equal ["gate guard: card #{first} (local_human_review): o/r_local pr:112 poll failed: 403 rate limited — " \
+                  "not answered inside the 600s poll window: its Approve is refused until each is read",
+                  "gate guard: card #{first} (local_human_review): o/r_local pr:112 poll failed: 502 bad gateway — " \
+                  "not answered inside the 600s poll window: its Approve is refused until each is read",],
+                 log.string.lines.map(&:chomp)
+  end
 end

@@ -14,6 +14,8 @@ $stdout.sync = true
 Busyyaks::Kanban.watch_fits!(watch: watch_every, interval: interval) # the watch pass keeps the gated cards' CI requests inside the poll window
 n = Busyyaks::Kanban.notifier(grace: grace)
 n_rev = Busyyaks::Kanban.config_revision[:id]
+# card #511: after each watch pass, a card the operator can Approve whose CI reads fell out of the poll window is said
+gate_guard = Busyyaks::CiChecks::GateGuard.new(log: $stdout, window: Busyyaks::Kanban.ci_window)
 last_watch = 0
 puts "notifier up: deliver every #{interval}s, watchdog every #{watch_every}s, grace #{grace}s"
 loop do
@@ -38,6 +40,7 @@ loop do
       exit 1
     end
     n.watch
+    gate_guard.check(Busyyaks::Kanban.stale_gates)
     last_watch = Busyyaks::Clock.epoch
   end
   sleep interval

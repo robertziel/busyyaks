@@ -2,6 +2,7 @@
 
 require "busyyaks/github_network"
 require "busyyaks/ci_checks"
+require "busyyaks/kanban"
 
 module Busyyaks
   module Actions
@@ -10,7 +11,8 @@ module Busyyaks
         # GET /api/github?hours=24|168|720 — the GitHub network feed (GithubNetwork::Feed, unix timestamps) + its repo and
         # people lists and the dashboard feed rendered server-side by the tl:github renderer (same markup as the report
         # block, every item). `ci_unconfigured` = the enrolled projects' repos config ci.required does not list (their
-        # cards' CI gate is refused until it does; CiChecks.unlisted).
+        # cards' CI gate is refused until it does; CiChecks.unlisted). `gate_stale` = the cards the operator can Approve
+        # whose CI reads fell out of the poll window (card #511, CiChecks.stale_gates) + `ci_window` (seconds).
         class Show < Busyyaks::APIAction
           def handle(req, res)
             hours = Integer(req.params[:hours].to_s, exception: false)
@@ -21,7 +23,8 @@ module Busyyaks
             d = GithubNetwork::Block.data(feed, max: nil)
             network = ReportBlocks.gh_network(d["network"])
             window = GithubNetwork::Block.window_label(hours)
-            json(res, feed.merge(ci_unconfigured: CiChecks.unlisted(data.db, Config.load.ci), html: {
+            json(res, feed.merge(ci_unconfigured: CiChecks.unlisted(data.db, Config.load.ci),
+                                 gate_stale: Kanban.stale_gates, ci_window: Kanban.ci_window, html: {
                                    repos: ReportBlocks.gh_repos_html(d["repos"] || [], network, 0, head: false),
                                    people: ReportBlocks.gh_people_html(d["people"] || [], network, 0, d["follows_since"],
                                                                        head: false),

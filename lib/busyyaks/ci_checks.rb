@@ -43,6 +43,52 @@ module Busyyaks
       repos.filter_map { |url| PrStates.slug(url) }.uniq { |r| r.downcase }.reject { |r| ci.required_for(r) }.sort
     end
 
+    # Card #511's live guard: every card the operator can Approve now (the engine's Store#approval_pending_cards — the
+    # cards its prefetch asks) whose step reads a request the github service no longer polls: never asked, or last
+    # asked longer ago than wanted_for. Its Approve would be refused "not read yet". Run right
+    # after the notifier's prefetch, the list is empty unless a card was not asked — said by the notifier (GateGuard)
+    # and on /github. → [{card:, project:, column:, reads: [{repo:, ref:, age: seconds | nil (never asked)}]}]
+    def self.stale_gates(store, port)
+      store.approval_pending_cards.filter_map do |c, step|
+        reads = port.stale_reads(c, step.to_h)
+        { card: c[:id], project: c[:project_slug], column: c[:column], reads: reads } if reads.any?
+      end
+    end
+
+    # The notifier's line for stale_gates: one per card per change of what is stale, one when it is fresh again.
+    class GateGuard
+      def initialize(log:, window:)
+        @log = log
+        @window = window
+        @said = {} # card id => the line said last
+      end
+
+      # A change = another column, another set of rows, a row never asked turning asked, or another poll error — never
+      # an age growing by one watch pass (review round 1: the line carries the age, so it was said every pass).
+      def check(stale)
+        now = stale.to_h { |g| [g[:card], key(g)] }
+        stale.each { |g| @log.puts(line(g)) unless @said[g[:card]] == now[g[:card]] }
+        (@said.keys - now.keys).each { |id| @log.puts("gate guard: card #{id} reads fresh again") }
+        @said = now
+      end
+
+      private
+
+      def key(g) = [g[:column], g[:reads].map { |r| [r[:repo], r[:ref], r[:age].nil?, r[:error]] }]
+
+      def line(g)
+        reads = g[:reads].map do |r|
+          what = if r[:error] then "poll failed: #{r[:error]}"
+                 elsif r[:age] then "last asked #{r[:age]}s ago"
+                 else "never asked"
+                 end
+          "#{r[:repo]} #{r[:ref]} #{what}"
+        end
+        "gate guard: card #{g[:card]} (#{g[:column]}): #{reads.join('; ')} — not answered inside the #{@window}s " \
+          "poll window: its Approve is refused until each is read"
+      end
+    end
+
     # The notifier's side. launcher (SessionGit): answers git(session:, socket:) →
     # {"ok"=>true, "branch"=>…, "last_commit_at"=>…}.
     class Port
@@ -93,11 +139,36 @@ module Busyyaks
         built!(card, step_checks(card, step))
       end
 
+      # The poll rows on the path of card's Approve of `step` that the github service does not answer
+      # (CiChecks.stale_gates): never asked, or outside its window, or failed. step_checks is walked over the
+      # stored rows by a dup of this port with @peek on — no poll request is written. The walk goes past a stale row
+      # on its stored answer (review round 1): the list is EVERY row the operator would wait for, while a real Approve
+      # stops at the first (one refusal per click) — a superset of what one click names, never fewer.
+      # → [{repo:, ref:, age: seconds since last asked | nil (never asked), error: the poll's error (only when failed)}]
+      def stale_reads(card, step)
+        peek = dup
+        peek.peek!
+        peek.peek_reads(card, step)
+      end
+
       def last_commit_at(card)
         return nil unless card[:owner_session]
 
         git = @launcher.git(session: card[:owner_session], socket: card[:owner_socket] || "default")
         git["last_commit_at"]
+      end
+
+      protected
+
+      def peek! = (@peek = [])
+
+      def peek_reads(card, step)
+        begin
+          step_checks(card, step)
+        rescue Unavailable
+          nil # the reads made before the port gave up are still listed; the refusal itself is the prefetch's log line
+        end
+        @peek.uniq # a step may read one row twice (Deploy check: the local PR's state, then its merge)
       end
 
       private
@@ -292,6 +363,7 @@ module Busyyaks
       def answer(repo, ref)
         now = @clock.call
         row = @db[:gh_pr_checks].where(repo: repo, ref: ref).first
+        return peek_answer(repo, ref, row, now) if @peek
         if row && now - row[:requested_at] > @wanted_for
           @db[:gh_pr_checks].where(id: row[:id]).update(requested_at: now, checked_at: nil, error: nil)
           return { number: nil, state: "unpolled", finished_at: nil }
@@ -316,6 +388,24 @@ module Busyyaks
           raise Unavailable, "GitHub check status for #{repo} #{ref} is #{age}s old (github service stopped?)"
         end
 
+        answered(row)
+      end
+
+      # stale_reads' answer: the row as stored, nothing written; a request the poller dropped (or never got) is noted
+      def peek_answer(repo, ref, row, now)
+        if row&.dig(:error)
+          # Approve raises Unavailable on it ("GitHub check poll … failed"): listed with the poll's error
+          @peek << { repo: repo, ref: ref, age: now - row[:requested_at], error: row[:error] }
+        elsif row.nil? || now - row[:requested_at] > @wanted_for
+          @peek << { repo: repo, ref: ref, age: row && (now - row[:requested_at]) }
+        end
+        return { number: nil, state: "unpolled", finished_at: nil } if row.nil? || row[:error] || row[:checked_at].nil?
+
+        answered(row)
+      end
+
+      # a polled row as the gate reads it
+      def answered(row)
         out = { number: row[:number], state: row[:state], finished_at: row[:finished_at] }
         out[:head] = row[:head] if row[:head] # the PR head sha (a pr: row; a merge: row has none)
         out[:builds] = JSON.parse(row[:builds]) if row[:builds] # the required checks' build URLs

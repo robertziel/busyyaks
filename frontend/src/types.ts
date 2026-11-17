@@ -365,6 +365,17 @@ export type GithubData = {
   html: { repos: string; people: string; feed: string };
   // enrolled projects' repos config ci.required does not list: their cards' CI gate is refused (card #470)
   ci_unconfigured: string[];
+  // cards the operator can Approve whose CI reads fell out of the poll window: their Approve is refused "not read
+  // yet" (card #511); ci_window = that window in seconds
+  gate_stale: GithubGateStale[];
+  ci_window: number;
+};
+export type GithubGateStale = {
+  card: number;
+  project: string;
+  column: string;
+  path: string;
+  reads: { repo: string; ref: string; age: number | null; error?: string }[];
 };
 // the PR pollers' last tick (CI checks + PR states, one token): cost, rate limit left, a pause until GitHub's reset
 export type GithubPollers = {

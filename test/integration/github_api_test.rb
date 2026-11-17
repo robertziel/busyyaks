@@ -51,6 +51,27 @@ class GithubApiTest < Minitest::Test
     assert_equal ["p/x"], get_json("/api/github?hours=24")["ci_unconfigured"], "o/r is in the fixture's ci.required"
   end
 
+  # card #511: a card the operator can Approve whose CI reads the github service no longer polls is said on /github
+  # (its Approve would be refused "not read yet"), with the card's page and each read
+  def test_a_gated_card_whose_ci_reads_left_the_poll_window_is_listed
+    sign_in
+    out = get_json("/api/github?hours=24")
+    assert_equal [], out["gate_stale"]
+    assert_equal 600, out["ci_window"], "10 × GITHUB_CI_INTERVAL_SECONDS"
+    db[:projects].insert(slug: "x", path: "/projects/x", remote: "git@github.com:o/r.git", own: true, commits_window: 0,
+                         mine_window: 0, dirty: 0, scanned_at: 0, local_mode: "own", local_repo: "git@github.com:o/r.git",
+                         public_repo: "git@github.com:p/x.git")
+    kb = Busyyaks::Kanban.default
+    board = File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)
+    kb.board_save("x", JSON.parse(File.read(board)), by: "operator")
+    id = kb.create(slug: "x", title: "dragged here", by: "op", column: "awaiting_merge")
+    kb.assign_pr(id, url: "https://github.com/o/r/pull/9", role: "local", by: "op")
+    assert_equal [{ "card" => id, "project" => "x", "column" => "awaiting_merge", "path" => "/projects/x?tab=board&card=#{id}",
+                    "reads" => [{ "repo" => "o/r", "ref" => "pr:9", "age" => nil }], }],
+                 get_json("/api/github?hours=24")["gate_stale"]
+    assert_equal 0, db[:gh_pr_checks].count, "the guard asks nothing"
+  end
+
   def test_bad_hours_is_400
     sign_in
     assert_match(/hours must be/, get_json("/api/github?hours=abc")["error"])
