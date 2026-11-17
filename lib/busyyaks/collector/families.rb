@@ -102,7 +102,13 @@ module Busyyaks
       # → [{session_id, status, waiting_for, title, status_at, raw_status}, nil] or [nil, why]
       def record(process)
         path = File.join(@sessions_dir, "#{process.pid}.json")
-        d = JSON.parse(File.read(path, RECORD_MAX))
+        raw = File.open(path, File::RDONLY | File::NONBLOCK) do |f|
+          # a FIFO or a device there would park the loop on a read: only a regular file is a record
+          return [nil, "its record #{path} is not a regular file"] unless f.stat.file?
+
+          f.read(RECORD_MAX)
+        end
+        d = JSON.parse(raw.to_s)
         return [nil, "its record #{path} is not an object"] unless d.is_a?(Hash)
         mine = d["pid"] == process.pid && d["procStart"].to_s == process.start_ticks.to_s
         return [nil, "its record #{path} is another process's (pid reused)"] unless mine

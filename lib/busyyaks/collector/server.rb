@@ -18,7 +18,8 @@ module Busyyaks
     #   {"op":"tasks","session","socket"}              → refused: this collector reads no subagents / tasks
     #   {"op":"ping"}                                  → {ok, collector: "busyyaks"} (`yaks doctor`: the socket answers)
     # The pane is never taken from the request: the session names it, the LAST snapshot gives its agent pane, or nothing.
-    # Errors: {ok: false, error: {type, message}} (type tmux = worth a retry).
+    # Errors: {ok: false, error: {type, message}} (type tmux = nothing typed, worth a retry; type unconfirmed = a send
+    # whose paste had started when tmux failed: the text may be on the screen, never sent again).
     class Server
       REQUEST_MAX = 64 * 1024
       READ_SECONDS = 15
@@ -102,6 +103,7 @@ module Busyyaks
       end
 
       class TmuxFailed < StandardError; end
+      class Unconfirmed < StandardError; end
 
       def screen(t)
         text = capture(t)
@@ -135,26 +137,33 @@ module Busyyaks
           return err("dialog", "a dialog is on its screen: a paste would answer it") if @dialog.call(capture(t))
 
           paste(t, text)
-          unless req["submit"] == false
-            @pause.call(PASTE_SETTLE_S) # the paste lands before the Enter
-            _o, e, ok = @tmux.run(t.socket, "send-keys", "-t", t.pane_id, "Enter")
-            raise TmuxFailed, e.strip[0, 200] unless ok
+          begin
+            unless req["submit"] == false
+              @pause.call(PASTE_SETTLE_S) # the paste lands before the Enter
+              _o, e, ok = @tmux.run(t.socket, "send-keys", "-t", t.pane_id, "Enter")
+              raise TmuxFailed, e.strip[0, 200] unless ok
+            end
+          rescue TmuxFailed => e
+            return err("unconfirmed", "pasted, then the Enter failed: #{e.message}")
           end
           @log.call("#{Clock.now.iso8601} send #{text.length} chars → #{t.name} (#{t.pane_id})") # never the text
           { ok: true }
         end
       rescue TmuxFailed => e
         err("tmux", e.message)
+      rescue Unconfirmed => e
+        err("unconfirmed", "the paste failed and may have been typed in part: #{e.message}")
       end
 
       # one bracketed paste (a multi-line text arrives as ONE paste, never a series of Enters): the text through stdin into
       # a named buffer, pasted and deleted — never an argument tmux could read as its own
       def paste(t, text)
         buf = "busyyaks-collector-#{Process.pid}-#{Thread.current.object_id}"
-        [["load-buffer", "-b", buf, "-"], ["paste-buffer", "-p", "-d", "-b", buf, "-t", t.pane_id]].each_with_index do |args, i|
-          _o, e, ok = @tmux.run(t.socket, *args, stdin: i.zero? ? text : nil)
-          raise TmuxFailed, e.strip[0, 200] unless ok
-        end
+        _o, e, ok = @tmux.run(t.socket, "load-buffer", "-b", buf, "-", stdin: text)
+        raise TmuxFailed, e.strip[0, 200] unless ok # nothing typed yet
+
+        _o, e, ok = @tmux.run(t.socket, "paste-buffer", "-p", "-d", "-b", buf, "-t", t.pane_id)
+        raise Unconfirmed, e.strip[0, 200] unless ok # tmux may have pasted part of it before failing
       end
     end
   end
