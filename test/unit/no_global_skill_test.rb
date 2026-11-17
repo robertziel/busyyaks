@@ -32,4 +32,18 @@ class NoGlobalSkillTest < Minitest::Test
     assert_includes src, "stage = File.join(STAGES, name)"
     refute_match(/--plugin-dir.*ROOT/, src)
   end
+
+  # busyyaks's skills live in its layers only (skills/busyyaks, the deployment's skills-local, a repo's
+  # .busyyaks/skills) — never in a dir Claude Code or hermes loads on its own for whoever opens the repo
+  def test_the_skills_live_only_in_the_launch_layers
+    auto = Dir.glob(File.join(ROOT, "{.claude/skills,.claude/commands,.claude-plugin,.hermes,.agents/skills}"),
+                    File::FNM_DOTMATCH)
+    assert_empty auto.map { |f| f.delete_prefix("#{ROOT}/") }, "a dir a CLI loads by itself"
+    skills = Dir.glob(File.join(ROOT, "**/SKILL.md"), File::FNM_DOTMATCH).map { |f| f.delete_prefix("#{ROOT}/") }
+                .reject { |f| f.start_with?("node_modules/", "frontend/node_modules/", "vendor/", "test/fixtures/") }
+    assert_equal [], skills.grep_v(%r{\A(skills/busyyaks|skills-local|\.busyyaks/skills)/})
+    assert File.file?(File.join(ROOT, "skills/busyyaks/core/SKILL.md")), "every session's core skill"
+    gi = File.read(File.join(ROOT, ".gitignore")).lines.map(&:strip)
+    refute_includes gi, "/.busyyaks/", "the repo's .busyyaks/skills must be committable"
+  end
 end

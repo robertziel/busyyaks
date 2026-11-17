@@ -8,36 +8,52 @@ require "yaml"
 
 module Busyyaks
   # The skills a session busyyaks launches gets — per launch only, never installed user-wide (an
-  # independent `claude` / `hermes` on this host sees none of them). Two layers:
-  #   busyyaks's own   <checkout>/skills/manifest.yml + skills/<name>/SKILL.md          (busyyaks PRs)
-  #   a project's      <repo>/.busyyaks/skills.yml   + .busyyaks/skills/<name>/SKILL.md (that repo's committers)
-  # A manifest: `version: 1` + `skills: {<name>: {types: all | [<agent type>…], load: start | on_demand}}`. bin/launcher
-  # selects the skills of the launch's agent type from both, validates them (any failure refuses the launch), stages a
-  # COPY under LAUNCHER_STATE_DIR/skills/<session>/ (0700; the repo dir itself is never handed to the CLI), writes the
-  # entry skill `session` (the `load: start` bodies in order, busyyaks's first) and hands the stage to the CLI the way
-  # its kind takes it (Delivery). Pure Ruby, stdlib only: the host launcher requires it.
+  # independent `claude` / `hermes` on this host sees none of them), read from the checkout at every launch (an update
+  # merged into it applies from the next launch: nothing to install). Layers, each a dir of the same shape:
+  #   busyyaks's own   <checkout>/skills/busyyaks            (busyyaks PRs)
+  #   the deployment   <checkout>/<skills.local_dir>, or none
+  #   a project's      <repo>/.busyyaks/skills               (that repo's committers)
+  # A layer: core/SKILL.md (+ .md files; busyyaks's layer only, required: every session) · agents/<type>.md (the
+  # agent type keys of the agent settings: what a session of that type does) · <name>/SKILL.md (on-demand skills).
+  # bin/launcher selects core + the launch's agents/<type>.md of every layer + the on-demand skills, validates them
+  # (any failure refuses the launch), stages a COPY under LAUNCHER_STATE_DIR/skills/<session>/ (0700; the repo dir
+  # itself is never handed to the CLI), writes the entry skill `session` (core, then each layer's agents/<type>.md,
+  # then the on-demand list) and hands the stage to the CLI the way its kind takes it (Delivery). Pure Ruby, stdlib
+  # only: the host launcher requires it.
   module Skills
     class Invalid < StandardError; end
 
-    VERSION = 1
     NAME = /\A[a-z0-9-]{1,64}\z/
-    ENTRY = "session" # the generated entry skill: no manifest may name one so
-    LOADS = %w[start on_demand].freeze
+    ENTRY = "session" # the generated entry skill
+    CORE = "core"     # busyyaks's core skill: every session
+    AGENTS = "agents" # <type>.md per agent type key
+    RESERVED = [ENTRY, CORE, AGENTS].freeze
     PROJECT = %w[allow deny].freeze
-    SKILL_KEYS = %w[types load].freeze
     FRONT_KEYS = %w[name description].freeze
     BUSYYAKS = "busyyaks"
-    PROJECT_DIR = ".busyyaks"
-
-    # config/busyyaks.yml `skills` (required, no default): max_bytes = one skill dir's size, max_start_bytes = the
-    # entry skill's (every `load: start` body of one launch), project = whether a repo's .busyyaks skills may load,
-    # local_dir = this deployment's own skills dir (relative to the checkout, a manifest.yml + skill dirs like
-    # skills/) or null for none
-    Settings = Struct.new(:max_bytes, :max_start_bytes, :project, :local_dir, keyword_init: true)
     DEPLOYMENT = "deployment"
+    PROJECT_SOURCE = "project"
+    PROJECT_DIR = ".busyyaks"
+    OWN_DIR = "skills/busyyaks" # busyyaks's layer, relative to the checkout
+    # a repo's pre-layout manifest: never read; while it is there the repo's skills are left, the launch says why
+    OLD_MANIFEST = "skills.yml"
+    MOVE = "no manifests now — move each skill to .busyyaks/skills/<name>/SKILL.md and each type's part to " \
+           ".busyyaks/skills/agents/<type>.md, then delete it (docs/DEPLOY.md § Skills)"
 
-    # One validated skill: its manifest entry + the SKILL.md parts (frontmatter dropped from the body) + its files
-    Skill = Struct.new(:name, :source, :types, :load, :description, :body, :files, :sha, keyword_init: true)
+    # config/busyyaks.yml `skills` (required, no default): max_bytes = one skill dir's / agent file's size,
+    # max_start_bytes = the entry skill's (core + the type's agent files of one launch), project = whether a repo's
+    # .busyyaks/skills may load, local_dir = this deployment's own layer (relative to the checkout, the shape of
+    # skills/busyyaks minus core) or null for none
+    Settings = Struct.new(:max_bytes, :max_start_bytes, :project, :local_dir, keyword_init: true)
+
+    # One on-demand skill (or core): the SKILL.md parts (frontmatter dropped from the body) + its files
+    Skill = Struct.new(:name, :source, :description, :body, :files, :sha, keyword_init: true)
+    # One agents/<type>.md of a layer
+    Part = Struct.new(:type, :source, :body, :sha, keyword_init: true)
+    # One layer: its source, core (busyyaks's only), agents (type → Part), on-demand skills
+    Layer = Struct.new(:source, :core, :agents, :skills, keyword_init: true)
+    # What one launch of `type` gets: core, the type's parts (busyyaks → deployment → project), the on-demand skills
+    Selection = Struct.new(:type, :core, :parts, :skills, keyword_init: true)
 
     module_function
 
@@ -71,50 +87,93 @@ module Busyyaks
                    local_dir: local)
     end
 
-    # The busyyaks layer: <checkout>/skills, then the deployment's skills.local_dir (no name in both)
+    # The busyyaks layers: <checkout>/skills/busyyaks (core required), then the deployment's skills.local_dir
     def busyyaks!(checkout, types:, settings:)
-      dir = File.join(checkout, "skills")
-      own = load!(File.join(dir, "manifest.yml"), dir, root: checkout, source: BUSYYAKS, types: types, settings: settings)
-      return own unless settings.local_dir
+      own = layer!(File.join(checkout, OWN_DIR), root: checkout, source: BUSYYAKS, types: types, settings: settings)
+      return [own] unless settings.local_dir
 
-      ldir = File.join(checkout, settings.local_dir)
-      local = load!(File.join(ldir, "manifest.yml"), ldir, root: checkout, source: DEPLOYMENT, types: types,
-                                                           settings: settings)
-      clash = local.map(&:name) & own.map(&:name)
-      raise Invalid, "#{ldir}: #{clash.join(', ')} shadows a busyyaks skill: rename it" if clash.any?
-
-      own + local
+      local = layer!(File.join(checkout, settings.local_dir), root: checkout, source: DEPLOYMENT, types: types,
+                                                              settings: settings)
+      unique!([own, local], File.join(checkout, settings.local_dir))
+      [own, local]
     end
 
-    # A project's layer: <repo>/.busyyaks, nil when the repo has none
+    # A project's layer: <repo>/.busyyaks/skills, nil when the repo has none
     def project(repo, types:, settings:, taken:)
       base = File.join(repo, PROJECT_DIR)
-      manifest = File.join(base, "skills.yml")
-      no_link!(repo, manifest)
-      no_link!(repo, File.join(base, "skills"))
-      return nil unless File.exist?(manifest) || File.exist?(File.join(base, "skills"))
+      dir = File.join(base, "skills")
+      no_link!(repo, dir)
+      return nil unless File.exist?(dir)
 
-      skills = load!(manifest, File.join(base, "skills"), root: repo, source: "project", types: types, settings: settings)
-      clash = skills.map(&:name) & taken
-      raise Invalid, "#{manifest}: #{clash.join(', ')} shadows a busyyaks skill: rename it" if clash.any?
+      layer = layer!(dir, root: repo, source: PROJECT_SOURCE, types: types, settings: settings)
+      clash = layer.skills.map(&:name) & taken
+      raise Invalid, "#{dir}: #{clash.join(', ')} shadows a busyyaks skill: rename it" if clash.any?
 
-      skills
+      layer
     end
 
-    # A manifest + its skills dir → [Skill], every rule checked (nothing is half-loaded: one refusal refuses all)
-    def load!(manifest, dir, root:, source:, types:, settings:)
-      no_link!(root, manifest)
+    # the layers' on-demand names are unique → the last layer
+    def unique!(layers, where)
+      names = layers[0..-2].flat_map { |l| l.skills.map(&:name) }
+      clash = layers.last.skills.map(&:name) & names
+      raise Invalid, "#{where}: #{clash.join(', ')} shadows a busyyaks skill: rename it" if clash.any?
+    end
+
+    # One layer dir → Layer, every rule checked (nothing is half-loaded: one refusal refuses all):
+    #   core/SKILL.md (+ .md)   busyyaks's layer only, required there
+    #   agents/<type>.md        optional; <type> = an agent type key of the agent settings
+    #   <name>/SKILL.md (+ .md) on-demand skills
+    def layer!(dir, root:, source:, types:, settings:)
       no_link!(root, dir)
-      entries = manifest!(manifest, types)
-      raise Invalid, "#{dir} missing (#{manifest} names #{entries.keys.join(', ')})" unless File.directory?(dir)
+      raise Invalid, "#{dir} missing" unless File.exist?(dir)
+      raise Invalid, "#{dir} is not a directory" unless File.directory?(dir)
 
-      dirs = Dir.children(dir).reject { |c| c == File.basename(manifest) && File.dirname(manifest) == dir }.sort
-      unlisted = dirs - entries.keys
-      absent = entries.keys - dirs
-      raise Invalid, "#{dir}: #{unlisted.join(', ')} not in #{manifest}" if unlisted.any?
-      raise Invalid, "#{dir}: #{absent.join(', ')} named in #{manifest} but missing" if absent.any?
+      own = source == BUSYYAKS
+      children = Dir.children(dir).sort
+      children.each do |c|
+        path = File.join(dir, c)
+        raise Invalid, "#{path}: a skills dir holds directories only (core, agents, <skill>)" unless File.directory?(path)
+        next if c == AGENTS || (own && c == CORE)
+        raise Invalid, "#{path}: #{c} is busyyaks's core skill: rename it" if c == CORE
+        raise Invalid, "#{path}: #{ENTRY} is the generated entry skill's name" if c == ENTRY
+        raise Invalid, "#{path}: skill name #{c.inspect} must match #{NAME.source}" unless c.match?(NAME)
+      end
+      raise Invalid,
+"#{File.join(dir, CORE)}/SKILL.md missing (every session starts with it)" if own && !children.include?(CORE)
 
-      entries.map { |name, e| skill!(File.join(dir, name), name, e, root: root, source: source, settings: settings) }
+      core = own ? skill!(File.join(dir, CORE), CORE, root: root, source: source, settings: settings) : nil
+      agents = if children.include?(AGENTS)
+                 agents!(File.join(dir, AGENTS), root: root, source: source, types: types,
+               settings: settings)
+else
+  {}
+end
+      skills = (children - RESERVED).map { |n| skill!(File.join(dir, n), n, root: root, source: source, settings: settings) }
+      Layer.new(source: source, core: core, agents: agents, skills: skills)
+    end
+
+    # agents/: <type>.md per agent type, regular files, plain markdown
+    def agents!(dir, root:, source:, types:, settings:)
+      no_link!(root, dir)
+      Dir.children(dir).sort.to_h do |f|
+        path = File.join(dir, f)
+        unless File.file?(path) && !File.symlink?(path) && f.end_with?(".md")
+          raise Invalid, "#{path}: agents/ holds <agent type>.md files only"
+        end
+
+        type = f.delete_suffix(".md")
+        raise Invalid, "#{path}: #{type} is not an agent type (#{types.join(', ')})" unless types.include?(type)
+
+        no_link!(root, path)
+        size = File.size(path)
+        raise Invalid, "#{path} is #{size} bytes, over skills.max_bytes #{settings.max_bytes}" if size > settings.max_bytes
+
+        body = File.binread(path).force_encoding(Encoding::UTF_8)
+        raise Invalid, "#{path} is not UTF-8" unless body.valid_encoding?
+
+        no_shell_inline!(path, body)
+        [type, Part.new(type: type, source: source, body: body, sha: Digest::SHA256.hexdigest(body))]
+      end
     end
 
     # Every component of `path` below `root` is a real file or dir (never a symlink), and its real path stays under
@@ -146,73 +205,34 @@ module Busyyaks
       end
     end
 
-    def manifest!(path, types)
-      raise Invalid, "#{path} missing" unless File.file?(path)
-
-      doc = begin
-        YAML.safe_load_file(path)
-      rescue Psych::Exception => e
-        raise Invalid, "#{path}: #{e.message}"
-      end
-      raise Invalid, "#{path} must be {version, skills}" unless doc.is_a?(Hash) && doc.keys.sort == %w[skills version]
-      raise Invalid, "#{path}: version must be #{VERSION} (got #{doc['version'].inspect})" unless doc["version"] == VERSION
-
-      skills = doc["skills"]
-      raise Invalid, "#{path}: skills must be a non-empty map name → {types, load}" unless skills.is_a?(Hash) && skills.any?
-
-      skills.each do |name, e|
-        name!(name, path)
-        entry!(name, e, path, types)
-      end
-      skills
-    end
-
-    def name!(name, where)
-      raise Invalid,
-"#{where}: skill name #{name.inspect} must match #{NAME.source}" unless name.is_a?(String) && name.match?(NAME)
-      raise Invalid, "#{where}: #{ENTRY} is the generated entry skill's name" if name == ENTRY
-    end
-
-    def entry!(name, e, path, types)
-      raise Invalid, "#{path}: #{name} must be {types, load}" unless e.is_a?(Hash) && e.keys.sort == SKILL_KEYS.sort
-      raise Invalid, "#{path}: #{name}.load must be #{LOADS.join(' or ')}" unless LOADS.include?(e["load"])
-
-      t = e["types"]
-      return if t == "all"
-
-      unless t.is_a?(Array) && t.any? && t.all?(String)
-        raise Invalid, "#{path}: #{name}.types must be all or a list of agent types"
-      end
-      unknown = t - types
-      raise Invalid, "#{path}: #{name}.types #{unknown.join(', ')} not an agent type (#{types.join(', ')})" if unknown.any?
-    end
-
     # One skill dir: regular .md files only (no link, no subdir), SKILL.md with frontmatter exactly name + description
-    def skill!(dir, name, entry, root:, source:, settings:)
+    def skill!(dir, name, root:, source:, settings:)
       no_link!(root, dir)
       raise Invalid, "#{dir} must be a directory" unless File.directory?(dir)
 
-      files = Dir.children(dir).sort.to_h do |f|
+      names = Dir.children(dir).sort
+      names.each do |f|
         path = File.join(dir, f)
         unless File.file?(path) && !File.symlink?(path) && f.end_with?(".md")
           raise Invalid, "#{path}: a skill holds regular .md files only"
         end
 
         no_link!(root, path)
-        [f, File.binread(path)]
       end
-      raise Invalid, "#{dir}/SKILL.md missing" unless files.key?("SKILL.md")
+      raise Invalid, "#{dir}/SKILL.md missing" unless names.include?("SKILL.md")
 
-      size = files.values.sum(&:bytesize)
+      # the size from the file system first: an oversized file is refused before it is read
+      size = names.sum { |f| File.size(File.join(dir, f)) }
       raise Invalid, "#{dir} is #{size} bytes, over skills.max_bytes #{settings.max_bytes}" if size > settings.max_bytes
+
+      files = names.to_h { |f| [f, File.binread(File.join(dir, f))] }
 
       files.each { |f, b| no_shell_inline!(File.join(dir, f), b.dup.force_encoding(Encoding::UTF_8).scrub) }
       front, body = frontmatter!(files["SKILL.md"], File.join(dir, "SKILL.md"))
       raise Invalid, "#{dir}/SKILL.md: name #{front['name'].inspect} must be its dir's #{name}" unless front["name"] == name
 
       sha = Digest::SHA256.hexdigest(files.sort.map { |f, b| "#{f}\0#{b}" }.join("\0"))
-      Skill.new(name: name, source: source, types: entry["types"], load: entry["load"],
-                description: front["description"], body: body, files: files, sha: sha)
+      Skill.new(name: name, source: source, description: front["description"], body: body, files: files, sha: sha)
     end
 
     def frontmatter!(text, path)
@@ -235,70 +255,79 @@ module Busyyaks
       [front, m.post_match]
     end
 
-    # One launch's skills → [selected, project_skills]: busyyaks's for `type`, then the repo's (only when
+    # One launch's skills → [Selection, project_skills]: busyyaks's layers for `type`, then the repo's (only when
     # skills.project is allow AND the repo is trusted — the folder-trust decision, LaunchTrust.refusal — else
-    # "left: <why>", nothing of it read); project_skills = "loaded" · "none" (no .busyyaks) · "left: <why>"
+    # "left: <why>", nothing of it read); project_skills = "loaded" · "none" (no .busyyaks/skills) · "left: <why>"
     def plan!(checkout:, repo:, type:, types:, settings:, trust_refusal:)
       own = busyyaks!(checkout, types: types, settings: settings)
-      status, theirs = project_layer(repo, type: type, types: types, settings: settings, trust_refusal: trust_refusal,
-                                           taken: own.map(&:name))
-      [check_selection!(select(own, type) + theirs, type, settings), status]
+      status, theirs = project_layer(repo, types: types, settings: settings, trust_refusal: trust_refusal,
+                                           taken: own.flat_map { |l| l.skills.map(&:name) })
+      [check_selection!(select(own + theirs, type), settings), status]
     end
 
-    def project_layer(repo, type:, types:, settings:, trust_refusal:, taken:)
-      return ["none", []] unless File.exist?(File.join(repo, PROJECT_DIR))
+    def project_layer(repo, types:, settings:, trust_refusal:, taken:)
+      dir = File.join(repo, PROJECT_DIR, "skills")
+      old = File.join(repo, PROJECT_DIR, OLD_MANIFEST)
+      return ["left: #{old} is the old manifest layout: #{MOVE}", []] if File.exist?(old) || File.symlink?(old)
+      return ["none", []] unless File.exist?(dir) || File.symlink?(dir) || File.symlink?(File.join(repo, PROJECT_DIR))
       return ["left: config/busyyaks.yml skills.project is deny", []] if settings.project == "deny"
       return ["left: #{trust_refusal}", []] if trust_refusal
 
-      skills = project(repo, types: types, settings: settings, taken: taken)
-      return ["none", []] if skills.nil?
-
-      picked = select(skills, type)
-      [picked.empty? ? "none for #{type}" : "loaded", picked]
+      layer = project(repo, types: types, settings: settings, taken: taken)
+      layer.nil? ? ["none", []] : ["loaded", [layer]]
     end
 
-    # The skills of one agent type, in manifest order
-    def select(skills, type) = skills.select { |s| s.types == "all" || s.types.include?(type) }
+    # What a launch of `type` gets from the layers, in layer order
+    def select(layers, type)
+      core = layers.first.core
+      Selection.new(type: type, core: core, parts: layers.filter_map { |l| l.agents[type] },
+                    skills: layers.flat_map(&:skills))
+    end
 
-    # What a launch of `type` gets: at least one `load: start` skill, their bodies within max_start_bytes
-    def check_selection!(selected, type, settings)
-      start = selected.select { |s| s.load == "start" }
-      raise Invalid, "agent type #{type}: no `load: start` skill (skills/manifest.yml)" if start.empty?
-
-      size = start.sum { |s| s.body.bytesize }
+    # The entry skill (core + the type's agent files) within max_start_bytes
+    def check_selection!(selection, settings)
+      size = selection.core.body.bytesize + selection.parts.sum { |p| p.body.bytesize }
       if size > settings.max_start_bytes
         raise Invalid,
-"agent type #{type}: the start skills are #{size} bytes, over skills.max_start_bytes #{settings.max_start_bytes}"
+"agent type #{selection.type}: core + agents/#{selection.type}.md are #{size} bytes, " \
+"over skills.max_start_bytes #{settings.max_start_bytes}"
       end
 
-      selected
+      selection
     end
 
-    # The entry skill's markdown body: each start skill under its own heading, then the on-demand ones by their
+    # The entry skill's markdown body: core, then each layer's agents/<type>.md, then the on-demand skills by their
     # delivered names (the Skill tool / the CLI loads those when the work needs them)
-    def entry_body(selected, delivery)
-      start = selected.select { |s| s.load == "start" }
-      later = selected.reject { |s| s.load == "start" }
-      out = +"# busyyaks session\n\nThe skills busyyaks gave this session. Follow them for every card you work.\n"
-      start.each { |s| out << "\n## #{s.name} (#{s.source})\n\n#{s.body.strip}\n" }
-      if later.any?
+    def entry_body(selection, delivery)
+      t = selection.type
+      out = +"# busyyaks session (agent type #{t})\n\n"
+      out << "The skills busyyaks gave this session. Follow them for every card you work.\n"
+      refs = selection.core.files.keys - ["SKILL.md"]
+      out << "\n#{selection.core.body.strip}\n"
+      out << "\nReference files beside this skill: #{refs.map { |f| "`#{f}`" }.join(', ')}.\n" if refs.any?
+      selection.parts.each { |p| out << "\n## Agent type #{t} (#{p.source})\n\n#{p.body.strip}\n" }
+      if selection.skills.any?
         out << "\n## Load when needed\n\n"
-        later.each { |s| out << "- `#{delivery.ref(s.name)}` (#{s.source}): #{s.description}\n" }
+        out << "The text above names these skills by their short name; load each by the name given here.\n\n"
+        selection.skills.each { |s| out << "- `#{delivery.ref(s.name)}` (#{s.source}): #{s.description}\n" }
       end
       out
     end
 
     # Writes the stage (a fresh dir, 0700) → the receipt [{name, source, sha, load}] (the entry skill last)
-    def stage!(selected, dest, delivery)
+    def stage!(selection, dest, delivery)
       FileUtils.rm_rf(dest)
       FileUtils.mkdir_p(dest, mode: 0o700)
       File.chmod(0o700, dest)
       delivery.layout(dest)
-      selected.each { |s| write_skill(dest, delivery, s.name, s.description, s.body, s.files) }
-      entry = entry_body(selected, delivery)
+      selection.skills.each { |s| write_skill(dest, delivery, s.name, s.description, s.body, s.files) }
+      entry = entry_body(selection, delivery)
       desc = "The busyyaks board workflow for this session (start here)"
-      write_skill(dest, delivery, ENTRY, desc, entry, {})
-      selected.map { |s| { name: s.name, source: s.source, sha: s.sha, load: s.load } } +
+      write_skill(dest, delivery, ENTRY, desc, entry, selection.core.files)
+      core = selection.core
+      [{ name: CORE, source: core.source, sha: core.sha, load: "start" }] +
+        selection.parts.map { |p| { name: "#{AGENTS}/#{p.type}", source: p.source, sha: p.sha, load: "start" } } +
+        selection.skills.map { |s| { name: s.name, source: s.source, sha: s.sha, load: "on_demand" } } +
         [{ name: ENTRY, source: BUSYYAKS, sha: Digest::SHA256.hexdigest(entry), load: "start" }]
     end
 

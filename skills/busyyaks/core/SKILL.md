@@ -1,8 +1,8 @@
 ---
-name: workflow
-description: The busyyaks board rules every session follows — identity, kanban_ask / kanban_block, never polling, comment headers, never merging before the operator approves, conflicts and red CI never parking a card, links.
+name: core
+description: How busyyaks sessions work with the kanban MCP — identity, ownership, kanban_ask / kanban_block, never polling, comment headers, gates and approval, conflicts and red CI never parking a card, links. Every session busyyaks starts loads it.
 ---
-# busyyaks board workflow
+# busyyaks core: the board and its kanban MCP
 
 The board (columns, transitions, gates) is the operator's: read it with `kanban_workflow(project)` and a card's way
 forward with `kanban_card(id).transitions` — never assume a column name. A board whose columns start with `Local:` /
@@ -15,7 +15,7 @@ this deployment provides one.
 |---|---|
 | who you are | your tmux session (`tmux display -p '#S'`); the launch prompt names your agent name |
 | own a card | cards you create (`kanban_create` with `tmux_session`, or `author` = your agent name) are yours; a card you start that you do not own → `kanban_claim(id, assignee, tmux_session)` first |
-| new card | only with the operator's go-ahead |
+| new card | only with the operator's go-ahead (`kanban_ask` on the card you work); findings go as comments on that card, never as new cards |
 | scope | work ONLY on the cards you were started for / own |
 
 ## Talking to the operator
@@ -27,7 +27,7 @@ this deployment provides one.
 - Never poll the board or a card (no sleep / re-read loops): comments, moves and answers arrive as pings. End the
   turn and wait.
 - Work runs concurrently, never idle-waiting: the only serial points are push → CI → merge and the operator's
-  gates (the `lead` skill's Orchestration rule, the `author` skill's Concurrency rule).
+  gates (your agent type's section below: lead = Orchestration, worker = Concurrency).
 - Never end a turn "waiting for X" unless a watcher for X is armed (a `Monitor` until-loop, e.g. on
   `gh pr view N --json statusCheckRollup` every 60 s). If the watched event already happened, act on it now.
 

@@ -7,8 +7,9 @@ require "yaml"
 require "json"
 require_relative "../../lib/busyyaks/skills"
 
-# The skills bin/launcher hands each session (lib/busyyaks/skills.rb) — the manifests and every refusal,
-# the selection per agent type, the two layers, the trust rule, the stage per CLI kind. Host-side code: no app.
+# The skills bin/launcher hands each session (lib/busyyaks/skills.rb) — the layer shape
+# (core · agents/<type>.md · on-demand dirs) and every refusal, the selection per agent type, the three layers, the
+# trust rule, the stage per CLI kind. Host-side code: no app.
 class SkillsTest < Minitest::Test
   S = Busyyaks::Skills
   ROOT = File.expand_path("../..", __dir__)
@@ -31,15 +32,17 @@ class SkillsTest < Minitest::Test
     File.write(File.join(dir, name, "SKILL.md"), "#{front.to_yaml}---\n#{body}")
   end
 
-  def manifest(path, skills)
-    FileUtils.mkdir_p(File.dirname(path))
-    File.write(path, YAML.dump("version" => 1, "skills" => skills))
+  def agent(dir, type, body = "Do the #{type} things.\n")
+    FileUtils.mkdir_p(File.join(dir, "agents"))
+    File.write(File.join(dir, "agents", "#{type}.md"), body)
   end
 
-  def own(skills = { "workflow" => { "types" => "all", "load" => "start" } })
-    dir = File.join(@co, "skills")
-    manifest(File.join(dir, "manifest.yml"), skills)
-    skills.each_key { |n| skill(dir, n) }
+  # busyyaks's layer: core + agents/<types>.md + on-demand skills
+  def own(agents: %w[lead worker], skills: %w[reviewer])
+    dir = File.join(@co, "skills/busyyaks")
+    skill(dir, "core")
+    agents.each { |t| agent(dir, t) }
+    skills.each { |n| skill(dir, n) }
     dir
   end
 
@@ -48,14 +51,27 @@ class SkillsTest < Minitest::Test
     assert_match(pattern, e.message)
   end
 
+  def load_own(settings = SET) = S.busyyaks!(@co, types: TYPES, settings: settings)
+
   # --- the repo's own skills --------------------------------------------------------------------------------------
 
+  # every template type launches: core for all, agents/<type>.md where busyyaks has one, reviewer on demand
   def test_the_repos_skills_load_for_every_template_type
-    skills = S.busyyaks!(ROOT, types: TYPES, settings: SET)
-    assert_equal %w[workflow lead author reviewer], skills.map(&:name)
-    TYPES.each { |t| S.check_selection!(S.select(skills, t), t, SET) }
-    assert_equal %w[workflow author reviewer], S.select(skills, "worker").map(&:name)
-    assert_equal %w[workflow], S.select(skills, "team").map(&:name)
+    layers = S.busyyaks!(ROOT, types: TYPES, settings: SET)
+    assert_equal %w[busyyaks], layers.map(&:source)
+    own = layers.first
+    assert_equal "core", own.core.name
+    assert_equal %w[lead team worker], own.agents.keys.sort
+    assert_equal %w[reviewer], own.skills.map(&:name)
+    TYPES.each { |t| S.check_selection!(S.select(layers, t), SET) }
+    assert_empty S.select(layers, "plain").parts, "plain = core alone"
+  end
+
+  # busyyaks's own repo layer (.busyyaks/skills, committed): only additions for agent types, nothing shadowing
+  def test_the_repos_own_project_layer_loads
+    sel, status = S.plan!(checkout: ROOT, repo: ROOT, type: "worker", types: TYPES, settings: SET, trust_refusal: nil)
+    assert_equal "loaded", status
+    assert_equal [%w[worker busyyaks], %w[worker project]], sel.parts.map { [_1.type, _1.source] }
   end
 
   # --- settings ----------------------------------------------------------------------------------------------------
@@ -70,174 +86,221 @@ class SkillsTest < Minitest::Test
     end
   end
 
-  # --- manifest refusals -------------------------------------------------------------------------------------------
+  # --- layer refusals ------------------------------------------------------------------------------------------------
 
-  def test_every_manifest_refusal
+  def test_core_is_required_in_busyyaks_layer
     dir = own
-    path = File.join(dir, "manifest.yml")
-    load = -> { S.busyyaks!(@co, types: TYPES, settings: SET) }
-    { { "version" => 2, "skills" => { "workflow" => { "types" => "all", "load" => "start" } } } => /version must be 1/,
-      { "version" => 1, "skills" => {}, "x" => 1 } => /must be \{version, skills\}/,
-      { "version" => 1, "skills" => {} } => /non-empty map/,
-      { "version" => 1, "skills" => { "workflow" => { "types" => "all", "load" => "always" } } } => /load must be/,
-      { "version" => 1, "skills" => { "workflow" => { "types" => "all" } } } => /must be \{types, load\}/,
-      { "version" => 1, "skills" => { "workflow" => { "types" => ["boss"], "load" => "start" } } } => /boss not an agent type/,
-      { "version" => 1, "skills" => { "workflow" => { "types" => [], "load" => "start" } } } => /all or a list/,
-      { "version" => 1, "skills" => { "Bad_Name" => { "types" => "all", "load" => "start" } } } => /must match/,
-      { "version" => 1, "skills" => { "session" => { "types" => "all", "load" => "start" } } } => /generated entry/, }
-      .each do |doc, pattern|
-        File.write(path, YAML.dump(doc))
-        refused(pattern, &load)
-      end
+    FileUtils.rm_rf(File.join(dir, "core"))
+    refused(%r{skills/busyyaks/core/SKILL.md missing \(every session starts with it\)}) { load_own }
+    FileUtils.rm_rf(@co)
+    refused(%r{skills/busyyaks missing}) { load_own }
   end
 
-  def test_the_manifest_and_the_dirs_must_agree
+  def test_every_layer_shape_refusal
     dir = own
-    skill(dir, "stray")
-    refused(/stray not in .*manifest.yml/) { S.busyyaks!(@co, types: TYPES, settings: SET) }
-    FileUtils.rm_rf(File.join(dir, "stray"))
-    FileUtils.rm_rf(File.join(dir, "workflow"))
-    refused(/workflow named in .*manifest.yml but missing/) { S.busyyaks!(@co, types: TYPES, settings: SET) }
-    FileUtils.rm_rf(@co)
-    refused(%r{skills/manifest.yml missing}) { S.busyyaks!(@co, types: TYPES, settings: SET) }
+    File.write(File.join(dir, "README.md"), "x")
+    refused(/holds directories only/) { load_own }
+    FileUtils.rm_f(File.join(dir, "README.md"))
+    skill(dir, "Bad_Name")
+    refused(/skill name "Bad_Name" must match/) { load_own }
+    FileUtils.rm_rf(File.join(dir, "Bad_Name"))
+    skill(dir, "session")
+    refused(/session is the generated entry skill's name/) { load_own }
+  end
+
+  def test_agents_files_are_type_named_md_only
+    dir = own
+    agent(dir, "boss")
+    refused(%r{agents/boss.md: boss is not an agent type \(lead, worker, team, plain\)}) { load_own }
+    FileUtils.rm_f(File.join(dir, "agents/boss.md"))
+    File.write(File.join(dir, "agents/notes.txt"), "x")
+    refused(%r{agents/notes.txt: agents/ holds <agent type>.md files only}) { load_own }
+    FileUtils.rm_f(File.join(dir, "agents/notes.txt"))
+    FileUtils.mkdir_p(File.join(dir, "agents/team.md"))
+    refused(/agents\/ holds <agent type>.md files only/) { load_own }
+    FileUtils.rm_rf(File.join(dir, "agents/team.md"))
+    File.symlink(File.join(dir, "agents/lead.md"), File.join(dir, "agents/team.md"))
+    refused(/agents\/ holds <agent type>.md files only/) { load_own }
+    FileUtils.rm_f(File.join(dir, "agents/team.md"))
+    File.binwrite(File.join(dir, "agents/team.md"), "\xff\n")
+    refused(/team.md is not UTF-8/) { load_own }
   end
 
   def test_a_skill_holds_regular_md_files_with_exact_frontmatter
     dir = own
-    sk = File.join(dir, "workflow")
-    load = -> { S.busyyaks!(@co, types: TYPES, settings: SET) }
+    sk = File.join(dir, "reviewer")
     File.write(File.join(sk, "run.sh"), "x")
-    refused(/regular .md files only/, &load)
+    refused(/regular .md files only/) { load_own }
     FileUtils.rm_f(File.join(sk, "run.sh"))
     File.symlink(File.join(sk, "SKILL.md"), File.join(sk, "more.md"))
-    refused(/regular .md files only/, &load)
+    refused(/regular .md files only/) { load_own }
     FileUtils.rm_f(File.join(sk, "more.md"))
     FileUtils.mkdir_p(File.join(sk, "sub"))
-    refused(/regular .md files only/, &load)
+    refused(/regular .md files only/) { load_own }
     FileUtils.rm_rf(File.join(sk, "sub"))
-    skill(dir, "workflow", front: { "name" => "workflow", "description" => "d", "allowed-tools" => "Bash" })
-    refused(/frontmatter must be exactly name \+ description/, &load)
-    skill(dir, "workflow", front: { "name" => "other", "description" => "d" })
-    refused(/name "other" must be its dir's workflow/, &load)
+    skill(dir, "reviewer", front: { "name" => "reviewer", "description" => "d", "allowed-tools" => "Bash" })
+    refused(/frontmatter must be exactly name \+ description/) { load_own }
+    skill(dir, "reviewer", front: { "name" => "other", "description" => "d" })
+    refused(/name "other" must be its dir's reviewer/) { load_own }
     File.write(File.join(sk, "SKILL.md"), "no frontmatter\n")
-    refused(/no frontmatter/, &load)
-    File.binwrite(File.join(sk, "SKILL.md"), "---\nname: workflow\ndescription: \xff\n---\n")
-    refused(/not UTF-8/, &load)
+    refused(/no frontmatter/) { load_own }
+    File.binwrite(File.join(sk, "SKILL.md"), "---\nname: reviewer\ndescription: \xff\n---\n")
+    refused(/not UTF-8/) { load_own }
   end
 
   def test_size_limits
-    own
+    dir = own
     small = S.settings!("max_bytes" => 50, "max_start_bytes" => 32_768, "project" => "allow", "local_dir" => nil)
-    refused(/over skills.max_bytes 50/) { S.busyyaks!(@co, types: TYPES, settings: small) }
-    tight = S.settings!("max_bytes" => 65_536, "max_start_bytes" => 5, "project" => "allow", "local_dir" => nil)
-    skills = S.busyyaks!(@co, types: TYPES, settings: tight)
-    refused(/over skills.max_start_bytes 5/) { S.check_selection!(skills, "lead", tight) }
-  end
-
-  def test_a_type_with_no_start_skill_is_refused
-    own("workflow" => { "types" => ["lead"], "load" => "start" }, "extra" => { "types" => "all", "load" => "on_demand" })
-    skills = S.busyyaks!(@co, types: TYPES, settings: SET)
-    refused(/agent type worker: no `load: start` skill/) { S.check_selection!(S.select(skills, "worker"), "worker", SET) }
+    refused(/over skills.max_bytes 50/) { load_own(small) }
+    FileUtils.rm_rf(File.join(dir, "reviewer"))
+    FileUtils.rm_rf(File.join(dir, "core"))
+    skill(dir, "core", "c\n", front: { "name" => "core", "description" => "d" })
+    agent(dir, "lead", "x" * 60)
+    refused(%r{agents/lead.md is 60 bytes, over skills.max_bytes 50}) { load_own(small) }
+    tight = S.settings!("max_bytes" => 65_536, "max_start_bytes" => 30, "project" => "allow", "local_dir" => nil)
+    layers = load_own(tight)
+    S.check_selection!(S.select(layers, "plain"), tight) # core alone fits
+    refused(%r{agent type lead: core \+ agents/lead.md are 62 bytes, over skills.max_start_bytes 30}) do
+      S.check_selection!(S.select(layers, "lead"), tight)
+    end
   end
 
   # --- the deployment's layer ----------------------------------------------------------------------------------------
 
-  def test_the_deployments_local_dir_adds_its_skills_and_never_shadows
+  def local_set = S.settings!("max_bytes" => 65_536, "max_start_bytes" => 32_768, "project" => "allow",
+                              "local_dir" => "skills-local")
+
+  def test_the_deployments_local_dir_adds_agents_and_skills_and_never_shadows
     own
     local = File.join(@co, "skills-local")
-    manifest(File.join(local, "manifest.yml"), "local-repo" => { "types" => "all", "load" => "on_demand" })
     skill(local, "local-repo")
-    set = S.settings!("max_bytes" => 65_536, "max_start_bytes" => 32_768, "project" => "allow", "local_dir" => "skills-local")
-    skills = S.busyyaks!(@co, types: TYPES, settings: set)
-    assert_equal [%w[workflow busyyaks], %w[local-repo deployment]], skills.map { [_1.name, _1.source] }
-    manifest(File.join(local, "manifest.yml"), "workflow" => { "types" => "all", "load" => "start" })
-    FileUtils.mv(File.join(local, "local-repo"), File.join(local, "workflow"))
-    skill(local, "workflow")
-    refused(/workflow shadows a busyyaks skill/) { S.busyyaks!(@co, types: TYPES, settings: set) }
+    agent(local, "worker", "deployment worker rule\n")
+    layers = S.busyyaks!(@co, types: TYPES, settings: local_set)
+    assert_equal %w[busyyaks deployment], layers.map(&:source)
+    sel = S.select(layers, "worker")
+    assert_equal [%w[worker busyyaks], %w[worker deployment]], sel.parts.map { [_1.type, _1.source] }
+    assert_equal [%w[reviewer busyyaks], %w[local-repo deployment]], sel.skills.map { [_1.name, _1.source] }
+    skill(local, "reviewer")
+    refused(/reviewer shadows a busyyaks skill/) { S.busyyaks!(@co, types: TYPES, settings: local_set) }
+    FileUtils.rm_rf(File.join(local, "reviewer"))
+    skill(local, "core")
+    refused(/core is busyyaks's core skill/) { S.busyyaks!(@co, types: TYPES, settings: local_set) }
   end
 
   # --- the project layer + trust -----------------------------------------------------------------------------------
 
-  def project(skills)
-    base = File.join(@repo, ".busyyaks")
-    manifest(File.join(base, "skills.yml"), skills)
-    skills.each_key { |n| skill(File.join(base, "skills"), n) }
-  end
+  def pdir = File.join(@repo, ".busyyaks/skills")
 
   def plan(trust_refusal: nil, settings: SET, type: "lead")
     S.plan!(checkout: @co, repo: @repo, type: type, types: TYPES, settings: settings, trust_refusal: trust_refusal)
   end
 
-  def test_no_busyyaks_dir_means_only_busyyaks_skills
+  def test_no_project_skills_dir_means_only_busyyaks_skills
     own
-    selected, status = plan
-    assert_equal "none", status
-    assert_equal %w[workflow], selected.map(&:name)
+    FileUtils.mkdir_p(File.join(@repo, ".busyyaks")) # workflow.yml's dir alone: no skills
+    File.write(File.join(@repo, ".busyyaks/workflow.yml"), "columns: []\n")
+    sel, status = plan(trust_refusal: "not trusted")
+    assert_equal "none", status, "a repo with only its workflow file has no skills to leave"
+    assert_equal %w[lead], sel.parts.map(&:type)
   end
 
-  def test_a_trusted_projects_skills_load_after_busyyaks_and_for_their_types
+  def test_a_trusted_projects_agent_files_and_skills_load_after_busyyaks
     own
-    project("deploy" => { "types" => ["lead"], "load" => "start" }, "notes" => { "types" => "all", "load" => "on_demand" })
-    selected, status = plan
+    agent(pdir, "lead", "project lead rule\n")
+    agent(pdir, "team", "project team rule\n")
+    skill(pdir, "deploy-notes")
+    sel, status = plan
     assert_equal "loaded", status
-    assert_equal [%w[workflow busyyaks], %w[deploy project], %w[notes project]], selected.map { [_1.name, _1.source] }
-    selected, status = plan(type: "team")
-    assert_equal "loaded", status
-    assert_equal %w[workflow notes], selected.map(&:name)
+    assert_equal [%w[lead busyyaks], %w[lead project]], sel.parts.map { [_1.type, _1.source] }
+    assert_equal [%w[reviewer busyyaks], %w[deploy-notes project]], sel.skills.map { [_1.name, _1.source] }
+    sel, = plan(type: "team")
+    assert_equal [%w[team project]], sel.parts.map { [_1.type, _1.source] }, "busyyaks has no team.md in this fixture"
   end
 
-  def test_a_project_skill_type_with_none_for_it
+  # a repo still on the manifest layout (.busyyaks/skills.yml) is never half-read: its skills are left, named
+  def test_a_repo_on_the_old_manifest_layout_is_left_with_the_reason
     own
-    project("deploy" => { "types" => ["lead"], "load" => "start" })
-    _selected, status = plan(type: "worker")
-    assert_equal "none for worker", status
+    FileUtils.mkdir_p(File.join(@repo, ".busyyaks/skills/deploy"))
+    File.write(File.join(@repo, ".busyyaks/skills.yml"), "version: 1\nskills: {deploy: {types: [lead], load: start}}\n")
+    File.write(File.join(@repo, ".busyyaks/skills/deploy/SKILL.md"), "---\nname: deploy\ndescription: d\n---\nx\n")
+    sel, status = plan(trust_refusal: nil)
+    assert_match(%r{\Aleft: .*/\.busyyaks/skills\.yml is the old manifest layout: no manifests now}, status)
+    assert_equal %w[busyyaks], sel.parts.map(&:source).uniq, "nothing of the repo's layer loaded"
+    assert_empty sel.skills.select { _1.source == "project" }
+    FileUtils.rm_rf(File.join(@repo, ".busyyaks/skills"))
+    _, status = plan(trust_refusal: nil)
+    assert_match(/\Aleft: .*old manifest layout/, status, "the manifest alone is named too, never \"none\"")
   end
 
   def test_an_untrusted_or_denied_project_is_left_unread
     own
-    FileUtils.mkdir_p(File.join(@repo, ".busyyaks"))
-    File.write(File.join(@repo, ".busyyaks/skills.yml"), "not: [valid") # never read: no refusal
-    selected, status = plan(trust_refusal: "repo is not trusted")
+    FileUtils.mkdir_p(File.join(pdir, "agents"))
+    File.write(File.join(pdir, "agents/boss.md"), "x") # never read: no refusal
+    sel, status = plan(trust_refusal: "repo is not trusted")
     assert_equal "left: repo is not trusted", status
-    assert_equal %w[workflow], selected.map(&:name)
+    assert_equal %w[busyyaks], sel.parts.map(&:source)
     deny = S.settings!("max_bytes" => 65_536, "max_start_bytes" => 32_768, "project" => "deny", "local_dir" => nil)
     assert_equal "left: config/busyyaks.yml skills.project is deny", plan(settings: deny)[1]
   end
 
   def test_a_trusted_projects_bad_skills_refuse_the_launch
     own
-    project("workflow" => { "types" => "all", "load" => "start" })
-    refused(/workflow shadows a busyyaks skill/) { plan }
-    FileUtils.rm_rf(File.join(@repo, ".busyyaks"))
-    FileUtils.mkdir_p(File.join(@repo, ".busyyaks/skills"))
-    refused(%r{\.busyyaks/skills.yml missing}) { plan }
+    skill(pdir, "reviewer")
+    refused(/reviewer shadows a busyyaks skill/) { plan }
+    FileUtils.rm_rf(File.join(pdir, "reviewer"))
+    skill(pdir, "core")
+    refused(/core is busyyaks's core skill/) { plan }
+    FileUtils.rm_rf(File.join(pdir, "core"))
+    agent(pdir, "boss")
+    refused(/boss is not an agent type/) { plan }
+    FileUtils.rm_rf(pdir)
+    File.write(pdir, "not a dir")
+    refused(%r{\.busyyaks/skills is not a directory}) { plan }
   end
 
   # --- the stage per kind ------------------------------------------------------------------------------------------
 
-  def staged(delivery)
-    own("workflow" => { "types" => "all", "load" => "start" }, "reviewer" => { "types" => "all", "load" => "on_demand" })
-    skills = S.busyyaks!(@co, types: TYPES, settings: SET)
+  def staged(delivery, type: "worker")
+    dir = own
+    File.write(File.join(dir, "core/links.md"), "Link rules.\n")
+    agent(pdir, "worker", "project worker rule\n")
+    sel, = plan(type: type)
     dest = File.join(@tmp, "stage/s1")
-    [dest, S.stage!(skills, dest, delivery)]
+    [dest, S.stage!(sel, dest, delivery)]
   end
 
   def test_the_claude_code_stage_is_a_plugin_with_the_entry_skill
     d = S::ClaudeCode.new
     dest, receipt = staged(d)
-    assert_equal %w[workflow reviewer session], receipt.map { _1[:name] }
+    assert_equal [%w[core busyyaks start], %w[agents/worker busyyaks start], %w[agents/worker project start],
+                  %w[reviewer busyyaks on_demand], %w[session busyyaks start],],
+                 receipt.map { [_1[:name], _1[:source], _1[:load]] }
     assert(receipt.all? { _1[:sha].match?(/\A\h{64}\z/) })
     assert_equal 0o700, File.stat(dest).mode & 0o777
     assert_equal({ "name" => "busyyaks" }, JSON.parse(File.read(File.join(dest, ".claude-plugin/plugin.json"))))
     entry = File.read(File.join(dest, "skills/session/SKILL.md"))
     assert_match(/\A---\nname: session\ndescription: /, entry)
-    assert_includes entry, "## workflow (busyyaks)\n\nBody of workflow."
+    assert_includes entry, "# busyyaks session (agent type worker)"
+    assert_includes entry, "Body of core."
+    assert_includes entry, "Reference files beside this skill: `links.md`."
+    assert_equal "Link rules.\n", File.read(File.join(dest, "skills/session/links.md"))
+    core = entry.index("Body of core.")
+    own_part = entry.index("## Agent type worker (busyyaks)\n\nDo the worker things.")
+    project_part = entry.index("## Agent type worker (project)\n\nproject worker rule")
+    assert core < own_part && own_part < project_part, "core, then busyyaks's agent file, then the project's"
+    assert_includes entry, "load each by the name given here"
     assert_includes entry, "- `busyyaks:reviewer` (busyyaks): about reviewer"
+    refute File.exist?(File.join(dest, "skills/core")), "core is the entry skill itself, not a second skill"
     assert_match(/\A---\nname: reviewer\n/, File.read(File.join(dest, "skills/reviewer/SKILL.md")))
     assert_equal ["--plugin-dir", dest], d.extra(dest)
     assert_equal "/busyyaks:session hi", d.prompt("hi")
     assert_equal "/busyyaks:session", d.prompt(nil)
     assert_empty d.env(dest)
+  end
+
+  def test_a_plain_session_gets_core_alone
+    _dest, receipt = staged(S::ClaudeCode.new, type: "plain")
+    assert_equal %w[core reviewer session], receipt.map { _1[:name] }
   end
 
   LAUNCH_ID = "a" * 12 # a fixed per-launch id: the names are deterministic here
@@ -248,8 +311,9 @@ class SkillsTest < Minitest::Test
     entry = File.read(File.join(dest, "busyyaks-skills/busyyaks-session-#{LAUNCH_ID}/SKILL.md"))
     assert_match(/\A---\nname: busyyaks-session-#{LAUNCH_ID}\n/, entry)
     assert_includes entry, "`busyyaks-reviewer-#{LAUNCH_ID}`"
-    workflow = File.read(File.join(dest, "busyyaks-skills/busyyaks-workflow-#{LAUNCH_ID}/SKILL.md"))
-    assert_match(/\A---\nname: busyyaks-workflow-#{LAUNCH_ID}\n/, workflow)
+    assert_includes entry, "## Agent type worker (project)"
+    reviewer = File.read(File.join(dest, "busyyaks-skills/busyyaks-reviewer-#{LAUNCH_ID}/SKILL.md"))
+    assert_match(/\A---\nname: busyyaks-reviewer-#{LAUNCH_ID}\n/, reviewer)
     assert_equal ["-s", "busyyaks-session-#{LAUNCH_ID}"], d.extra(dest)
     assert_equal({ "BUSYYAKS_SKILLS_DIR" => dest }, d.env(dest))
     assert_equal "${BUSYYAKS_SKILLS_DIR}/busyyaks-skills", S::Hermes::LINE
@@ -288,67 +352,66 @@ class SkillsTest < Minitest::Test
 
   # --- links and shell lines (review round 1) ----------------------------------------------------------------------
 
-  def outside(name = "secret")
-    dir = File.join(@tmp, "outside")
-    skill(dir, name, "PRIVATE CONTENT FROM OUTSIDE THE REPO\n")
-    manifest(File.join(@tmp, "m.yml"), name => { "types" => "all", "load" => "start" })
-    dir
-  end
-
   def test_a_project_layer_link_anywhere_is_refused
     own
-    out = outside
+    out = File.join(@tmp, "outside")
+    skill(out, "secret", "PRIVATE CONTENT FROM OUTSIDE THE REPO\n")
+    agent(out, "lead", "PRIVATE\n")
     base = File.join(@repo, ".busyyaks")
     # .busyyaks itself a link
-    File.symlink(File.join(@tmp, "elsewhere"), base)
     FileUtils.mkdir_p(File.join(@tmp, "elsewhere/skills"))
+    File.symlink(File.join(@tmp, "elsewhere"), base)
     refused(%r{\.busyyaks is a symlink}) { plan }
     File.unlink(base)
-    # skills.yml a link out, skills a link out
+    # skills a link out
     FileUtils.mkdir_p(base)
-    File.symlink(File.join(@tmp, "m.yml"), File.join(base, "skills.yml"))
     File.symlink(out, File.join(base, "skills"))
-    refused(/skills.yml is a symlink/) { plan }
-    File.unlink(File.join(base, "skills.yml"))
-    manifest(File.join(base, "skills.yml"), "secret" => { "types" => "all", "load" => "start" })
     refused(%r{\.busyyaks/skills is a symlink}) { plan }
     File.unlink(File.join(base, "skills"))
+    # agents a link out, an agent file a link out
+    FileUtils.mkdir_p(pdir)
+    File.symlink(File.join(out, "agents"), File.join(pdir, "agents"))
+    refused(%r{skills/agents is a symlink}) { plan }
+    File.unlink(File.join(pdir, "agents"))
+    FileUtils.mkdir_p(File.join(pdir, "agents"))
+    File.symlink(File.join(out, "agents/lead.md"), File.join(pdir, "agents/lead.md"))
+    refused(%r{agents/lead.md: agents/ holds <agent type>.md files only}) { plan }
+    File.unlink(File.join(pdir, "agents/lead.md"))
     # a skill dir a link out, a skill file a link out
-    FileUtils.mkdir_p(File.join(base, "skills"))
-    File.symlink(File.join(out, "secret"), File.join(base, "skills/secret"))
+    File.symlink(File.join(out, "secret"), File.join(pdir, "secret"))
     refused(%r{skills/secret is a symlink}) { plan }
-    File.unlink(File.join(base, "skills/secret"))
-    FileUtils.mkdir_p(File.join(base, "skills/secret"))
-    File.symlink(File.join(out, "secret/SKILL.md"), File.join(base, "skills/secret/SKILL.md"))
+    File.unlink(File.join(pdir, "secret"))
+    FileUtils.mkdir_p(File.join(pdir, "secret"))
+    File.symlink(File.join(out, "secret/SKILL.md"), File.join(pdir, "secret/SKILL.md"))
     refused(%r{secret/SKILL.md: a skill holds regular .md files only}) { plan }
   end
 
   def test_a_busyyaks_or_deployment_layer_link_is_refused
     own
-    out = outside("local-x")
+    out = File.join(@tmp, "outside")
+    skill(out, "local-x")
     File.symlink(out, File.join(@co, "skills-local"))
-    set = S.settings!("max_bytes" => 65_536, "max_start_bytes" => 32_768, "project" => "allow", "local_dir" => "skills-local")
-    refused(/skills-local is a symlink/) { S.busyyaks!(@co, types: TYPES, settings: set) }
+    refused(/skills-local is a symlink/) { S.busyyaks!(@co, types: TYPES, settings: local_set) }
     FileUtils.mv(File.join(@co, "skills"), File.join(@tmp, "real-skills"))
     File.symlink(File.join(@tmp, "real-skills"), File.join(@co, "skills"))
-    refused(%r{checkout/skills is a symlink}) { S.busyyaks!(@co, types: TYPES, settings: SET) }
+    refused(%r{checkout/skills is a symlink}) { load_own }
   end
 
   def test_a_shell_inline_line_is_refused_with_file_and_line
     dir = own
-    File.write(File.join(dir, "workflow/SKILL.md"),
-"---\nname: workflow\ndescription: d\n---\nok\nRun !`cat ~/.ssh/id_rsa` now\n")
-    refused(%r{workflow/SKILL.md:6: !`…` \(Claude Code runs it as a shell command\)}) {
- S.busyyaks!(@co, types: TYPES, settings: SET) }
-    File.write(File.join(dir, "workflow/SKILL.md"), "---\nname: workflow\ndescription: d\n---\nok\n")
-    File.write(File.join(dir, "workflow/more.md"), "!`id`\n")
-    refused(%r{workflow/more.md:1: }) { S.busyyaks!(@co, types: TYPES, settings: SET) }
+    File.write(File.join(dir, "core/SKILL.md"), "---\nname: core\ndescription: d\n---\nok\nRun !`cat ~/.ssh/id_rsa` now\n")
+    refused(%r{core/SKILL.md:6: !`…` \(Claude Code runs it as a shell command\)}) { load_own }
+    File.write(File.join(dir, "core/SKILL.md"), "---\nname: core\ndescription: d\n---\nok\n")
+    File.write(File.join(dir, "core/more.md"), "!`id`\n")
+    refused(%r{core/more.md:1: }) { load_own }
+    FileUtils.rm_f(File.join(dir, "core/more.md"))
+    agent(dir, "lead", "fine\n!`id`\n")
+    refused(%r{agents/lead.md:2: }) { load_own }
   end
 
   def test_the_repos_own_skills_hold_no_shell_inline
-    set = S.settings!("max_bytes" => 65_536, "max_start_bytes" => 32_768, "project" => "allow", "local_dir" => nil)
-    S.busyyaks!(ROOT, types: TYPES, settings: set) # refuses a !` line
-    Dir.glob(File.join(ROOT, "skills{,-local}/**/*.md")).each { |f| refute_match(/!`/, File.read(f), f) }
+    S.busyyaks!(ROOT, types: TYPES, settings: SET) # refuses a !` line
+    Dir.glob(File.join(ROOT, "{skills,skills-local,.busyyaks/skills}/**/*.md")).each { |f| refute_match(/!`/, File.read(f), f) }
   end
 
   def test_sweep_removes_only_the_stages_of_gone_sessions

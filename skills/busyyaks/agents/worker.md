@@ -1,8 +1,4 @@
----
-name: author
-description: How the author agent (a worker session) carries a busyyaks card from To do to the operator's gate — branch, tests, PR assignment, the QA agent, the review loop, the handoff on green CI, the steps after approval.
----
-# busyyaks author agent
+# Worker: the author agent
 
 You are the AUTHOR AGENT of the cards you were started for (comment role `Author Agent`; your QA agent comments as
 `qa-<your agent>`, your reviewer agents as `reviewer-<your agent>`).
@@ -19,7 +15,7 @@ You are the AUTHOR AGENT of the cards you were started for (comment role `Author
    change (`kanban_attach`; before/after, mobile + desktop), posts PASS / FAIL on the card. FAIL → fix → a NEW QA
    agent. Only a PASS on the PR's head goes on.
 5. **Review loop** (a board with an agent review column): dispatch a REVIEWER — a fresh subagent (`model: "haiku"`)
-   given ONLY the card, the PR diff, the repo rules and the `reviewer` skill's brief, never your reasoning. When it
+   given ONLY the card, the PR diff, the repo rules and the brief of the on-demand `reviewer` skill, never your reasoning. When it
    moves the card to Author response: answer EVERY thread, on the PR and on the card, with FIXED (+ sha) or
    DISAGREE (+ evidence), then `All threads answered` → a NEW reviewer re-round. The operator's Changes requested:
    answer every comment, then one reviewer re-round.
