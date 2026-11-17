@@ -10,6 +10,7 @@
 // subagents a figure, the launcher named only when it is not the one most sessions run; the open row says all of it.
 // each project shows its active sessions only; the "N idle" toggle in its header unfolds the rest (remembered per project), and
 // rows fold in and out with a height + fade transition (lib/agentFold.ts decides what is visible).
+// Hide finished: a toggle beside the filters, remembered; it names how many it hides.
 // Open terminal: the session's live tmux pane in the row (LiveTerminal), read-only until Take control.
 import { ClaudeLink, CopyChip, ItermCopy, TerminalLink } from "./Copy";
 import { LiveTerminal } from "./LiveTerminal";
@@ -20,7 +21,7 @@ import { useEffect, useState, type SyntheticEvent } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, apiPost, invalidate, useResource } from "../api";
 import { moodOf, AgentFace } from "../vendor/agents_kanban";
-import { fold, groupKey, type Filter } from "../lib/agentFold";
+import { fold, groupKey, finishedHideable, hideFinishedStored, storeHideFinished, type Filter } from "../lib/agentFold";
 import {
   STATE_LABEL as LABEL,
   cardFlags,
@@ -50,6 +51,11 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
     const f = store.get("busyyaks.agfilter");
     return f === "you" || f === "busy" || f === "team" ? f : "all";
   });
+  const [hideFinished, setHideFinished] = useState(hideFinishedStored);
+  const toggleHideFinished = () => {
+    storeHideFinished(!hideFinished);
+    setHideFinished(!hideFinished);
+  };
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   // the sessions whose live terminal is open here: connected only on Open terminal
   const [terms, setTerms] = useState<Set<string>>(() => new Set());
@@ -128,6 +134,7 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
 
   const t = data.totals;
   const norm = engineNorm(data.groups);
+  const nFinished = finishedHideable(data.groups, open);
   return (
     <>
       <div className="ag-head">
@@ -147,6 +154,16 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
           </button>
         ))}
         <span className="spacer" />
+        <button
+          type="button"
+          className="chip ag-hidefin"
+          aria-pressed={hideFinished}
+          title={hideFinished ? "Show the finished sessions" : "Hide the sessions whose cards are all done"}
+          onClick={toggleHideFinished}
+        >
+          Hide finished
+          {nFinished > 0 && <b className="ag-n ag-nfin">{nFinished}</b>}
+        </button>
         <ReapButton />
       </div>
       {error && (
@@ -163,7 +180,7 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
       <div className="ag-groups">
         {data.groups.map((g) => {
           const k = groupKey(g);
-          const f = fold(g, filter, open, unfolded.has(k));
+          const f = fold(g, filter, open, unfolded.has(k), hideFinished);
           if (!f.shown) return null;
           return (
             <section className={`ag-group${f.activeCount === 0 ? " ag-quiet" : ""}`} key={k}>
