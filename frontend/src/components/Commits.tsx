@@ -12,7 +12,7 @@ export function Avatar({ name, email }: { name: string; email: string }) {
   );
 }
 
-function CopySha({ sha }: { sha: string }) {
+export function CopySha({ sha }: { sha: string }) {
   const [done, setDone] = useState(false);
   const [title, setTitle] = useState("Copy full SHA");
   const copy = () => {

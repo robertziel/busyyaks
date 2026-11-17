@@ -80,15 +80,17 @@ export function Heatmap({ counts, today = new Date() }: { counts: DailyCounts; t
   );
 }
 
-// The card around it: total, caption, legend; opens at today (its right end) when it has to scroll.
-export function ContribCard({ counts, caption }: { counts: DailyCounts; caption: ReactNode }) {
+// The card around it: total, caption, legend; opens at today (its right end) when it has to scroll. `facts` (the
+// Today page: the year's figures) sit beside the graph, which then keeps its own size instead of stretching.
+type ContribProps = { counts: DailyCounts; caption: ReactNode; facts?: ReactNode };
+export function ContribCard({ counts, caption, facts }: ContribProps) {
   const wrap = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = wrap.current;
     if (el) el.scrollLeft = el.scrollWidth;
   }, [counts]);
   return (
-    <section className="card contrib">
+    <section className={`card contrib${facts ? " with-facts" : ""}`}>
       <header>
         <b>{yearTotal(counts)}</b> <span className="muted">{caption}</span>
         <span className="legend muted">
@@ -99,8 +101,11 @@ export function ContribCard({ counts, caption }: { counts: DailyCounts; caption:
           <i className="l4" /> More
         </span>
       </header>
-      <div className="heatmap-wrap" ref={wrap}>
-        <Heatmap counts={counts} />
+      <div className="contrib-body">
+        <div className="heatmap-wrap" ref={wrap}>
+          <Heatmap counts={counts} />
+        </div>
+        {facts}
       </div>
     </section>
   );
