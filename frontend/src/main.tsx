@@ -7,6 +7,7 @@ import "./styles/projects.css";
 import "./styles/reports.css";
 import "./styles/components.css";
 import "./styles/tiles.css";
+import "./styles/today.css";
 import "./styles/agents.css";
 import "./vendor/agents_kanban/styles/kanban.css";
 import "./styles/spa.css";

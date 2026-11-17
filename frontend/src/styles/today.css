@@ -1,0 +1,537 @@
+/* The Today page (routes/Today.tsx, components/TodayParts.tsx): dense blocks, every label a number.
+   Colours come from the skin tokens only — no literal here (lib/todayCss.test.ts), so Light and Dark both hold. */
+.today {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.today > * {
+  margin: 0;
+  min-width: 0;
+}
+.today .card,
+.today .flash {
+  margin-bottom: 0;
+}
+
+/* two blocks side by side; one column on a phone */
+.td-grid {
+  display: grid;
+  gap: 14px 16px;
+  align-items: start;
+}
+.td-grid > section {
+  min-width: 0;
+}
+.td-now {
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+}
+.td-day {
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+}
+@media (max-width: 800px) {
+  .td-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* a section's head: name · numbers · (right end) */
+.td-h {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  margin: 0 2px 6px;
+  min-height: 22px;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.td-h h2 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.td-h-n::before {
+  content: "· ";
+}
+.td-h-r {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.td-h-r .pr-status {
+  margin: 0;
+  font-size: 12px;
+}
+.td-toggle {
+  font: inherit;
+  font-weight: 500;
+  padding: 0 0.6rem;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--mat-fill);
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.td-toggle:hover {
+  color: var(--ink);
+}
+.td-none {
+  margin: 0;
+  font-size: 13px;
+}
+
+/* a block's frosted body */
+.td-panel {
+  background: var(--mat-card);
+  -webkit-backdrop-filter: var(--mat-blur);
+  backdrop-filter: var(--mat-blur);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+/* ── the band: tiles, then tracked · scan, then the pending lines ──────────────────────────────── */
+.today .statband {
+  padding: 12px 16px 8px;
+}
+.today .tstats {
+  margin-top: 8px;
+  padding-top: 6px;
+}
+.td-pend {
+  display: grid;
+  grid-template-columns: 9.6rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0 6px;
+  margin-top: 4px;
+  font-size: var(--t-small);
+  line-height: 1.6;
+}
+.td-pend-k {
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.td-pend-k b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.td-pend-k b.warn {
+  color: var(--warn);
+}
+.td-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  min-width: 0;
+}
+.td-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  max-width: 13rem;
+  padding: 0 0.5rem;
+  border-radius: var(--radius-chip);
+  background: rgba(var(--warn-rgb), 0.1);
+  color: var(--ink-dim);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.td-chip:hover {
+  text-decoration: none;
+  background: rgba(var(--warn-rgb), 0.2);
+  color: var(--ink);
+}
+.td-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.td-chip b {
+  font-weight: 600;
+  color: var(--warn);
+  font-variant-numeric: tabular-nums;
+}
+.td-more {
+  font: inherit;
+  font-weight: 600;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: var(--mat-fill);
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.td-more:hover {
+  color: var(--ink);
+}
+.td-rest {
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* ── today's commits: one line each ────────────────────────────────────────────────────────────── */
+.td-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.td-log li {
+  display: grid;
+  grid-template-columns: 2.1rem minmax(0, 9rem) minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 10px 3px 12px;
+  border-bottom: 0.5px solid var(--row-rule);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.td-log li:last-child {
+  border-bottom: 0;
+}
+.td-log li:hover {
+  background: var(--row-hover);
+}
+.td-log-t {
+  text-align: right;
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.td-log-repo {
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.td-log-s {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.td-log-s a {
+  color: inherit;
+}
+.td-log-s a:hover {
+  color: var(--accent);
+}
+.td-log-who {
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.td-log li:not(.other) .c-actions {
+  grid-column: 4 / -1;
+}
+.td-log .c-actions {
+  justify-self: end;
+}
+.td-log .sha-btn {
+  font-size: 11.5px;
+  padding: 0.05rem 0.4rem;
+}
+.td-log .copy {
+  width: 22px;
+}
+.td-log .copy::before {
+  left: 5px;
+  top: 3px;
+}
+.td-log .copy::after {
+  left: 8px;
+  top: 6px;
+}
+.td-log .copy.done::before {
+  left: 8px;
+  top: 2px;
+}
+.td-fold {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border: 0;
+  border-top: 0.5px solid var(--row-rule);
+  background: var(--mat-fill-2);
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.td-fold:hover {
+  color: var(--ink);
+  background: var(--mat-fill);
+}
+/* a phone: age · repo · sha on the first line, the subject under them */
+@media (max-width: 600px) {
+  .td-log li {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0 8px;
+    padding: 5px 10px;
+  }
+  .td-log-t {
+    text-align: left;
+  }
+  .td-log li .c-actions,
+  .td-log li:not(.other) .c-actions {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .td-log-s {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .td-log-who {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    max-width: none;
+  }
+}
+
+/* ── merged PRs: the same line height as the commit log ────────────────────────────────────────── */
+.today .merged-prs li {
+  grid-template-columns: minmax(0, 7.5rem) auto minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 3px 12px;
+  border-bottom: 0.5px solid var(--row-rule);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.today .merged-prs li:hover {
+  background: var(--row-hover);
+}
+.today .merged-prs .mpr-repo {
+  font-size: 12px;
+}
+.today .merged-prs .mpr-n {
+  font-size: 12px;
+}
+.today .merged-prs .mpr-s {
+  color: var(--ink);
+}
+@media (max-width: 600px) {
+  .today .merged-prs li {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 0 8px;
+    padding: 5px 10px;
+  }
+}
+
+/* ── the report: a peek, opened in place or on its own page ────────────────────────────────────── */
+.today .report-card {
+  padding: 10px 14px 12px;
+}
+.today .report-card + .report-card {
+  margin-top: 10px;
+}
+.today .report-head {
+  padding-bottom: 8px;
+}
+.today .report-head h3 {
+  font-size: 14.5px;
+}
+.today .report-head .eyebrow {
+  font-size: 11.5px;
+}
+.today .report-meta {
+  margin-top: 3px;
+}
+.today .report-card.collapsible:not(.open) .md {
+  max-height: 232px;
+}
+.today .report-card.collapsible:not(.open).overflowing .fade {
+  height: 72px;
+  padding-bottom: 10px;
+}
+
+/* ── the daily table, tighter ──────────────────────────────────────────────────────────────────── */
+.today table.daily th,
+.today table.daily td {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  font-size: 13px;
+}
+.today table.daily td.bar {
+  background-position: 12px 11px;
+}
+.today table.daily .bar span {
+  margin-top: 7px;
+}
+@media (max-width: 600px) {
+  .today table.daily th:first-child {
+    width: 5.6rem;
+  }
+  .today table.daily td.bar {
+    background-position: 6px 11px;
+    background-size: calc(100% - 12px) 6px;
+  }
+}
+
+/* ── the year: the graph at its own size, its figures beside it ────────────────────────────────── */
+.today .contrib {
+  padding: 10px 16px 12px;
+}
+.today .contrib header {
+  margin-bottom: 4px;
+}
+.contrib-body {
+  min-width: 0;
+}
+.contrib.with-facts .contrib-body {
+  display: grid;
+  grid-template-columns: minmax(0, 770px) minmax(11rem, 1fr);
+  gap: 8px 24px;
+  align-items: center;
+}
+/* label · figure, one line each */
+.td-facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.td-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 3px 0;
+  border-bottom: 0.5px solid var(--row-rule);
+}
+.td-facts > div:last-child {
+  border-bottom: 0;
+}
+.td-facts dt {
+  font-size: 11.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.td-facts dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.td-facts dd span {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+@media (max-width: 1000px) {
+  .contrib.with-facts .contrib-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .td-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 20px;
+  }
+  .td-facts > div:nth-last-child(2) {
+    border-bottom: 0;
+  }
+}
+@media (max-width: 600px) {
+  .td-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .td-facts > div:nth-last-child(2) {
+    border-bottom: 0.5px solid var(--row-rule);
+  }
+}
+
+/* ── 7 days per repo: ranked down the columns ──────────────────────────────────────────────────── */
+.td-week {
+  list-style: none;
+  margin: 0;
+  padding: 8px 14px;
+  column-width: 280px;
+  column-gap: 28px;
+  column-rule: 0.5px solid var(--row-rule);
+}
+.td-week li {
+  break-inside: avoid;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(40px, 0.8fr) 2.6rem;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.td-week a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.td-week b {
+  text-align: right;
+  font-weight: 600;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.td-bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--track);
+  overflow: hidden;
+}
+/* the bar: yours solid, the others' commits the same blue thinned */
+.td-bar i {
+  display: block;
+  height: 100%;
+  width: var(--w);
+  min-width: 4px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    to right,
+    var(--vivid-blue) var(--m),
+    color-mix(in srgb, var(--vivid-blue) 35%, transparent) var(--m)
+  );
+}
+
+/* ── projects: with room, a row's four launch pills on one line (half the row height); the cells tighten to fit ── */
+.today {
+  container: today / inline-size;
+}
+@container today (min-width: 1040px) {
+  table.tree .ak-launchbar {
+    grid-template-columns: repeat(4, max-content);
+  }
+  table.tree th,
+  table.tree td {
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+  table.tree th.name,
+  table.tree td.name {
+    padding-left: calc(10px + var(--depth, 0) * 20px);
+  }
+  table.tree th.launch,
+  table.tree td.launch {
+    padding-right: 8px;
+  }
+  table.tree td.branch {
+    max-width: 92px;
+  }
+  table.tree th.when,
+  table.tree td.when {
+    padding-right: 10px;
+  }
+}
