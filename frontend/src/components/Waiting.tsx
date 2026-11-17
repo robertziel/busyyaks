@@ -26,7 +26,7 @@ import {
   type Waiting,
 } from "../lib/waiting";
 import type { AgentsData, AgentState } from "../types";
-import { why } from "./Agents";
+import { why } from "../lib/agentRow";
 import { ProjectIcon } from "./ProjectIcon";
 import { LaunchFailureAlert } from "../vendor/agents_kanban";
 

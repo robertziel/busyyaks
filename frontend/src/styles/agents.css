@@ -107,7 +107,7 @@
   margin-bottom: 8px;
 }
 .ag-group h5 {
-  margin: 8px 4px 4px;
+  margin: 8px 4px;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-faint);
@@ -130,10 +130,12 @@
 .ag-s summary {
   list-style: none;
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto; /* the face (.ag-face) · name · badges */
+  grid-template-columns: 28px minmax(0, 1fr); /* the face (.ag-face) · the row's lines */
   gap: 8px;
   align-items: center;
-  padding: 6px 6px;
+  min-height: 40px; /* the hit target */
+  box-sizing: border-box;
+  padding: 5px 6px;
   border-radius: var(--radius-ctl);
   cursor: pointer;
 }
@@ -198,10 +200,6 @@
   margin: 4px 0;
   animation: ag-alarm 1.6s ease-in-out infinite;
 }
-.ag-s.st-blocked > summary:hover,
-.ag-s.st-blocked[open] {
-  background: rgba(var(--bad-rgb), 0.22);
-}
 .ag-s.st-blocked .ag-name {
   color: var(--bad);
 }
@@ -224,21 +222,13 @@
     0 0 0 1px rgba(var(--warn-rgb), 0.35);
   margin: 3px 0;
 }
-.ag-s.st-review > summary:hover,
-.ag-s.st-review[open] {
-  background: rgba(var(--warn-rgb), 0.18);
-}
 .st-review > summary .ag-dot {
   background: var(--vivid-orange);
 }
 .ag-group h5.st-review .ag-gdot {
   background: var(--vivid-orange);
 }
-.ag-badge.st-review {
-  color: var(--warn);
-  background: rgba(var(--warn-rgb), 0.16);
-}
-.st-review .ag-why {
+.st-review .ag-detail.ag-why {
   color: var(--warn);
 }
 .ag-sum b.rev {
@@ -281,15 +271,40 @@
     0 0 0 1px color-mix(in srgb, var(--vivid-teal) 35%, transparent);
   margin: 3px 0;
 }
-.ag-s.ag-unread:not(.st-blocked):not(.st-review) > summary:hover,
-.ag-s.ag-unread:not(.st-blocked):not(.st-review)[open] {
-  background: color-mix(in srgb, var(--vivid-teal) 18%, transparent);
+/* a tinted row — and an open one — keeps its one tint hovered and open (a second layer took its text under 4.5:1):
+   the hover shows on the name */
+.ag-s[open] > summary:hover,
+.ag-s.st-blocked > summary:hover,
+.ag-s.st-review > summary:hover,
+.ag-s.ag-unread > summary:hover {
+  background: transparent;
+}
+.ag-s.st-blocked > summary:hover .ag-name,
+.ag-s.st-review > summary:hover .ag-name,
+.ag-s.ag-unread > summary:hover .ag-name {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .ag-gl {
-  display: inline-flex;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-right: 8px;
+}
+/* a project label longer than the header is cut, never run under the "N idle" toggle */
+.ag-gl .pname {
+  display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+.ag-glabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ag-gdot {
   width: 6px;
@@ -307,20 +322,6 @@
 .ag-group h5.st-working .ag-gdot {
   background: var(--vivid-green);
 }
-.ag-badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 0 0.45rem;
-  border-radius: var(--radius-pill);
-}
-.ag-badge.st-blocked {
-  color: var(--bad);
-  background: rgba(var(--bad-rgb), 0.14);
-}
-.ag-badge.st-finished {
-  color: var(--ok);
-  background: rgba(var(--ok-rgb), 0.14);
-}
 .ag-cards {
   font-size: 11.5px;
   color: var(--ink-faint);
@@ -329,12 +330,8 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.ag-why {
-  font-size: 12px;
+.ag-detail.ag-why {
   color: var(--bad);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .ag-sum b.bad {
   color: var(--bad);
@@ -356,6 +353,7 @@
 }
 .ag-dialog {
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* a long command or choice wraps inside the row: every key stays clickable */
   gap: 6px;
   padding: 8px;
   border-radius: var(--radius-ctl);
@@ -376,6 +374,7 @@
   font-size: 12.5px;
   font-weight: 600;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .ag-opts {
   display: flex;
@@ -384,9 +383,9 @@
 }
 .ag-opts .btn {
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-height: 40px; /* the keys that answer a stopped agent: full hit targets */
+  white-space: normal;
+  overflow-wrap: anywhere;
   text-align: left;
 }
 .ag-ask {
@@ -426,59 +425,150 @@
 .ag-main {
   min-width: 0;
   display: grid;
+  gap: 1px;
+}
+/* line 1: the name owns the width; beside it only its age */
+.ag-l1,
+.ag-l2 {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+.ag-l1 {
+  gap: 8px;
 }
 .ag-name {
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 600;
+  line-height: 1.25;
+  /* a name wider than the row wraps onto a second line (a tmux name has no spaces: it breaks anywhere); only one
+     longer than two lines is cut — the tooltip and the open row carry it whole */
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.ag-att {
-  color: var(--vivid-green);
-  font-style: normal;
-  font-size: 9px;
-  vertical-align: 1px;
+.ag-s[open] .ag-name {
+  display: block;
 }
-.ag-title {
-  font-size: 12px;
+.ag-fig,
+.ag-ago {
+  flex: none;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.ag-meta {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
+.ag-fig {
+  font-weight: 600;
+  color: var(--ok);
+}
+.ag-ago {
+  min-width: 1.9em;
+  text-align: right;
+}
+/* line 2: one state word, drawn whole (text, no pill) · one detail that may be cut · the card tags · the launcher
+   when off the norm · the running subagents as a figure */
+.ag-l2 {
+  /* the words drawn whole (state, unread, card tags, launcher, subagents) wrap onto a second line when the rail is too
+     narrow for them all: never past the row's edge; the detail (basis 0) only takes the width left */
+  flex-wrap: wrap;
+  gap: 1px 6px;
   font-size: 11.5px;
   color: var(--ink-faint);
 }
-.ag-team {
+.ag-tag {
+  flex: none;
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: var(--ok);
-  background: rgba(var(--ok-rgb), 0.14);
-  border-radius: var(--radius-pill);
-  padding: 0 0.45rem;
+  white-space: nowrap;
 }
-.ag-team::after {
-  content: " agents";
-  font-weight: 500;
+.ag-tag.st-blocked {
+  color: var(--bad);
+}
+.ag-tag.st-review {
+  color: var(--warn);
+}
+.ag-tag.st-working,
+.ag-tag.st-finished {
+  color: var(--ok);
+}
+.ag-tag.ag-new {
+  color: color-mix(in srgb, var(--vivid-teal) 50%, var(--ink));
+}
+.ag-detail {
+  flex: 1 1 0;
+  /* the detail keeps room for a few words (a card and its column): the whole words wrap to the next line before it is
+     squeezed below that; a rail narrower than this still shrinks it (100%) */
+  min-width: min(8em, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* a card's state the cut detail would hide (CI wait · ext. wait): one word, drawn whole, in line 2's ink (the
+   contrast agentRowCss.test.ts checks on every row layer) */
+.ag-flag {
+  flex: none;
+  font-weight: 600;
+  white-space: nowrap;
 }
 .ag-eng {
+  flex: none;
+  color: var(--ink-dim); /* on its own fill, over a tinted or open row */
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 0 0.35rem;
   border-radius: var(--radius-chip);
   background: var(--mat-fill);
 }
-.ag-ago {
-  min-width: 2.4em;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+/* the open row says what the compact one may cut: the pane's title and every card, wrapped */
+.ag-full {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.ag-att {
+  color: var(--ok);
+  font-style: normal;
+  font-size: 9px;
+  vertical-align: 1px;
 }
 .ag-body {
   padding: 2px 8px 10px 24px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* its lines are cut or wrapped inside the row, never run past it */
   gap: 6px;
+  overflow-wrap: anywhere; /* a path, a command or an error with no space breaks instead of running out */
+}
+.ag-body .ag-err {
+  align-items: flex-start;
+}
+.ag-body .ag-err .dot {
+  flex: none;
+  margin-top: 5px; /* beside the first line of a wrapped error, never squashed by it */
+}
+.ag-body .copychip {
+  max-width: 100%;
+}
+.ag-body .copychip code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.ag-body .termlink:hover {
+  background: rgba(var(--accent-rgb), 0.12); /* the deeper hover fill took it under 4.5:1 */
+  text-decoration: underline;
+}
+/* a tinted row's open body sits on the plain panel: its chips, links and faint text were under 4.5:1 on the tint */
+.ag-s.st-blocked > .ag-body,
+.ag-s.st-review > .ag-body,
+.ag-s.ag-unread > .ag-body {
+  margin: 0 4px 4px 8px;
+  padding: 8px;
+  border-radius: var(--radius-ctl);
+  background: var(--panel);
 }
 .ag-facts {
   margin: 0;
@@ -581,6 +671,7 @@
 }
 .ag-group.ag-quiet h5 {
   margin-block: 2px;
+  min-height: 36px; /* quiet projects stack: each "N idle" button keeps 40px to itself */
 }
 .ag-group.ag-quiet .pname {
   color: var(--ink-faint);
@@ -589,8 +680,8 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  min-height: 24px;
-  margin: -4px -6px -4px 0;
+  min-height: 40px; /* the hit target; the header keeps its height (the margins give the rest back) */
+  margin: -8px -4px -8px 0; /* -4px = the header's own side margin: the hit box ends at the rail's content edge */
   padding: 2px 8px;
   border: 0;
   border-radius: var(--radius-pill);
@@ -602,17 +693,33 @@
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   white-space: nowrap;
+  flex: none;
+  position: relative; /* its fill and focus ring are the 24px pill (::before), inside the 40px hit box */
+  isolation: isolate;
 }
 .ag-more b {
   color: var(--ink-dim);
   font-weight: 600;
 }
+.ag-more::before {
+  content: "";
+  position: absolute;
+  inset: 8px 0;
+  z-index: -1;
+  border-radius: var(--radius-pill);
+}
 .ag-more:hover,
 .ag-more[aria-expanded="true"] {
-  background: var(--mat-fill-2);
   color: var(--ink-dim);
 }
+.ag-more:hover::before,
+.ag-more[aria-expanded="true"]::before {
+  background: var(--mat-fill-2);
+}
 .ag-more:focus-visible {
+  outline: none;
+}
+.ag-more:focus-visible::before {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }

@@ -6,6 +6,8 @@
 // "done" said nothing about the work — it is now `unread` (a dot: the turn ended since you last opened it;
 // opening the row marks it seen) and `finished` is a state the CARDS decide: every card it owns sits in a done column.
 // Each row lists its open cards by column label (`#3 In progress`), `+N done`, or `no cards`.
+// The row is compact (lib/agentRow.ts): the name owns line 1; the state is one coloured word on line 2, the
+// subagents a figure, the launcher named only when it is not the one most sessions run; the open row says all of it.
 // each project shows its active sessions only; the "N idle" toggle in its header unfolds the rest (remembered per project), and
 // rows fold in and out with a height + fade transition (lib/agentFold.ts decides what is visible).
 // Open terminal: the session's live tmux pane in the row (LiveTerminal), read-only until Take control.
@@ -19,9 +21,20 @@ import { Link } from "react-router-dom";
 import { ApiError, apiPost, invalidate, useResource } from "../api";
 import { moodOf, AgentFace } from "../vendor/agents_kanban";
 import { fold, groupKey, type Filter } from "../lib/agentFold";
+import {
+  STATE_LABEL as LABEL,
+  cardFlags,
+  engineNorm,
+  engineTag,
+  fullLines,
+  rowLines,
+  rowTitle,
+  stateTag,
+  subagentFigure,
+} from "../lib/agentRow";
 import { ago, projectPath } from "../lib/format";
 import * as store from "../lib/store";
-import type { AgentDialog, AgentSession, AgentsData, AgentState, TeamData } from "../types";
+import type { AgentDialog, AgentSession, AgentsData, TeamData } from "../types";
 
 const FILTERS: [Filter, string][] = [
   ["all", "All"],
@@ -29,16 +42,6 @@ const FILTERS: [Filter, string][] = [
   ["busy", "Working"],
   ["team", "Teams"],
 ];
-const LABEL: Record<AgentState, string> = {
-  blocked: "needs input",
-  review: "PR review",
-  working: "working",
-  finished: "finished",
-  idle: "idle",
-  unknown: "unknown",
-};
-const BADGE = new Set<AgentState>(["blocked", "review", "finished"]);
-
 export type AgentTotals = { busy: number; blocked: number; review: number; unread: number };
 
 export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void }) {
@@ -124,6 +127,7 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
   }
 
   const t = data.totals;
+  const norm = engineNorm(data.groups);
   return (
     <>
       <div className="ag-head">
@@ -169,10 +173,10 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
                   {g.slug ? (
                     <Link to={projectPath(g.slug)} className="pname">
                       <ProjectIcon slug={g.slug} icon={g.icon} size={14} />
-                      {g.label}
+                      <span className="ag-glabel">{g.label}</span>
                     </Link>
                   ) : (
-                    g.label
+                    <span className="ag-glabel">{g.label}</span>
                   )}
                 </span>
                 {f.idleCount > 0 ? (
@@ -211,9 +215,7 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
                       open={open.has(s.key)}
                       onToggle={toggle(s)}
                     >
-                      <summary
-                        title={`${LABEL[s.state]}${s.unread ? " · unread" : ""}${s.state_by ? ` — ${s.state_by}` : ""}`}
-                      >
+                      <summary title={rowTitle(s)}>
                         <span className="ag-face">
                           <AgentFace
                             name={s.agent ?? s.name}
@@ -223,42 +225,7 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
                           />
                           <i className="ag-dot" />
                         </span>
-                        <span className="ag-main">
-                          <span className="ag-name">
-                            {s.name}
-                            {s.attached && (
-                              <>
-                                {" "}
-                                <i className="ag-att" title="attached">
-                                  ●
-                                </i>
-                              </>
-                            )}
-                          </span>
-                          <span className="ag-title">
-                            {s.title ?? (s.cwd ? s.cwd.split("/").slice(-2).join("/") : "—")}
-                          </span>
-                          {(s.state === "blocked" || s.state === "review") && (
-                            <span className="ag-why">
-                              <CardText text={why(s)} ids={ownIds(s)} />
-                            </span>
-                          )}
-                          {cardLine(s) && (
-                            <span className="ag-cards">
-                              <CardText text={cardLine(s)} ids={ownIds(s)} />
-                            </span>
-                          )}
-                        </span>
-                        <span className="ag-meta">
-                          {BADGE.has(s.state) && <span className={`ag-badge st-${s.state}`}>{LABEL[s.state]}</span>}
-                          {s.subagents > 0 && (
-                            <span className="ag-team" title="subagents running">
-                              {s.subagents}
-                            </span>
-                          )}
-                          <span className="ag-eng">{s.engines.join("·")}</span>
-                          <span className="ag-ago">{ago(s.activity)}</span>
-                        </span>
+                        <Row s={s} norm={norm} />
                       </summary>
                       <div className="ag-body">
                         {s.dialogs.map((d) => (
@@ -297,11 +264,21 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
                             {LABEL[s.state]} · {s.state_by}
                           </p>
                         )}
+                        {fullLines(s).length > 0 && (
+                          <p className="ag-facts ag-full">
+                            {fullLines(s).map((line, i) => (
+                              <span key={i}>
+                                <CardText text={line} ids={ownIds(s)} />
+                              </span>
+                            ))}
+                          </p>
+                        )}
                         <p className="ag-facts">
                           <CopyChip text={`tmux attach -t ${s.name}`} />
                           <ClaudeLink url={s.claude_url} name={s.name} />
                           <ItermCopy command={s.ssh_attach} />
                           <TerminalLink url={s.terminal_url} name={s.name} />
+                          {s.engines.length > 0 && <> · {s.engines.join("·")}</>}
                           {s.model && <> · {s.model}</>}
                         </p>
                         {terms.has(s.key) ? (
@@ -327,6 +304,59 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
       </div>
       <p className="ag-foot muted">agent_engines · snapshot {Math.round(data.age_s)}s</p>
     </>
+  );
+}
+
+// The compact row (lib/agentRow.ts): line 1 = the name (it owns the width) + its age; line 2 = one state
+// word + one detail that may be cut + its cards' tags (CI wait · ext. wait, whole) + the launcher when it is not
+// the norm + the running subagents; line 3 only for a row that waits for you
+export function Row({ s, norm }: { s: AgentSession; norm: string | null }) {
+  const tag = stateTag(s);
+  const lines = rowLines(s);
+  const flags = cardFlags(s);
+  const sub = subagentFigure(s);
+  const eng = engineTag(s, norm);
+  const ids = ownIds(s);
+  return (
+    <span className="ag-main">
+      <span className="ag-l1">
+        <span className="ag-name">
+          {s.name}
+          {s.attached && (
+            <>
+              {" "}
+              <i className="ag-att" title="attached">
+                ●
+              </i>
+            </>
+          )}
+        </span>
+        <span className="ag-ago">{ago(s.activity)}</span>
+      </span>
+      <span className="ag-l2">
+        {tag && <span className={`ag-tag st-${tag.tone}`}>{tag.word}</span>}
+        {s.unread && <span className="ag-tag ag-new">unread</span>}
+        <span className={`ag-detail${lines.waits ? " ag-why" : ""}`}>
+          <CardText text={lines.detail} ids={ids} />
+        </span>
+        {flags.map((f) => (
+          <span key={f.word} className="ag-flag" title={f.title}>
+            {f.word}
+          </span>
+        ))}
+        {eng && <span className="ag-eng">{eng}</span>}
+        {sub && (
+          <span className="ag-fig" title={sub.title}>
+            {sub.text}
+          </span>
+        )}
+      </span>
+      {lines.more && (
+        <span className="ag-cards">
+          <CardText text={lines.more} ids={ids} />
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -362,31 +392,6 @@ function CardText({ text, ids }: { text: string; ids: ReadonlySet<number> }) {
       )}
     </>
   );
-}
-
-// the cards it owns that are not done, by their column's label, then how many are — or that it owns none
-export function cardLine(s: AgentSession): string {
-  if (!s.cards_known) return "not registered: cards unknown";
-  const shown = new Set([...s.asks, ...s.reviews].map((c) => c.id)); // already on the why line
-  const parts = s.cards.filter((c) => !shown.has(c.id)).map((c) => `#${c.id} ${c.column_label}${tail(c)}`);
-  if (s.cards_finished > 0) parts.push(`+${s.cards_finished} done`);
-  return parts.length ? parts.join(" · ") : shown.size ? "" : "no cards";
-}
-
-// what a card's row adds: it waits for CI or for the world — neither for you
-const tail = (c: AgentSession["cards"][number]) =>
-  `${c.gate_hold ? " · waiting for CI" : ""}${c.blocked_external ? " · blocked externally" : ""}`;
-
-// the one line under a blocked session's title: what it waits for
-export function why(s: AgentSession): string {
-  const d = s.dialogs[0];
-  if (d) return d.question || d.command || "a dialog is on its screen";
-  if (s.waiting_for[0]) return s.waiting_for[0];
-  const a = s.asks[0];
-  if (a) return `card #${a.id}: ${a.question || a.title}`;
-  const r = s.reviews[0];
-  if (r) return `card #${r.id} in review: ${r.title}`;
-  return s.state_by ?? "waiting";
 }
 
 // A dialog on the session's screen, answered from here: the host presses the key only while the screen still shows
