@@ -153,6 +153,48 @@ class CliTest < Minitest::Test
     assert_includes err, "missing or empty PUBLIC_HOST"
   end
 
+  CI_YML = <<~YML
+    roots: []
+    ci:
+      max_pending_minutes: 60
+      required:
+        Owner/Repo: [gates, "ci / build (ubuntu)"]
+  YML
+
+  # `yaks ci required`: the repo's required checks = ci.required (the approval gate's list), one per line
+  def test_ci_required_prints_the_repo_list_and_refuses_an_unlisted_repo
+    File.write(File.join(@home, "config/busyyaks.yml"), CI_YML)
+    code, out, = yaks("ci", "required", "owner/repo")
+    assert_equal [0, "gates\nci / build (ubuntu)\n"], [code, out]
+    code, out, err = yaks("ci", "required", "owner/other")
+    assert_equal [1, ""], [code, out]
+    assert_includes err, "ci.required does not list owner/other"
+    assert_empty @runner.calls
+  end
+
+  def test_ci_required_refuses_a_missing_or_invalid_config_and_bad_usage
+    code, _, err = yaks("ci", "required", "owner/repo")
+    assert_equal 1, code
+    assert_includes err, "ci must be a mapping"
+    File.delete(File.join(@home, "config/busyyaks.yml"))
+    FileUtils.mkdir_p(File.join(@home, "config/busyyaks.yml"))
+    code, out, err = yaks("ci", "required", "owner/repo")
+    assert_equal [1, ""], [code, out]
+    assert_includes err, "config/busyyaks.yml: Is a directory"
+    FileUtils.rm_rf(File.join(@home, "config/busyyaks.yml"))
+    File.write(File.join(@home, "config/busyyaks.yml"), "ci: [\n")
+    code, _, err = yaks("ci", "required", "owner/repo")
+    assert_equal 1, code
+    assert_includes err, "config/busyyaks.yml: "
+    File.delete(File.join(@home, "config/busyyaks.yml"))
+    code, _, err = yaks("ci", "required", "owner/repo")
+    assert_equal 1, code
+    assert_includes err, "no config/busyyaks.yml at #{@home}/config/busyyaks.yml"
+    assert_equal 2, yaks("ci", "status").first
+    assert_equal 2, yaks("ci", "required").first
+    assert_equal 2, yaks("ci", "required", "a/b", "extra").first
+  end
+
   def test_a_missing_or_malformed_env_is_refused
     File.write(File.join(@home, ".env"), "A=$B\n")
     code, _, err = yaks("panel", "--print")
