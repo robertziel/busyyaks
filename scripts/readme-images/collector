@@ -1,45 +1,98 @@
 #!/bin/sh
-# The demo stack's stand-in agent sessions and agent-session collector (scripts/readme-images/demo-stack copies this file
-# into its workdir, @PROJECTS@ / @COLLECTOR@ filled, and runs it in the launcher container before bin/launcher):
-# four idle shells in the acme/storefront repo in this container's own tmux server, a snapshot of them every 5 s in the
-# collector's format (bin/launcher `agents` reads it: who is busy, who is idle), and a read socket that answers nothing.
+# The demo stack's stand-in agent-session collector (scripts/readme-images/demo-stack copies this file into its workdir,
+# @COLLECTOR@ filled, and runs it in the launcher container before bin/launcher): a snapshot of the container's tmux
+# server every 5 s in the collector's format — the sessions bin/launcher starts through Launch (the stand-in agent,
+# scripts/readme-images/agent), each pane reported as a Claude Code pane, so bin/launcher reads its screen as it reads
+# a real agent's — and its read socket: `screen` answers the pane's text (and a dialog when a permission prompt is on
+# it); `send` is refused (no agent reads input), and so is anything else. Busy, idle, waiting = the screen kind build
+# gave the session (@COLLECTOR@/kinds/<session>). A session without one is an error: the snapshot is not written (the
+# old one goes stale, which the agents sidebar shows) and the reason goes to this container's log.
 set -eu
 
-repo=@PROJECTS@/acme/storefront
 out=@COLLECTOR@
 
-for s in acme_storefront_teamlead acme_storefront_worker acme_storefront_worker_2 acme_storefront_team; do
-  tmux new-session -d -s "$s" -c "$repo" sleep infinity
-done
+kind() {
+  [ -r "$out/kinds/$1" ] || { echo "collector: session $1 has no screen kind ($out/kinds/$1)" >&2; return 1; }
+  cat "$out/kinds/$1"
+}
 
-# session → collector status (busy = a turn running, idle = waiting for a prompt)
+# session → collector status, as JSON (busy = a turn running, idle = waiting for a prompt)
 status() {
-  case $1 in
-    acme_storefront_worker | acme_storefront_worker_2) echo busy ;;
-    *) echo idle ;;
+  k=$(kind "$1") || return 1
+  case $k in
+    thinking | tool | permission) echo '"busy"' ;;
+    idle) echo '"idle"' ;;
+    *) echo "collector: session $1 has an unknown screen kind $k" >&2; return 1 ;;
   esac
 }
 
+# what a session waits on, as the collector says it (a permission prompt on its screen), as JSON
+waiting_for() {
+  k=$(kind "$1") || return 1
+  if [ "$k" = permission ]; then echo '"permission"'; else echo null; fi
+}
+
+# status_at = the session's start: its one turn began when Launch started it, so what its agent wrote on a card since
+# (seed.js) stays "since its turn began" — the card dialog shows it at work there
 snapshot() {
   now=$(date +%s)
   sep=""
+  # no tmux server yet (no session launched) = no sessions; any other tmux failure fails the snapshot
+  if ! panes=$(tmux list-panes -a -F '#{session_name} #{pane_id} #{session_created} #{pane_current_path}' 2>"$out/tmux.err"); then
+    err=$(cat "$out/tmux.err")
+    case "$err" in
+      "no server running on "* | "error connecting to "*"(No such file or directory)") panes="" ;;
+      *) echo "collector: tmux list-panes: $err" >&2; return 1 ;;
+    esac
+  fi
   printf '{"generated_at":%s,"interval_s":5,"error":null,"sessions":[' "$now"
-  tmux list-panes -a -F '#{session_name} #{pane_id} #{session_created}' | while read -r name pane created; do
+  while read -r name pane created cwd; do
+    [ -n "$name" ] || continue
+    st=$(status "$name") || return 1
+    wf=$(waiting_for "$name") || return 1
     printf '%s{"name":"%s","socket":"default","attached":0,"created":%s,"activity":%s,"windows":1,"panes":[' \
       "$sep" "$name" "$created" "$now"
     printf '{"pane_id":"%s","target":"%s:0.0","cwd":"%s","engine":"claude","model":"opus","context":0.31,' \
-      "$pane" "$name" "$repo"
-    printf '"effort":"high","status":"%s","waiting_for":null,"title":"%s","status_at":%s,"subagents_running":0}]}' \
-      "$(status "$name")" "$name" "$((now - 120))"
+      "$pane" "$name" "$cwd"
+    printf '"effort":"high","status":%s,"waiting_for":%s,"title":"%s","status_at":%s,"subagents_running":0}]}' \
+      "$st" "$wf" "$name" "$created"
     sep=","
-  done
+  done <<PANES
+$panes
+PANES
   printf ']}\n'
 }
 
+mkdir -p "$out/kinds"
 snapshot > "$out/snapshot.json"
-(while sleep 5; do snapshot > "$out/snapshot.tmp" && mv "$out/snapshot.tmp" "$out/snapshot.json"; done) &
+(while sleep 5; do
+  if snapshot > "$out/snapshot.tmp"; then mv "$out/snapshot.tmp" "$out/snapshot.json"; fi
+done) &
 rm -f "$out/read.sock"
-ruby -rsocket -e 'srv = UNIXServer.new(ARGV[0]); loop { srv.accept.close }' "$out/read.sock" &
+# one thread per client; a client that sends no line within 5 s is dropped
+ruby -rsocket -rjson -ropen3 -e '
+  srv = UNIXServer.new(ARGV[0])
+  loop do
+    Thread.new(srv.accept) do |c|
+      line = c.wait_readable(5) && c.gets
+      req = line ? (JSON.parse(line) rescue {}) : {}
+      name = req["session"].to_s
+      res = case req["op"]
+            when "screen"
+              text, ok = Open3.capture2("tmux", "capture-pane", "-p", "-t", "=#{name}:")
+              dialog = text.include?("Do you want to proceed?") ? { kind: "permission" } : nil
+              ok.success? ? { ok: true, text: text, dialog: dialog } : { ok: false, error: { type: "tmux", message: "no pane #{name}" } }
+            when "send" then { ok: false, error: { type: "demo", message: "the demo stand-in agent takes no input" } }
+            when nil then { ok: false, error: { type: "demo", message: "no request line within 5 s" } }
+            else { ok: false, error: { type: "demo", message: "#{req["op"]}: not in the demo collector" } }
+            end
+      c.puts(JSON.generate(res))
+    rescue IOError, SystemCallError
+      nil
+    ensure
+      c.close
+    end
+  end' "$out/read.sock" &
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S "$out/read.sock" ] && exit 0; sleep 0.5; done
 echo "collector: read socket never appeared" >&2
 exit 1

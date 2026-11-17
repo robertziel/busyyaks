@@ -1,5 +1,5 @@
-// Captures the README screenshots from the demo stack (scripts/readme-images/demo-stack + build), all in the light
-// skin: busyyaks's own (Today, the board, a card, Today on a phone) as they are, and the kanban module's with the
+// Captures the README screenshots from the demo stack (scripts/readme-images/demo-stack + build), all in the dark
+// skin: busyyaks's own (Today, the board, a card, Today on a phone, a workflow graph) as they are, and the kanban module's with the
 // module's part marked — the regions the engine renders (its root elements, measured in the page) keep their colours
 // inside an accent outline labelled "kanban module"; the busyyaks host around them is dimmed and labelled "busyyaks host
 // (dimmed)". The marking is drawn on the captured pixels in a canvas (a modal <dialog> sits in the browser's top
@@ -16,16 +16,23 @@ const CARD = Number(process.env.CARD);
 if (!WEB || !OUT.busyyaks || !OUT.module || !RAW || !CARD)
   throw new Error("capture: WEB, OUT_BUSYYAKS, OUT_MODULE, RAW and CARD (the card to open) are required");
 const BOARD = `${WEB}/projects/acme/storefront?tab=board`;
+// the board running the engine's local-repo workflow (seed.js): the README's workflow graph
+const WORKFLOW_BOARD = `${WEB}/projects/acme/payments-api?tab=board`;
 
 const SCALE = 2;
 const ACCENT = "#0F9F8F";
 const QUALITY = 0.8;
-const SKIN = "light";
+const SKIN = "dark";
 const DESKTOP = { width: 1440, height: 900 };
+// the board: tall enough for the session lanes above it and the columns' cards under them
+const BOARD_VIEW = { width: 1440, height: 1400 };
 const openWorkflow = async (page) => {
   await page.getByRole("button", { name: "Workflow", exact: true }).click();
-  await page.waitForSelector("dialog.kb-be[open] .kb-be-graph .kb-be-line"); // the laid-out graph's first arrow
+  await page.waitForSelector("dialog.kb-be[open] .kb-be-graph .kb-be-line", { state: "attached" }); // the laid-out graph's first arrow
 };
+// the card dialog's live line: its agent at work, with the phase its screen shows (polled every 3 s after the open)
+const liveLine = (page) =>
+  page.locator("dialog.kb-dialog[open] .kb-work-labels", { hasText: "thinking" }).waitFor({ timeout: 30000 });
 // the page at rest: web fonts loaded, every finite animation / transition finished (an endless one — a live dot's
 // pulse — never finishes, so it is not waited for), then two frames painted
 const settled = (page) =>
@@ -41,13 +48,14 @@ const settled = (page) =>
 // the module's first element with a margin of dimmed host).
 const SHOTS = [
   { readme: "busyyaks", name: "today", url: `${WEB}/`, ready: ".heatmap", viewport: DESKTOP },
-  { readme: "busyyaks", name: "board", url: BOARD, ready: ".kb-board .kb-card", viewport: DESKTOP },
+  { readme: "busyyaks", name: "board", url: BOARD, ready: ".kb-board .kb-card", viewport: BOARD_VIEW },
   {
     readme: "busyyaks",
     name: "card",
     url: `${BOARD}&card=${CARD}`,
     ready: "dialog.kb-dialog[open]",
     viewport: DESKTOP,
+    before: liveLine,
   },
   {
     readme: "busyyaks",
@@ -55,6 +63,16 @@ const SHOTS = [
     url: `${WEB}/`,
     ready: ".heatmap",
     viewport: { width: 390, height: 844 },
+  },
+  {
+    readme: "busyyaks",
+    name: "workflow",
+    url: WORKFLOW_BOARD,
+    ready: ".kb-board",
+    viewport: { width: 1440, height: 2500 }, // tall: the whole graph (15 columns, top to bottom) at its reading size
+    before: openWorkflow,
+    cropTo: "dialog.kb-be[open]",
+    cropAround: 0,
   },
   {
     readme: "module",
@@ -72,6 +90,7 @@ const SHOTS = [
     ready: "dialog.kb-dialog[open]",
     // wider than the others: the dialog keeps its width, so the host's label fits beside it
     viewport: { width: 1600, height: 1000 },
+    before: liveLine,
     module: ["dialog.kb-dialog[open]"],
     labels: ["kanban module · card dialog"],
   },
@@ -99,7 +118,7 @@ const SHOTS = [
 ];
 
 // the marking, run in a blank page: the capture → canvas → dim the host, outline + label the module → WebP data URL
-function annotate({ png, rects, scale, accent, labels, quality }) {
+function annotate({ png, rects, scale, accent, labels, quality, dark }) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onerror = () => reject(new Error("capture: the screenshot did not decode"));
@@ -122,8 +141,8 @@ function annotate({ png, rects, scale, accent, labels, quality }) {
       const dim = new Path2D();
       dim.rect(0, 0, c.width, c.height);
       box.forEach((b) => round(dim, b, 12 * scale));
-      // washed out towards white: the light skin's host recedes, the module keeps its colours
-      g.fillStyle = "rgba(244, 245, 247, 0.74)";
+      // washed out towards the skin's background: the host recedes, the module keeps its colours
+      g.fillStyle = dark ? "rgba(17, 18, 22, 0.74)" : "rgba(244, 245, 247, 0.74)";
       g.fill(dim, "evenodd");
       // the module: an outline per box
       g.lineWidth = 3 * scale;
@@ -170,10 +189,12 @@ function annotate({ png, rects, scale, accent, labels, quality }) {
   });
 }
 
-// the crop around the module's first element: its box plus `cropAround` CSS px of host on every side, in the viewport
+// the crop around the module's first element (or `cropTo`): its box plus `cropAround` CSS px of host on every side, in
+// the viewport
 async function around(page, shot) {
-  const r = await page.locator(shot.module[0]).boundingBox();
-  if (!r) throw new Error(`capture: ${shot.name}: ${shot.module[0]} has no box`);
+  const sel = shot.cropTo ?? shot.module[0];
+  const r = await page.locator(sel).boundingBox();
+  if (!r) throw new Error(`capture: ${shot.name}: ${sel} has no box`);
   const m = shot.cropAround;
   const x = Math.max(0, Math.floor(r.x - m));
   const y = Math.max(0, Math.floor(r.y - m));
@@ -199,7 +220,8 @@ async function main() {
       await page.waitForSelector(shot.ready);
       if (shot.before) await shot.before(page);
       await settled(page);
-      const clip = shot.clip ?? (shot.cropAround ? await around(page, shot) : { x: 0, y: 0, ...shot.viewport });
+      const clip =
+        shot.clip ?? (shot.cropAround !== undefined ? await around(page, shot) : { x: 0, y: 0, ...shot.viewport });
       const rects = await page.evaluate(
         ({ sels, clip }) =>
           sels.map((sel) => {
@@ -235,6 +257,7 @@ async function main() {
         accent: ACCENT,
         labels,
         quality: QUALITY,
+        dark: SKIN === "dark",
       });
       const file = `${OUT[shot.readme]}/${shot.name}.webp`;
       fs.writeFileSync(file, Buffer.from(url.split(",")[1], "base64"));

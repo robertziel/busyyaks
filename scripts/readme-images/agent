@@ -1,0 +1,30 @@
+#!/bin/sh
+# The demo stack's stand-in agent program (readme-agent on the launcher image's PATH; scripts/readme-images/demo-stack
+# copies it into the workdir, @COLLECTOR@ filled): the command of the demo's one launcher (kind hermes in the demo's
+# launch.commands, made every type's launcher by seed.js), so the board's lead and its workers are started by the real
+# bin/launcher through Launch — and no agent runs. It ignores the argv Launch gives it (-q <prompt>) and draws, in its
+# tmux pane the Claude Code screen build gave its session (@COLLECTOR@/screens/<session>: thinking, a running tool, a
+# permission dialog, idle — scripts/readme-images/screens/), which bin/launcher reads as it reads a real agent's pane.
+# No screen = it exits naming the file, and bin/launcher's start check refuses the launch.
+# {elapsed} in a screen = the time since this agent started (its one turn began at Launch), as Claude Code's status line
+# counts a turn: what its session wrote on a card since stays inside the turn (the card dialog shows it at work there).
+# Its sleep child keeps the launcher's start check satisfied.
+screens=@COLLECTOR@/screens
+session=$(tmux display-message -p '#S')
+start=$(date +%s)
+shown=""
+while :; do
+  f="$screens/$session"
+  t=$(($(date +%s) - start))
+  if [ ! -r "$f" ]; then
+    echo "readme-agent: no screen for session $session ($f; scripts/readme-images/build writes it before seeding)" >&2
+    exit 1
+  fi
+  now=$(sed "s/{elapsed}/$((t / 60))m $((t % 60))s/" "$f")
+  if [ "$now" != "$shown" ]; then
+    clear
+    printf '%s\n' "$now"
+    shown=$now
+  fi
+  sleep 2
+done

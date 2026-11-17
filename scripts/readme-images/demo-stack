@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # The README screenshots' stage (busyyaks's and the kanban module's): a throwaway busyyaks stack built from this
 # checkout, on SYNTHETIC data only — generated repos under acme/* with a year of commits by dev@example.com and a
-# teammate, a fresh database, auth none on 127.0.0.1, and a launcher whose tmux server (in its own container) runs idle
-# stand-in sessions. Nothing of a real deployment is read.
+# teammate, a fresh database, auth none on 127.0.0.1, and the real bin/launcher in its own container, whose tmux server
+# runs the sessions seed.js Launches (lead first) as stand-in agents (scripts/readme-images/agent) drawing Claude Code
+# screens, read through a stand-in collector (scripts/readme-images/collector). Nothing of a real deployment is read.
 #
 #   scripts/readme-images/demo-stack up <workdir>     build + start (prints the web and MCP URLs)
 #   scripts/readme-images/demo-stack down <workdir>   stop and remove the containers (workdir kept)
 #
 # Then scripts/readme-images/build <workdir> <module checkout> seeds the demo and captures the images.
-# Ports: README_DEMO_WEB_PORT / README_DEMO_MCP_PORT (both required, free ports on 127.0.0.1).
+# Ports: README_DEMO_WEB_PORT / README_DEMO_MCP_PORT (both required, free ports on 127.0.0.1). The workdir: at most 80
+# bytes, and no dir above it writable by group / other (bin/launcher refuses a socket dir under e.g. /tmp) — e.g.
+# ~/.local/state/readme-demo.
 set -euo pipefail
 
 PROJECT=readme-demo
@@ -69,10 +72,15 @@ up() {
   echo "$checkout" > "$w/checkout"
 
   docker build -q -t "$IMAGE" "$checkout" >/dev/null
-  printf 'FROM %s\nRUN apt-get update -qq && apt-get install -y -qq --no-install-recommends tmux >/dev/null && rm -rf /var/lib/apt/lists/*\n' \
-    "$IMAGE" | docker build -q -t "$LAUNCHER_IMAGE" - >/dev/null
+  # tmux + the stand-in agent on PATH (its file is mounted from the workdir's collector dir, filled below)
+  printf 'FROM %s\nRUN apt-get update -qq && apt-get install -y -qq --no-install-recommends tmux >/dev/null && rm -rf /var/lib/apt/lists/*\nRUN ln -s %s/collector/agent /usr/local/bin/readme-agent\n' \
+    "$IMAGE" "$w" | docker build -q -t "$LAUNCHER_IMAGE" - >/dev/null
 
-  mkdir -p "$w/projects" "$w/data/run" "$w/config" "$w/session-records" "$w/collector"
+  mkdir -p "$w/projects" "$w/data" "$w/config" "$w/session-records" "$w/collector"
+  # the launcher's socket dir and state dir: outside ./data, PROJECTS_ROOT and the checkout, this uid, 0700, under one
+  # parent of this uid that the launcher container mounts as a whole (bin/launcher checks the parent's owner too)
+  mkdir -p "$w/launcher/run" "$w/launcher/state"
+  chmod 0700 "$w/launcher" "$w/launcher/run" "$w/launcher/state"
   local i=0
   for r in "${REPOS[@]}"; do i=$((i + 1)); make_repo "$w" "$r" "$i"; done
 
@@ -87,14 +95,30 @@ window_days: 7
 auth: { provider: none, allow_unauthenticated: true }
 reap_protect: []
 agents: { collector: { snapshot: $w/collector/snapshot.json, read_socket: $w/collector/read.sock } }
+dictation: none
+terminal: { public_host: deny, max_open: 4 }
+ci:
+  max_pending_minutes: 60
+  required:
+    acme/storefront: [ci]
+launch:
+  trusted_paths: []
+  start_seconds: 30
+  commands:
+    # the stand-in agent (scripts/readme-images/agent, readme-agent on the launcher image's PATH): seed.js makes it
+    # every agent type's launcher, so the real bin/launcher starts the board's lead and its workers through Launch
+    - { kind: hermes, command: readme-agent, args: [], via_shell: false }
 YML
   # every key compose requires from busyyaks's .env.example (it refuses a missing one): a key added there is added here
-  # too. Left out: the optional reverse-proxy section (PUBLIC_HOST, TLS_*, PROXY_UPSTREAM, FRPC_SUBDOMAIN), which only
-  # bin/render-deploy reads
+  # too (test/unit/readme_demo_stack_test.rb). Left out: the reverse-proxy section's TLS_*, PROXY_UPSTREAM,
+  # FRPC_SUBDOMAIN, which only bin/render-deploy reads, and the CI-only CI_GITHUB_*
   cat > "$w/.env" <<ENV
 WEB_HOST_PORT=$README_DEMO_WEB_PORT
 MCP_HOST_PORT=$README_DEMO_MCP_PORT
 MCP_HOST=127.0.0.1
+PUBLIC_HOST=
+LAUNCHER_RUN_DIR=$w/launcher/run
+LAUNCHER_STATE_DIR=$w/launcher/state
 WEB_CONTAINER_PORT=2300
 MCP_CONTAINER_PORT=2400
 HANAMI_MIN_THREADS=5
@@ -109,6 +133,7 @@ SESSION_SECRET=$(head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')
 SESSION_COOKIE_SECURE=false
 SESSION_COOKIE_SAME_SITE=strict
 MCP_TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+MCP_REPORT_TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 COMPOSE_PROFILES=
 DATABASE_ADAPTER=sqlite
 SQLITE_BUSY_TIMEOUT_MS=15000
@@ -132,12 +157,21 @@ NOTIFIER_WATCH_SECONDS=30
 WATCHDOG_GRACE_SECONDS=60
 ATTACHMENT_MAX_BYTES=26214400
 ATTACHMENT_TYPES=image/png,image/jpeg,image/webp
+GIT_READ_TIMEOUT_SECONDS=30
+GIT_READ_CPU_SECONDS=30
+GIT_READ_MEMORY_BYTES=1073741824
+GIT_READ_MAX_BLOB_BYTES=10485760
+SERVICE_MEM_LIMIT=2g
+DICTATION_URL=
+DICTATION_TOKEN=
+TEST_WORKERS=1
 ENV
   cat > "$w/override.yml" <<YML
 services:
   web: { image: $IMAGE, restart: "no" }
   mcp: { image: $IMAGE, restart: "no" }
   scanner: { image: $IMAGE, restart: "no" }
+  notifier: { image: $IMAGE, restart: "no" }
   launcher:
     image: $LAUNCHER_IMAGE
     network_mode: none
@@ -156,16 +190,21 @@ services:
       - $w/projects:$w/projects:ro
       - $w/session-records:$w/session-records:ro
       - $w/collector:$w/collector
+      - $w/launcher:$w/launcher
 YML
-  sed "s|@PROJECTS@|$w/projects|; s|@COLLECTOR@|$w/collector|" "$(dirname "$0")/collector" > "$w/collector/run"
+  sed "s|@COLLECTOR@|$w/collector|" "$(dirname "$0")/collector" > "$w/collector/run"
+  sed "s|@COLLECTOR@|$w/collector|" "$(dirname "$0")/agent" > "$w/collector/agent"
+  chmod +x "$w/collector/agent"
+  mkdir -p "$w/collector/screens" "$w/collector/kinds"
   compose "$w" up -d --no-build launcher
-  for _ in $(seq 1 30); do [ -S "$w/data/run/launcher.sock" ] && break; sleep 1; done
-  [ -S "$w/data/run/launcher.sock" ] || { compose "$w" logs launcher >&2; die "launcher socket never appeared"; }
+  for _ in $(seq 1 30); do [ -S "$w/launcher/run/launcher.sock" ] && break; sleep 1; done
+  [ -S "$w/launcher/run/launcher.sock" ] || { compose "$w" logs launcher >&2; die "launcher socket never appeared"; }
   # web first: it migrates the fresh database (bin/web); the scanner and the MCP server read it, so they start after /up
   compose "$w" up -d --no-build web
   for _ in $(seq 1 60); do curl -fsS "http://127.0.0.1:$README_DEMO_WEB_PORT/up" >/dev/null 2>&1 && break; sleep 1; done
   curl -fsS "http://127.0.0.1:$README_DEMO_WEB_PORT/up" >/dev/null || { compose "$w" logs web >&2; die "web never answered /up"; }
-  compose "$w" up -d --no-build mcp scanner
+  # the notifier: pings, the watch pass, and the session dialogs it turns into questions on the cards
+  compose "$w" up -d --no-build mcp scanner notifier
   # the scanner's first pass: every demo repo is a project before anything seeds its board
   local api="http://127.0.0.1:$README_DEMO_WEB_PORT/api/projects" r ok
   for _ in $(seq 1 90); do

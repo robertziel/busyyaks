@@ -318,6 +318,7 @@ frontend_suite() {
   docker run --rm --cpus "$CI_RUNNER_CPUS" -e "CI_RUNNER_CPUS=$CI_RUNNER_CPUS" -v "$HOST_SRC:/repo:ro" "$NODE_IMAGE" sh -euc '
     mkdir -p /w/frontend /w/public && cd /repo/frontend && tar cf - --exclude=./node_modules . | tar xf - -C /w/frontend
     cp -r /repo/public/static /w/public/static && cp -r /repo/skins /w/skins && cd /w/frontend
+    mkdir -p /w/scripts && cp -r /repo/scripts/readme-images /w/scripts/readme-images   # rename.js: readmeImages.test.ts
     npm ci --no-audit --no-fund
     npx tsc --noEmit
     npm run lint
