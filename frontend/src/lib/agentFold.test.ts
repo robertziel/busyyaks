@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentGroup, AgentSession } from "../types";
-import { active, fold } from "./agentFold";
+import { HIDE_FINISHED_KEY, active, finishedHideable, fold, hideFinishedStored, storeHideFinished } from "./agentFold";
 
 const s = (name: string, state: string, extra: Partial<AgentSession> = {}) =>
   ({ key: `default/${name}`, name, state, subagents: 0, ...extra }) as AgentSession;
@@ -58,5 +58,63 @@ describe("agents fold", () => {
     expect(visible(fold(g, "busy", none, true))).toEqual(["work"]);
     expect(fold({ ...g, sessions: [s("a", "idle")] }, "you", none, true).shown).toBe(false);
     expect(visible(fold(g, "team", none, false))).toEqual(["lead"]);
+  });
+  it("hide finished: finished rows left out under every filter, counts too; an open one stays", () => {
+    const h = {
+      ...g,
+      sessions: [s("w", "working"), s("f", "finished"), s("fu", "finished", { unread: true }), s("i", "idle")],
+    };
+    const all = fold(h, "all", none, true, true);
+    expect(visible(all)).toEqual(["w", "i"]);
+    expect([all.activeCount, all.idleCount]).toEqual([1, 1]);
+    expect(visible(fold(h, "you", none, true, true))).toEqual([]);
+    expect(fold(h, "you", none, true, true).shown).toBe(false);
+    expect(visible(fold(h, "all", new Set(["default/fu"]), true, true))).toEqual(["w", "fu", "i"]);
+    expect(visible(fold(h, "all", none, true, false))).toEqual(["w", "f", "fu", "i"]);
+  });
+  it("a project of only finished sessions is hidden while the toggle is on", () => {
+    expect(fold({ ...g, sessions: [s("f", "finished")] }, "all", none, false, true).shown).toBe(false);
+  });
+});
+
+describe("hide finished: the chip's count", () => {
+  it("counts the finished sessions over every project, minus the open ones", () => {
+    const a = { ...g, sessions: [s("f1", "finished"), s("f2", "finished", { unread: true }), s("w", "working")] };
+    const b = { ...g, slug: "q", sessions: [s("f3", "finished"), s("i", "idle")] };
+    expect(finishedHideable([a, b], none)).toBe(3);
+    expect(finishedHideable([a, b], new Set(["default/f2"]))).toBe(2);
+    expect(finishedHideable([], none)).toBe(0);
+  });
+});
+
+describe("hide finished: remembered", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const memory = () => {
+    const m = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: (k: string, v: string) => void m.set(k, v),
+    });
+    return m;
+  };
+  it("off until set; on and off round-trip under its key", () => {
+    const m = memory();
+    expect(hideFinishedStored()).toBe(false);
+    storeHideFinished(true);
+    expect([m.get(HIDE_FINISHED_KEY), hideFinishedStored()]).toEqual(["1", true]);
+    storeHideFinished(false);
+    expect([m.get(HIDE_FINISHED_KEY), hideFinishedStored()]).toEqual(["0", false]);
+  });
+  it("no storage (private mode): off, and storing never throws", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    });
+    expect(hideFinishedStored()).toBe(false);
+    expect(() => storeHideFinished(true)).not.toThrow();
   });
 });

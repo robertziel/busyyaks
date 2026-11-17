@@ -768,6 +768,9 @@
 .ag-filter .spacer {
   flex: 1;
 }
+.ag-filter .ag-nfin {
+  color: var(--ink-dim);
+}
 .reap-btn {
   font-size: 12px;
   padding: 0.15rem 0.6rem;
