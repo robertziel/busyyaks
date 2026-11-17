@@ -1,4 +1,4 @@
-# The agent harnesses (coding-agent CLIs) busyyaks knows (committed, card 520), each {label, command, version_args,
+# The agent harnesses (coding-agent CLIs) busyyaks knows (committed), each {label, command, version_args,
 # version_pattern, install_url, kind, launch_args}. bin/launcher's `harnesses` op resolves `command` in the shell a
 # launch runs in (bash -ic) and, for a program file, runs `command version_args`: the version = version_pattern's one
 # capture (lib/busyyaks/harnesses.rb). kind = the engine launch kind it runs as (vendor/agents_kanban Launch::KINDS:

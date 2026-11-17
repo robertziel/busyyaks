@@ -23,7 +23,7 @@ export type SetupData = {
   kinds: Record<string, string>; // engine launch kind → its harness label (config/harnesses.yml)
 };
 
-// GET /api/setup/harnesses (card 520): the agent CLIs the launcher found in the launch shell (bash -ic), joined with
+// GET /api/setup/harnesses: the agent CLIs the launcher found in the launch shell (bash -ic), joined with
 // the host allowlist. allowed = indexes into agents.commands of the harness's kind; allow_line = the launch.commands
 // item to add (null: no engine launch kind). commands[at] = each allowlisted command as that shell resolves it.
 export type Harness = {
@@ -54,7 +54,7 @@ export type HarnessesData = {
   allowlist_in_sync: boolean; // the launcher enforces the launch.commands the web read (false: restart both)
 };
 
-// the steps, in order; `?step=<key>` names one (card 520: any step reachable, deep-linkable)
+// the steps, in order; `?step=<key>` names one (any step reachable, deep-linkable)
 export const STEP_KEYS = ["checks", "skin", "projects", "agents", "summary"] as const;
 export type StepKey = (typeof STEP_KEYS)[number];
 export const STEP_LABELS: Record<StepKey, string> = {
@@ -257,7 +257,7 @@ export function agentPrompt(
 // under: the lead type it runs under (its sessions run that lead's launcher, whatever the list says), or null
 export type TypeChange = { type: string; label: string; launchers: [string[], string[]]; under: string | null };
 
-// Types that run under a lead (card 463: worker, sub team) are listed too, with `under`: their sessions run the lead's
+// Types that run under a lead (worker, sub team) are listed too, with `under`: their sessions run the lead's
 // launcher whatever their list says, so the page shows them as following it and does not count them.
 export function typeChanges(before: AgentDoc, after: AgentDoc): TypeChange[] {
   return after.agent_types.flatMap((t) => {

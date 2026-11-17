@@ -3,7 +3,7 @@
 require "yaml"
 
 module Busyyaks
-  # The agent harnesses (coding-agent CLIs) the hello screen looks for on the host (card 520). Which harnesses exist is
+  # The agent harnesses (coding-agent CLIs) the hello screen looks for on the host. Which harnesses exist is
   # configuration — config/harnesses.yml (committed); whether one is installed is read on the HOST by bin/launcher's
   # `harnesses` op (`probe`): every harness command and every launch.commands command resolved in ONE `bash -ic` child
   # — the shell a launch runs in, so "found" = "a launch would find it" (the profile's PATH, shell functions, aliases);

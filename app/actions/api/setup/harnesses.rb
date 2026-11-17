@@ -6,8 +6,8 @@ module Busyyaks
   module Actions
     module API
       module Setup
-        # GET /api/setup/harnesses → the agent CLIs on the host, read by bin/launcher now (Busyyaks::SetupAPI.harnesses;
-        # card 520). Its own request: the probe spawns processes, the boot checks stay instant.
+        # GET /api/setup/harnesses → the agent CLIs on the host, read by bin/launcher now (Busyyaks::SetupAPI.harnesses).
+        # Its own request: the probe spawns processes, the boot checks stay instant.
         class Harnesses < Busyyaks::APIAction
           def handle(_req, res)
             commands = begin

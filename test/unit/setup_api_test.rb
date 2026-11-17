@@ -119,7 +119,7 @@ class SetupAPITest < Minitest::Test
     def harnesses = @blk.call
   end
 
-  # card 520: each harness the launcher found, joined with this host's allowlist
+  # each harness the launcher found, joined with this host's allowlist
   def test_harnesses_carry_the_allowlist_and_the_line_to_add
     status, body = API.harnesses(launcher: Up.new([]), commands: COMMANDS)
     assert_equal 200, status
