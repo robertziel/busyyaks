@@ -482,6 +482,12 @@ CREATE TABLE `gh_pollers`(
   `paused_until` integer,
   `error` text
 );
+CREATE TABLE `runtime_settings`(
+  `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+  `doc` text NOT NULL,
+  `author` varchar(255) NOT NULL,
+  `created_at` integer NOT NULL
+);
 INSERT INTO schema_migrations (filename) VALUES
 ('20261101000000_create_core.rb'),
 ('20261101230000_create_daily.rb'),
@@ -524,4 +530,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261208000000_gh_pollers.rb'),
 ('20261208046700_pr_closed_reason.rb'),
 ('20261208468000_pr_base_merge_flags.rb'),
-('20261209492000_progress_watch.rb');
+('20261209492000_progress_watch.rb'),
+('20261217523000_runtime_settings.rb');

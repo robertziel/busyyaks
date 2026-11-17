@@ -24,6 +24,9 @@ set -eu
 # the app's own minimums, refused at its boot (test/unit/setup_test.rb holds them equal to the Ruby constants)
 MIN_SESSION_SECRET_BYTES=64   # lib/busyyaks/session_cookie.rb SessionCookie::MIN_SECRET_BYTES
 MIN_MCP_TOKEN_CHARS=32        # lib/busyyaks/mcp_server.rb McpServer::MIN_TOKEN_CHARS (MCP_TOKEN and MCP_REPORT_TOKEN)
+# the .env keys moved to Settings → Runtime (lib/busyyaks/runtime_settings.rb RuntimeSettings::KEYS): `check`
+# refuses a .env that still has one
+RUNTIME_MOVED="SCAN_INTERVAL_SECONDS GITHUB_INTERVAL_SECONDS GITHUB_CI_INTERVAL_SECONDS NOTIFIER_INTERVAL_SECONDS NOTIFIER_WATCH_SECONDS WATCHDOG_GRACE_SECONDS"
 
 dir=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$dir"
@@ -231,6 +234,16 @@ SHAPE
   case "$(value DICTATION_TOKEN)" in
     *[[:space:]]* | *[[:cntrl:]]*) bad "DICTATION_TOKEN has whitespace or control characters: the web app refuses it" ;;
   esac
+  # the services' timing moved to Settings → Runtime (the database): a line left here would look like it
+  # still sets something; no service reads it
+  for k in $RUNTIME_MOVED; do
+    # an `export KEY=` line is refused above already (not KEY=value), like EnvFile does
+    if grep -q "^[[:space:]]*$k=" .env; then
+      bad "$k moved to Settings → Runtime: start web alone (docker compose up -d --wait web: it migrates)," \
+        "import your values (docker compose exec -T web bin/runtime-settings import-env < .env), then delete the line" \
+        "from .env (docs/DEPLOY.md § Runtime settings)"
+    fi
+  done
 
   # agents.collector (README § Agent sessions): bin/collector and bin/launcher refuse a path they cannot use; named here,
   # before deploy/install-collector.sh would stop on a bare mkdir. The full reading is `bin/collector --check` (host Ruby)

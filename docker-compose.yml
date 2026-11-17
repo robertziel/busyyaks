@@ -4,8 +4,8 @@
 # web     -> 127.0.0.1:${WEB_HOST_PORT}; public only through a proxy you add
 #            (deploy/). Gate: the auth provider in config/busyyaks.yml `auth` (none = no sign-in: keep it local).
 # mcp     -> http://${MCP_HOST}:${MCP_HOST_PORT}/mcp, local only, bearer MCP_TOKEN; kanban_claim checks tmux sessions through the launcher socket.
-# scanner -> rescans every repo under PROJECTS_ROOT (read-only) every SCAN_INTERVAL_SECONDS.
-# github  -> GitHub network snapshots (GITHUB_LOGIN's followees: stars, follows) every GITHUB_INTERVAL_SECONDS.
+# scanner -> rescans every repo under PROJECTS_ROOT (read-only) every scan_interval_seconds (Settings → Runtime).
+# github  -> GitHub network snapshots (GITHUB_LOGIN's followees: stars, follows) every github_interval_seconds.
 # postgres -> optional (profile `postgres`; .env COMPOSE_PROFILES=postgres makes it part of the stack): the database when
 #             DATABASE_ADAPTER=postgresql and no server of your own; data in ./data/postgres, reached only through its
 #             Unix socket in ./data/postgres-run (/data/postgres-run in the app containers), no network.
@@ -92,8 +92,6 @@ x-app: &app
     ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:?}
     ATTACHMENT_TYPES: ${ATTACHMENT_TYPES:?}
     GITHUB_LOGIN: ${GITHUB_LOGIN:?}
-    WATCHDOG_GRACE_SECONDS: ${WATCHDOG_GRACE_SECONDS:?}   # a registered session counts as running this long before it is live; the watchdog's grace
-    GITHUB_CI_INTERVAL_SECONDS: ${GITHUB_CI_INTERVAL_SECONDS:?}   # every kanban Store reads PR checks older than 3x this as unknown (the approval gate, the idle watch, PR flags)
     # the limits of every read of a scanned repo (bin/git-read, one killable child per read; lib/busyyaks/git_read.rb)
     GIT_READ_TIMEOUT_SECONDS: ${GIT_READ_TIMEOUT_SECONDS:?}
     GIT_READ_CPU_SECONDS: ${GIT_READ_CPU_SECONDS:?}
@@ -139,7 +137,7 @@ services:
     mem_limit: ${SERVICE_MEM_LIMIT:?}   # the container's ceiling over its git-read children's own GIT_READ_MEMORY_BYTES
     volumes: *launcher_volumes   # x-app's + the launcher socket dir
     command: ["bin/mcp"]
-    environment: { <<: *env, MCP_PORT: "${MCP_CONTAINER_PORT:?}", MCP_TOKEN: "${MCP_TOKEN:?}", MCP_REPORT_TOKEN: "${MCP_REPORT_TOKEN:?}", SCAN_INTERVAL_SECONDS: "${SCAN_INTERVAL_SECONDS:?}", MCP_HOST: "${MCP_HOST:?}", LOG_LEVEL: warn, LAUNCHER_SOCKET: /launcher/launcher.sock }
+    environment: { <<: *env, MCP_PORT: "${MCP_CONTAINER_PORT:?}", MCP_TOKEN: "${MCP_TOKEN:?}", MCP_REPORT_TOKEN: "${MCP_REPORT_TOKEN:?}", MCP_HOST: "${MCP_HOST:?}", LOG_LEVEL: warn, LAUNCHER_SOCKET: /launcher/launcher.sock }
     ports: ["${MCP_HOST:?}:${MCP_HOST_PORT:?}:${MCP_CONTAINER_PORT:?}"]
     # healthy = it answers its own bearer on /mcp (a GET with MCP_TOKEN → 405, POST only): booted, the token taken — an
     # MCP_TOKEN it refuses stops the boot, so `up --wait` fails instead of returning over a crash loop
@@ -153,17 +151,17 @@ services:
     <<: *app
     mem_limit: ${SERVICE_MEM_LIMIT:?}   # the container's ceiling over its git-read children's own GIT_READ_MEMORY_BYTES
     command: ["bin/scan"]
-    environment: { <<: *env, SCAN_INTERVAL_SECONDS: "${SCAN_INTERVAL_SECONDS:?}", LOG_LEVEL: warn }
+    environment: { <<: *env, LOG_LEVEL: warn }
     depends_on:
       web: { condition: service_healthy }   # web migrates the database on start: the others boot on the migrated schema
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
 
   # GitHub network collector (bin/github): who GITHUB_LOGIN follows, their stars and follows, every
-  # GITHUB_INTERVAL_SECONDS. The only service holding GITHUB_TOKEN; web/mcp read its snapshots from the db.
+  # github_interval_seconds (Settings → Runtime). The only service holding GITHUB_TOKEN; web/mcp read its snapshots from the db.
   github:
     <<: *app
     command: ["bin/github"]
-    environment: { <<: *env, LOG_LEVEL: warn, GITHUB_TOKEN: "${GITHUB_TOKEN:?}", GITHUB_INTERVAL_SECONDS: "${GITHUB_INTERVAL_SECONDS:?}" }
+    environment: { <<: *env, LOG_LEVEL: warn, GITHUB_TOKEN: "${GITHUB_TOKEN:?}" }
     depends_on:
       web: { condition: service_healthy }   # web migrates the database on start: the others boot on the migrated schema
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
@@ -173,8 +171,7 @@ services:
     mem_limit: ${SERVICE_MEM_LIMIT:?}   # the container's ceiling over its git-read children's own GIT_READ_MEMORY_BYTES
     volumes: *launcher_volumes   # x-app's + the launcher socket dir
     command: ["bin/notifier"]
-    environment: { <<: *env, LOG_LEVEL: warn, LAUNCHER_SOCKET: /launcher/launcher.sock,
-                   NOTIFIER_INTERVAL_SECONDS: "${NOTIFIER_INTERVAL_SECONDS:?}", NOTIFIER_WATCH_SECONDS: "${NOTIFIER_WATCH_SECONDS:?}" }
+    environment: { <<: *env, LOG_LEVEL: warn, LAUNCHER_SOCKET: /launcher/launcher.sock }
     depends_on:
       web: { condition: service_healthy }   # web migrates the database on start: the others boot on the migrated schema
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
@@ -225,8 +222,6 @@ services:
       ATTACHMENT_TYPES: image/png,image/jpeg,image/gif,image/webp,image/svg+xml,text/html,application/pdf,text/plain,text/markdown,application/json
       LOG_LEVEL: warn
       GITHUB_LOGIN: octotest   # tests stub GitHub; no token, no network
-      WATCHDOG_GRACE_SECONDS: "60"
-      GITHUB_CI_INTERVAL_SECONDS: "60"   # the card links' PR flags read it
       GIT_READ_TIMEOUT_SECONDS: "20"   # a fixture that hangs (test/unit/git_read_test.rb) is killed inside it
       GIT_READ_CPU_SECONDS: "20"
       GIT_READ_MEMORY_BYTES: "1073741824"

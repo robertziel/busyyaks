@@ -2,9 +2,10 @@
 # frozen_string_literal: true
 
 # GitHub network collector (lib/busyyaks/github_network.rb + the dashboard feed, github_feed.rb) and the operator's
-# merged PRs (github_prs.rb: the home page's window, config window_days): one run, then sleeps GITHUB_INTERVAL_SECONDS, forever.
+# merged PRs (github_prs.rb: the home page's window, config window_days): one run, then sleeps github_interval_seconds, forever.
 # Every run is recorded in gh_runs (ok, or the error: token rejected, rate limited, unreachable) and shown on /github
-# and by the MCP tool github_network. A failed run invents nothing; the next one tries again.
+# and by the MCP tool github_network. A failed run invents nothing; the next one tries again. Both intervals
+# (github_interval_seconds, github_ci_interval_seconds) are Settings → Runtime, read at every turn.
 require "hanami/prepare"
 require "busyyaks/github_network"
 require "busyyaks/ci_checks"
@@ -13,12 +14,11 @@ require "busyyaks/github_pollers"
 require "busyyaks/github_prs"
 require "busyyaks/config"
 require "busyyaks/clock"
+require "busyyaks/runtime_settings"
 
-interval = Integer(ENV.fetch("GITHUB_INTERVAL_SECONDS"))
 login = ENV.fetch("GITHUB_LOGIN")
 token = ENV.fetch("GITHUB_TOKEN")
 data = Busyyaks::GithubNetwork::Data.default
-ci_interval = Integer(ENV.fetch("GITHUB_CI_INTERVAL_SECONDS"))
 config = Busyyaks::Config.load
 window_days = config.window_days # the home page's range (/api/today reads the same key)
 $stdout.sync = true
@@ -33,6 +33,7 @@ puts "ci.required does not list #{missing.join(', ')}: their cards' CI is refuse
 Thread.new do
   gate = Busyyaks::GithubPollers.new(db: data.db)
   loop do
+    ci_interval = Busyyaks::RuntimeSettings.get(data.db)[:github_ci_interval_seconds]
     client = Busyyaks::GithubNetwork::Client.new(token: token) # one per tick: its counters are the tick's cost
     poller = Busyyaks::CiChecks::Poller.new(db: data.db, client: client, gate: gate,
                                             wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval),
@@ -75,5 +76,5 @@ loop do
   puts pr[:ok] ? "merged prs ok since=#{since} found=#{pr[:found]} added=#{pr[:added]} calls=#{pr[:calls]}" : "merged prs FAILED #{pr[:error]}"
   break if ENV["GITHUB_ONCE"] == "1"
 
-  sleep interval
+  sleep Busyyaks::RuntimeSettings.get(data.db)[:github_interval_seconds]
 end

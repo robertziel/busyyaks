@@ -259,6 +259,36 @@ the migration's uses `under` / `standalone` (import a pre-463 revision with `bin
 stays the newest). With no later revision it writes the one from before the migration as the newest again; then it
 drops the three columns.
 
+## Runtime settings (the services' timing)
+
+How often each service works is a revision in the database, edited on **Settings → Runtime**
+(`/settings/runtime`, the cog menu) or `docker compose exec -T web bin/runtime-settings show | import < file.yml |
+import-env < .env`. Every service reads the current revision at its next turn: a save applies without a restart.
+
+| key | was `.env` | read by |
+|---|---|---|
+| `scan_interval_seconds` | `SCAN_INTERVAL_SECONDS` | scanner (sleep), mcp (`last_scan` stale after 3 ×) |
+| `github_interval_seconds` | `GITHUB_INTERVAL_SECONDS` | github (network, feed, merged PRs) |
+| `github_ci_interval_seconds` | `GITHUB_CI_INTERVAL_SECONDS` | github (PR / CI polls), web + mcp + notifier (stale after 3 ×, window 10 ×) |
+| `notifier_interval_seconds` | `NOTIFIER_INTERVAL_SECONDS` | notifier (ping delivery) |
+| `notifier_watch_seconds` | `NOTIFIER_WATCH_SECONDS` | notifier (watch pass) |
+| `watchdog_grace_seconds` | `WATCHDOG_GRACE_SECONDS` | notifier, web, mcp (launch / watchdog grace) |
+
+- Each a whole number of seconds 1..86400; the watch pass (`notifier_watch_seconds` rounded up to whole `notifier_interval_seconds` turns) below 10 × `github_ci_interval_seconds`. A refused save is 422 with the reason; nothing is written.
+- Revision 1 = `config/runtime.template.yml` (migration `20261217523000`), the values `.env.example` shipped.
+- **Upgrading** (`bin/setup check` refuses a `.env` that still has one of the six lines, so the import runs before it, on web alone — compose itself never runs the check):
+
+  ```sh
+  grep -E '^[[:space:]]*(export[[:space:]]+)?(SCAN_INTERVAL|GITHUB_INTERVAL|GITHUB_CI_INTERVAL|NOTIFIER_INTERVAL|NOTIFIER_WATCH|WATCHDOG_GRACE)_SECONDS=' .env > data/runtime-env.bak
+  docker build -t busyyaks:local . && docker compose up -d --no-build --wait web    # migrates: revision 1 = the template
+  docker compose exec -T web bin/runtime-settings import-env < data/runtime-env.bak  # revision 2 = your values
+  sed -i -E '/^[[:space:]]*(export[[:space:]]+)?(SCAN_INTERVAL|GITHUB_INTERVAL|GITHUB_CI_INTERVAL|NOTIFIER_INTERVAL|NOTIFIER_WATCH|WATCHDOG_GRACE)_SECONDS=/d' .env
+  bin/setup check && docker compose up -d --no-build mcp scanner github notifier
+  ```
+
+  Only web runs between the migration and the import (seconds), and the services that loop on these values start after it. Your values equal `config/runtime.template.yml` → the import adds an identical revision; skipping it is the same.
+- Rollback: the previous release reads the six keys from `.env` again — put the lines back from `data/runtime-env.bak`.
+
 ## Skills (what a launched session is told)
 
 busyyaks's board workflow is a set of skills, handed to each session busyyaks launches or spawns — **for that session

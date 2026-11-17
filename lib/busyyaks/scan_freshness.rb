@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 module Busyyaks
-  # Is the last scan fit to report from? The scanner scans, then sleeps SCAN_INTERVAL_SECONDS (.env, the scanner's own
-  # value), so a healthy one finishes a scan every interval + scan duration. Stale = finished longer ago than
+  # Is the last scan fit to report from? The scanner scans, then sleeps scan_interval_seconds (Settings → Runtime, the
+  # scanner's own value), so a healthy one finishes a scan every interval + scan duration. Stale = finished longer ago than
   # STALE_AFTER × interval + that scan's own duration (started_at..finished_at) capped at one interval — a long but
   # healthy scan is not stale, a stopped scanner is, and a row whose duration is absurd (started_at 0, a 20 h scan)
   # never stretches the limit past STALE_AFTER + 1 intervals: stale when now − finished_at > 3 × interval +
@@ -31,7 +31,7 @@ module Busyyaks
                elsif age < -FUTURE_SLACK then "scan time in the future (clock): finished_at is #{-age} s ahead of now"
                elsif age > limit
                  "the last scan finished #{age} s ago (at #{Time.at(finished).utc.iso8601}): older than #{STALE_AFTER} × " \
-                   "SCAN_INTERVAL_SECONDS + its duration capped at one interval, #{duration} s (#{limit} s) — " \
+                   "scan_interval_seconds + its duration capped at one interval, #{duration} s (#{limit} s) — " \
                    "the scanner is not running"
                end
       { finished_at: Time.at(finished).utc.iso8601, repos: scan[:repos], error: scan[:error], age_seconds: age,

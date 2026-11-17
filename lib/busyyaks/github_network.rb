@@ -14,7 +14,7 @@ require_relative "clock"
 module Busyyaks
   # The operator's GitHub network: who GITHUB_LOGIN follows (followees), what they star, whom they follow.
   #
-  # Collector (bin/github, its own compose service, every GITHUB_INTERVAL_SECONDS) snapshots into SQLite (gh_*):
+  # Collector (bin/github, its own compose service, every github_interval_seconds) snapshots into SQLite (gh_*):
   # - stars: GET /users/:f/starred newest first with starred_at (star+json). Page 1 is conditional (If-None-Match);
   #   pages are read until an already-stored star or one older than LOOKBACK_DAYS. starred_at is GitHub's, so "new in
   #   the window" is right from the first run.

@@ -41,6 +41,8 @@ module DBReset
     # the projects' boards go; the TEMPLATE board (project_slug "", seeded by the migration) stays — every project is
     # instantiated from it
     %i[board_transitions board_columns boards].each { |t| db[t].exclude(project_slug: "").delete }
+    # the services' timing: back to the migration's revision (config/runtime.template.yml), the one every test reads
+    db[:runtime_settings].exclude(id: db[:runtime_settings].min(:id)).delete
   end
 
   def store = Busyyaks::Store.default

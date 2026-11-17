@@ -1,34 +1,38 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Card notifier: delivers comment pings to owner sessions every NOTIFIER_INTERVAL_SECONDS, runs the owner
-# watchdog every NOTIFIER_WATCH_SECONDS (cards whose session is gone for WATCHDOG_GRACE_SECONDS are released).
+# Card notifier: delivers comment pings to owner sessions every notifier_interval_seconds, runs the owner
+# watchdog every notifier_watch_seconds (cards whose session is gone for watchdog_grace_seconds are released) —
+# Settings → Runtime (lib/busyyaks/runtime_settings.rb), read at every turn: a save applies at the next one.
 require "hanami/prepare"
 require "busyyaks/kanban"
 require "busyyaks/clock"
+require "busyyaks/runtime_settings"
 
-interval = Integer(ENV.fetch("NOTIFIER_INTERVAL_SECONDS"))
-watch_every = Integer(ENV.fetch("NOTIFIER_WATCH_SECONDS"))
-grace = Integer(ENV.fetch("WATCHDOG_GRACE_SECONDS"))
+db = Busyyaks::Kanban.db
 $stdout.sync = true
-Busyyaks::Kanban.watch_fits!(watch: watch_every, interval: interval) # the watch pass keeps the gated cards' CI requests inside the poll window
-n = Busyyaks::Kanban.notifier(grace: grace)
-n_rev = Busyyaks::Kanban.config_revision[:id]
+t = Busyyaks::RuntimeSettings.get(db) # the watch pass fits the CI poll window: RuntimeSettings refused any revision where not
+n = Busyyaks::Kanban.notifier(grace: t[:watchdog_grace_seconds])
+n_rev = [Busyyaks::Kanban.config_revision[:id], t]
 # card #511: after each watch pass, a card the operator can Approve whose CI reads fell out of the poll window is said
-gate_guard = Busyyaks::CiChecks::GateGuard.new(log: $stdout, window: Busyyaks::Kanban.ci_window)
+gate_guard = Busyyaks::CiChecks::GateGuard.new(log: $stdout, window: Busyyaks::Kanban.ci_window(db))
 last_watch = 0
-puts "notifier up: deliver every #{interval}s, watchdog every #{watch_every}s, grace #{grace}s"
+puts "notifier up: deliver every #{t[:notifier_interval_seconds]}s, watchdog every #{t[:notifier_watch_seconds]}s, " \
+     "grace #{t[:watchdog_grace_seconds]}s"
 loop do
-  # a newer agent settings revision (Settings → Agents & launchers): the notifier's store, api and spawn
-  # pass run on the engine config built from it from this turn on
-  rev = Busyyaks::Kanban.config_revision[:id]
+  # a newer agent settings revision (Settings → Agents & launchers) or other runtime values (Settings → Runtime): the
+  # notifier's store, api, spawn pass and grace run on them from this turn on
+  t = Busyyaks::RuntimeSettings.get(db)
+  rev = [Busyyaks::Kanban.config_revision[:id], t]
   if rev != n_rev
-    n = Busyyaks::Kanban.notifier(grace: grace)
+    n = Busyyaks::Kanban.notifier(grace: t[:watchdog_grace_seconds])
+    gate_guard = Busyyaks::CiChecks::GateGuard.new(log: $stdout, window: Busyyaks::Kanban.ci_window(db)) if t != n_rev[1]
+    puts "notifier: agent settings revision #{rev[0]}" if rev[0] != n_rev[0]
+    puts "notifier: runtime settings #{t.map { |k, v| "#{k}=#{v}" }.join(' ')}" if t != n_rev[1]
     n_rev = rev
-    puts "notifier: agent settings revision #{rev}"
   end
   n.deliver
-  if Busyyaks::Clock.epoch - last_watch >= watch_every
+  if Busyyaks::Clock.epoch - last_watch >= t[:notifier_watch_seconds]
     # Re-read config/kanban.yml with the vendored engine every watch pass (the file part is memoized at boot), with the
     # current agent settings revision: a config the engine refuses stops the notifier loudly instead of leaving pings
     # and the watchdog silently dead.
@@ -43,5 +47,5 @@ loop do
     gate_guard.check(Busyyaks::Kanban.stale_gates)
     last_watch = Busyyaks::Clock.epoch
   end
-  sleep interval
+  sleep t[:notifier_interval_seconds]
 end

@@ -10,8 +10,8 @@ class McpTest < Minitest::Test
 
   TOKEN = "t" * 40
   REPORT_TOKEN = "r" * 40
-  def app = Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: 60, store: store, config: nil,
-                                    sessions: -> { %w[proj_2] })
+  def app = Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: -> { 60 }, store: store,
+                                    config: nil, sessions: -> { %w[proj_2] })
 
   def rpc(method, params = {}, id: 1, auth: TOKEN)
     header "Authorization", "Bearer #{auth}"
@@ -49,9 +49,9 @@ class McpTest < Minitest::Test
   end
 
   def test_short_token_refused_at_boot
-    assert_raises(KeyError) { Busyyaks::McpServer.new(token: "short", report_token: REPORT_TOKEN, scan_interval: 60) }
-    assert_raises(KeyError) { Busyyaks::McpServer.new(token: TOKEN, report_token: "short", scan_interval: 60) }
-    assert_raises(KeyError) { Busyyaks::McpServer.new(token: TOKEN, report_token: TOKEN, scan_interval: 60) }
+    assert_raises(KeyError) { Busyyaks::McpServer.new(token: "short", report_token: REPORT_TOKEN, scan_interval: -> { 60 }) }
+    assert_raises(KeyError) { Busyyaks::McpServer.new(token: TOKEN, report_token: "short", scan_interval: -> { 60 }) }
+    assert_raises(KeyError) { Busyyaks::McpServer.new(token: TOKEN, report_token: TOKEN, scan_interval: -> { 60 }) }
   end
 
   # The daily report's token (MCP_REPORT_TOKEN) lists and calls only REPORT_TOOLS: a model that read a prompt-injected
@@ -94,7 +94,7 @@ class McpTest < Minitest::Test
              "skills" => SKILLS_SETTINGS,
              "launch" => LAUNCH_CLAUDE, }
     runners = [{ "type" => "hermes", "command" => "hermes", "home" => "/h" }]
-    server = ->(cfg) { Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: 60, store: store, config: cfg) }
+    server = ->(cfg) { Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: -> { 60 }, store: store, config: cfg) }
     with = server.(Busyyaks::Config.new(base.merge("daily_report_runners" => runners)))
     call = ->(s) { JSON.parse(s.send(:call_tool, "daily_report_config", {})) }
 
@@ -258,7 +258,7 @@ out.dig("config", "runner"))
 
   def test_unknown_tool_is_tool_error = assert_equal(true, tool("nope")["isError"])
 
-  # last_scan is stale past 3 × SCAN_INTERVAL_SECONDS (60 here): the scanner stopped, its figures are not today's
+  # last_scan is stale past 3 × scan_interval_seconds (60 here): the scanner stopped, its figures are not today's
   def test_daily_facts_marks_a_stale_scan
     facts = lambda do
       JSON.parse(tool("daily_facts", { hours: 24, series: "Daily report" }).dig("content", 0, "text"))["last_scan"]
