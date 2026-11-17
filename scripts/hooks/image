@@ -5,9 +5,10 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-inputs=(Gemfile Gemfile.lock frontend/package.json frontend/package-lock.json scripts/hooks/Dockerfile
+inputs=(Gemfile Gemfile.lock frontend/package.json frontend/package-lock.json frontend/.npmrc scripts/hooks/Dockerfile
         scripts/hooks/entry scripts/hooks/overcommit.rb scripts/hooks/eslint scripts/hooks/gitleaks
         scripts/hooks/shellcheck scripts/lint/shell-files scripts/hooks/prettier)
+mapfile -t -O "${#inputs[@]}" inputs < <(git ls-files frontend/vendor)   # the vendored picomatch, file by file
 TAG="busyyaks:hooks-$(cat "${inputs[@]}" | sha256sum | cut -c1-12)"
 
 if ! docker image inspect "$TAG" >/dev/null 2>&1; then

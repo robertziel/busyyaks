@@ -5,3 +5,6 @@
 package-lock.json
 # the SPA bundle Vite builds into the image (also gitignored)
 public/app/
+# a third-party package installed as a dependency, kept byte-for-byte as upstream published it (one upstream fix
+# applied): frontend/vendor/picomatch/VENDOR.md — not this repo's code, like node_modules
+frontend/vendor/

@@ -5,7 +5,9 @@
 # change; the build context is those inputs alone.
 FROM node:22-bookworm-slim AS node
 WORKDIR /deps
-COPY frontend/package.json frontend/package-lock.json ./
+# vendor/ + .npmrc: the patched picomatch the lockfile pins (frontend/vendor/picomatch/VENDOR.md, card #525)
+COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
+COPY frontend/vendor ./vendor
 RUN npm ci --no-audit --no-fund
 
 FROM zricethezav/gitleaks:v8.30.1 AS gitleaks

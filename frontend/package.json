@@ -27,6 +27,7 @@
     "@vitejs/plugin-react": "4.7.0",
     "eslint": "9.39.5",
     "eslint-plugin-react-hooks": "5.2.0",
+    "picomatch": "file:vendor/picomatch",
     "prettier": "3.9.10",
     "typescript": "5.8.3",
     "typescript-eslint": "8.72.1",
@@ -36,6 +37,7 @@
   "overrides": {
     "@typescript-eslint/typescript-estree": {
       "minimatch": "11.0.5"
-    }
+    },
+    "picomatch": "$picomatch"
   }
 }
