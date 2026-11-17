@@ -4,7 +4,7 @@ require "test_helper"
 require "tmpdir"
 require "busyyaks/harnesses"
 
-# card 520: which harnesses exist is the committed config/harnesses.yml; whether one is installed is read in the shell
+# which harnesses exist is the committed config/harnesses.yml; whether one is installed is read in the shell
 # a launch runs in (bash -ic) — a program, a shell function, an alias, or nothing — and a program's version is read
 # by running it: found / not found / found but its version run failed, never guessed.
 class HarnessesTest < Minitest::Test

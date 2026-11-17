@@ -9,7 +9,7 @@ require "json"
 require "etc"
 require "yaml"
 
-# bin/launcher's `harnesses` op (card 520), the launcher itself run as a process in a sandbox checkout: the probe's
+# bin/launcher's `harnesses` op, the launcher itself run as a process in a sandbox checkout: the probe's
 # children are ITS children (the services never spawn). A real `bash -ic` reads the sandbox HOME's .bashrc, so what it
 # answers is what a launch would find: a program on PATH (its version run, only PATH + HOME), a shell function, nothing,
 # and a program that never answers (killed at the 5 s deadline). The allowlisted commands are resolved, never run.

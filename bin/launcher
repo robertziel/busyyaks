@@ -60,7 +60,7 @@ require_relative "../lib/busyyaks/agent_settings"
 require_relative "../lib/busyyaks/skills"
 # the live terminal's stream: its frames, names and limits — the same file the web relays it with
 require_relative "../lib/busyyaks/terminal"
-# the agent harnesses the hello screen looks for (config/harnesses.yml; card 520)
+# the agent harnesses the hello screen looks for (config/harnesses.yml)
 require_relative "../lib/busyyaks/harnesses"
 
 $stdout.sync = true
@@ -350,7 +350,7 @@ def session_name(base)
   "#{base}_#{n}"
 end
 
-# card 520: config/harnesses.yml + every launch.commands command, resolved in the shell a launch runs in (bash -ic)
+# config/harnesses.yml + every launch.commands command, resolved in the shell a launch runs in (bash -ic)
 # and each harness program's version read — read-only, no parameter: the web never names a command to run here.
 def harnesses_op
   probe = Busyyaks::Harnesses.probe(HARNESSES, COMMANDS.map { |c| c["command"] },
@@ -395,9 +395,12 @@ def harness_run(env, argv, timeout_s:, err:, clean_env:)
       Process.wait(pid)
       return [out.byteslice(0, max).scrub, nil]
     end
-    Busyyaks::Clock.pause(0.02) unless chunk.is_a?(String)
+    # wait for output or the child's end, never spin on a child that writes without pause (the deadline still bounds it)
+    r.wait_readable(0.02) unless chunk.nil?
+    Busyyaks::Clock.pause(0.02) if chunk.nil? # EOF: the child closed its output; its exit is near
   end
 ensure
+  w.close if w && !w.closed? # a spawn that raised never handed the write end to a child
   r&.close
 end
 

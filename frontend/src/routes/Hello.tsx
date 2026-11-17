@@ -1,4 +1,4 @@
-// /hello — the setup wizard (card #315; re-enterable settings + harness detection, card 520). Five steps, any of them
+// /hello — the setup wizard (re-enterable settings + harness detection). Five steps, any of them
 // reachable from the stepper and named in the URL (?step=checks|skin|projects|agents|summary): Checks (every check
 // GET /api/setup ran; first run: the trotting yak ticks them in), Skin (this browser's skin, applied live), Projects
 // (the host dir, read-only — .env), Agents (the agent CLIs the launcher finds on the host — GET /api/setup/harnesses —

@@ -44,7 +44,7 @@ module Busyyaks
       },]
     end
 
-    # GET /api/setup/harnesses (card 520): bin/launcher's `harnesses` probe joined with this host's allowlist (the
+    # GET /api/setup/harnesses: bin/launcher's `harnesses` probe joined with this host's allowlist (the
     # web's own config: launch.commands, the same list GET /api/setup's agents.commands carries):
     #   harnesses[]: the catalogue entry + {found, type, path, version, version_error} + launchable (an engine kind),
     #     allowed = the indexes of the launch.commands entries of its kind, allow_line = the exact launch.commands item

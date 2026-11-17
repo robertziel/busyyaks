@@ -19,7 +19,7 @@ module Busyyaks
 
     def sessions = call(op: "sessions")["sessions"]
     def session_names = sessions.map { |s| s["name"] }
-    # config/harnesses.yml + launch.commands resolved in the launch shell on the host (card 520):
+    # config/harnesses.yml + launch.commands resolved in the launch shell on the host:
     # {shell, harnesses: [{key, label, command, kind, launch_args, install_url, found, type, path, version, version_error}],
     #  commands: [{command, found, type, path}]}
     def harnesses = call(op: "harnesses")
