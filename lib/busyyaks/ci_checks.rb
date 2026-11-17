@@ -74,11 +74,12 @@ module Busyyaks
 
       private
 
-      def key(g) = [g[:column], g[:reads].map { |r| [r[:repo], r[:ref], r[:age].nil?, r[:error]] }]
+      def key(g) = [g[:column], g[:reads].map { |r| [r[:repo], r[:ref], r[:age].nil?, r[:error], r[:why]] }]
 
       def line(g)
         reads = g[:reads].map do |r|
           what = if r[:error] then "poll failed: #{r[:error]}"
+                 elsif r[:why] then r[:why]
                  elsif r[:age] then "last asked #{r[:age]}s ago"
                  else "never asked"
                  end
@@ -144,7 +145,8 @@ module Busyyaks
       # stored rows by a dup of this port with @peek on — no poll request is written. The walk goes past a stale row
       # on its stored answer (review round 1): the list is EVERY row the operator would wait for, while a real Approve
       # stops at the first (one refusal per click) — a superset of what one click names, never fewer.
-      # → [{repo:, ref:, age: seconds since last asked | nil (never asked), error: the poll's error (only when failed)}]
+      # → [{repo:, ref:, age: seconds since last asked | nil (never asked), error: the poll's error (only when failed),
+      #     why: the github service is not answering (only then)}]
       def stale_reads(card, step)
         peek = dup
         peek.peek!
@@ -398,10 +400,22 @@ module Busyyaks
           @peek << { repo: repo, ref: ref, age: now - row[:requested_at], error: row[:error] }
         elsif row.nil? || now - row[:requested_at] > @wanted_for
           @peek << { repo: repo, ref: ref, age: row && (now - row[:requested_at]) }
+        elsif stalled(row, now)
+          # Approve raises Unavailable on it too (answer: unpolled after stale_after, or an answer older than that)
+          @peek << { repo: repo, ref: ref, age: now - row[:requested_at], why: stalled(row, now) }
         end
         return { number: nil, state: "unpolled", finished_at: nil } if row.nil? || row[:error] || row[:checked_at].nil?
 
         answered(row)
+      end
+
+      # Why answer raises Unavailable on a row inside the window that the github service is not answering, or nil
+      def stalled(row, now)
+        if row[:checked_at].nil?
+          "requested, not polled within #{@stale_after}s (github service running?)" if now - row[:requested_at] > @stale_after
+        elsif now - row[:checked_at] > @stale_after
+          "answer older than #{@stale_after}s (github service stopped?)"
+        end
       end
 
       # a polled row as the gate reads it

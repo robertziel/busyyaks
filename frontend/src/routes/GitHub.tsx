@@ -116,7 +116,13 @@ export function GitHub() {
           {g.reads.map((r) => (
             <span key={`${r.repo} ${r.ref}`}>
               {r.repo} {r.ref} ·{" "}
-              {r.error ? `poll failed: ${r.error}` : r.age === null ? "never asked" : `asked ${r.age}s ago`}
+              {r.error
+                ? `poll failed: ${r.error}`
+                : r.why
+                  ? r.why
+                  : r.age === null
+                    ? "never asked"
+                    : `asked ${r.age}s ago`}
             </span>
           ))}
           <span>not answered inside the {data.ci_window}s poll window · Approve refused until read</span>

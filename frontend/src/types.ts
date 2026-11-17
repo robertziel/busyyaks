@@ -375,7 +375,7 @@ export type GithubGateStale = {
   project: string;
   column: string;
   path: string;
-  reads: { repo: string; ref: string; age: number | null; error?: string }[];
+  reads: { repo: string; ref: string; age: number | null; error?: string; why?: string }[];
 };
 // the PR pollers' last tick (CI checks + PR states, one token): cost, rate limit left, a pause until GitHub's reset
 export type GithubPollers = {
