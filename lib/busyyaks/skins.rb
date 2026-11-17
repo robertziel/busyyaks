@@ -4,8 +4,8 @@ require "yaml"
 require "json"
 
 module Busyyaks
-  # Skins (card #361): every skin is a FILE in this repo — `skins/<key>.yml` — the two built in (light.yml, the default,
-  # and dark.yml) and any added next to them like any other code (by hand or by an agent), never at runtime. Chosen per
+  # Skins (card #361): every skin is a FILE in this repo — `skins/<key>.yml` — the two built in (light.yml and dark.yml;
+  # dark is the default) and any added next to them like any other code (by hand or by an agent), never at runtime. Chosen per
   # browser in the settings cog's Skin switch (public/static/skin.js; the choice stays this browser's localStorage).
   #
   # A skin file = {label, base, tokens}, its key the file name. `base` is light or dark: skin.js puts it on

@@ -1,4 +1,4 @@
-// The skin choice in the settings menu (Settings.tsx): Light (the default) · Dark · Auto (follow the system) · any
+// The skin choice in the settings menu (Settings.tsx): Light · Dark (the default) · Auto (follow the system) · any
 // other skin file of the repo (skins/<key>.yml, card #361) over public/static/skin.js, which owns the choice (this
 // browser's localStorage) and puts the skin on <html data-skin> before first paint. This only drives it.
 import { useEffect, useState } from "react";

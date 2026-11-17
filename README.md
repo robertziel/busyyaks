@@ -328,7 +328,7 @@ first-start rows read what [`bin/setup check`](#quickstart) makes (doctor writes
 | **GitHub** `/github` | the people you follow: their stars and new follows over 24h · 7d · 30d; your github.com feed summarised |
 | **Agents** sidebar | every tmux session running a coding agent, by project, worst first: blocked (a dialog or a question) · review · working · finished · idle; links to its terminal and its Claude Code Remote Control session; **Open terminal** shows its live screen in the page, read-only until **Take control** ([Terminals](docs/DEPLOY.md#terminals-an-agents-live-screen)) |
 
-Two skins (light by default, dark, or follow the system), Trello-style keyboard shortcuts on the board (`?`), and a search
+Two skins (dark by default, light, or follow the system), Trello-style keyboard shortcuts on the board (`?`), and a search
 over projects, cards, commits and reports (`⌘K`).
 
 **Desktop app**: the dashboard runs as an app in a window of its own — see [Desktop app](#desktop-app).
