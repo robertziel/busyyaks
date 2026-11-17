@@ -23,9 +23,9 @@ while these ids do not. `scripts/vendor-kanban-engine.sh` compares each copy her
 |---|---|
 | `ruby` | `8c53c4fb96811c9caeaadcced8bc9e67ef80b269` |
 | `fixtures` | `549f6404d820716a4cf36f4ade94e867b937b5bf` |
-| `react/src` | `0b383f7bc1e18f9a155bdb808e764e1d1c662990` |
+| `react/src` | `3de94e1a0892545d2a0367e8ea9cbfcf1cf83fde` |
 | `SPEC.md` | `3b59ebc889add8730b3ed662f23b74bd86e4b779` |
 | `config.example.yml` | `a1cf28bf23fde7378f1023e60be44c54a6d4b455` |
 | `LICENSE` | `9ef5b284fd11a7ce6383c5f2dbc91c0cf84bd40f` |
 
-Synced from source commit `3e15f1909102b94b02a4ad64745c0d57a79ecc29` (information only: a commit sha of the private local repo is not in the public repo and vice versa; the ids above are in both).
+Synced from source commit `e5148c5f2a54967f88207e98b97ad677c39f810b` (information only: a commit sha of the private local repo is not in the public repo and vice versa; the ids above are in both).
