@@ -1,13 +1,14 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Renders deploy/*.template from .env into deploy/rendered/ (gitignored, kept out of images by .dockerignore): the
+# Renders deploy/*.template from .env (and config/busyyaks.yml, for the values derived from it) into deploy/rendered/ (gitignored, kept out of images by .dockerignore): the
 # reverse-proxy files for THIS deployment (docs/DEPLOY.md). A placeholder with no value in .env → exit 1 with its
 # name; nothing is written.
 #   bin/render-deploy            # every template (frp tunnel mode)
 #   bin/render-deploy nginx      # one template, by the name before its first "-" (nginx | frpc)
 require_relative "../lib/busyyaks/deploy_template"
 require_relative "../lib/busyyaks/env_file"
+require "yaml"
 
 abort "usage: bin/render-deploy [nginx|frpc]" if ARGV.size > 1
 
@@ -17,6 +18,11 @@ env = begin
 rescue Busyyaks::EnvFile::Invalid => e
   abort e.message
 end
+
+# config/busyyaks.yml: only the values derived from it (DeployTemplate::DERIVED) read it; missing → nil, and a template
+# that needs it fails naming it
+config_path = File.join(root, "config/busyyaks.yml")
+config = File.file?(config_path) ? YAML.safe_load_file(config_path) : nil
 
 templates = Dir[File.join(root, "deploy/*.template")].sort
 all = templates.group_by { |t| File.basename(t).split("-").first }
@@ -30,7 +36,7 @@ if (only = ARGV.first)
 end
 
 rendered = all.values.to_h do |t|
-  [File.basename(t, ".template"), Busyyaks::DeployTemplate.render(File.read(t), env)]
+  [File.basename(t, ".template"), Busyyaks::DeployTemplate.render(File.read(t), env, config)]
 rescue Busyyaks::DeployTemplate::MissingValues => e
   abort "#{File.basename(t)}: #{e.message}"
 end

@@ -81,6 +81,16 @@ dictation: none
 #                  127.0.0.1 / localhost on WEB_HOST_PORT (an ssh -L forward included) always may.
 #                max_open: 1..64 — terminals open at once (each holds a thread of the web process); one more → 503.
 terminal: { public_host: deny, max_open: 8 }
+# github_hook:   GitHub webhooks wake the PR / CI polls (the card links' PR flags, the approval gates' CI): a
+#                pull_request / status / check_run / check_suite delivery to POST https://<PUBLIC_HOST>/api/github/hook
+#                marks the PRs it names, and the github service reads them within wake_seconds instead of at its next
+#                github_ci_interval_seconds poll. The poll stays the only source of a state: a delivery is never
+#                believed, only a reason to read again. Signed with .env GITHUB_WEBHOOK_SECRET (HMAC-SHA256); needs a
+#                PUBLIC_HOST GitHub can reach (docs/DEPLOY.md § GitHub webhook).
+#                `none` = off (no route; GITHUB_WEBHOOK_SECRET empty), or
+#                {max_body_bytes: 1024..1048576 (a bigger delivery → 413; these events are tens of KB), wake_seconds: 1..60}.
+github_hook: none
+# github_hook: { max_body_bytes: 1048576, wake_seconds: 5 }
 # ci:            how the github service reads a card's PR checks for the approval gate (docs/DEPLOY.md § CI checks).
 #                max_pending_minutes: 1..1440 — a required check pending longer than this (since it was posted / started)
 #                  is `stuck`: the gate says so and pings the card's owner once, instead of "CI is still running" forever.

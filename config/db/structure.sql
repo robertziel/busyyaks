@@ -348,6 +348,7 @@ CREATE TABLE `gh_pr_checks`(
   `draft` boolean,
   `merge_state` varchar(255),
   `auto_merge` boolean,
+  `dirty` integer,
   UNIQUE(`repo`, `ref`)
 );
 CREATE TABLE `boards`(
@@ -426,6 +427,7 @@ CREATE TABLE `gh_pr_states`(
   `base` varchar(255),
   `merge_state` varchar(255),
   `auto_merge` boolean,
+  `dirty` integer,
   UNIQUE(`repo`, `ref`)
 );
 CREATE TABLE `agent_settings`(
@@ -530,5 +532,6 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261208000000_gh_pollers.rb'),
 ('20261208046700_pr_closed_reason.rb'),
 ('20261208468000_pr_base_merge_flags.rb'),
+('20261208472000_gh_hook_dirty.rb'),
 ('20261209492000_progress_watch.rb'),
 ('20261217523000_runtime_settings.rb');

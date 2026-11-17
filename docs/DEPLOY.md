@@ -269,7 +269,7 @@ import-env < .env`. Every service reads the current revision at its next turn: a
 |---|---|---|
 | `scan_interval_seconds` | `SCAN_INTERVAL_SECONDS` | scanner (sleep), mcp (`last_scan` stale after 3 ×) |
 | `github_interval_seconds` | `GITHUB_INTERVAL_SECONDS` | github (network, feed, merged PRs) |
-| `github_ci_interval_seconds` | `GITHUB_CI_INTERVAL_SECONDS` | github (PR / CI polls), web + mcp + notifier (stale after 3 ×, window 10 ×) |
+| `github_ci_interval_seconds` | `GITHUB_CI_INTERVAL_SECONDS` | github (PR / CI polls), web + mcp + notifier (stale after 3 ×, window 10 ×), the webhook |
 | `notifier_interval_seconds` | `NOTIFIER_INTERVAL_SECONDS` | notifier (ping delivery) |
 | `notifier_watch_seconds` | `NOTIFIER_WATCH_SECONDS` | notifier (watch pass) |
 | `watchdog_grace_seconds` | `WATCHDOG_GRACE_SECONDS` | notifier, web, mcp (launch / watchdog grace) |
@@ -532,6 +532,54 @@ that only a verdict about the screen leaves the host: the screen and your keys n
 | audit | each open, take and release → a `terminal` event by you on every card the session works on (owns, or is assigned to its agent name; a session on no card: the launcher log line only), and a launcher log line (`journalctl --user -u busyyaks-launcher`) |
 | proxy | mode 2 / 3 with `public_host: allow`: the nginx template's `location = /api/terminal` passes the WebSocket upgrade (`bin/render-deploy` again after an update) |
 | wire | the launcher's `attach` op on its socket: one JSON line `{ok, session, cols, rows, screen}`, then JSON lines both ways (`lib/busyyaks/terminal.rb`); the web relays it as WebSocket text messages |
+
+## GitHub webhook (wakes the PR / CI polls)
+
+Card #472: the card links' PR flags (`gh_pr_states`) and the approval gates' CI (`gh_pr_checks`) are polled by the
+`github` service every `github_ci_interval_seconds`. A GitHub webhook can wake that poll: a `pull_request`, `status`,
+`check_run` or `check_suite` delivery marks the rows it names dirty, and the service reads just those within
+`wake_seconds`. **Polling stays the only source of a state**: a delivery is never stored or believed, it only names
+rows to read again, and it never creates one (only PRs someone already asked for within the poll window).
+
+| | |
+|---|---|
+| config | `config/busyyaks.yml` `github_hook`, required, no default: `none` (off: no route, a POST is 404) or `{max_body_bytes: 1024..1048576, wake_seconds: 1..60}` — GitHub caps deliveries at 25 MB, but a `pull_request` payload (one PR, its body ≤ 65,536 characters) or a status / check payload is tens of KB; a bigger one → 413, which costs only the poll interval's latency |
+| secret | `.env` `GITHUB_WEBHOOK_SECRET`, web service only: empty with `none`; when on ≥ 32 characters, no whitespace (`openssl rand -hex 32`). The web boot refuses on without a secret, and a secret with `none` |
+| endpoint | `POST /api/github/hook` (`lib/busyyaks/github_hook.rb`). No session or CSRF token: the HMAC-SHA256 `X-Hub-Signature-256` over the raw body, compared in constant time, is its only authentication. Behind `HostGuard` like every route (GitHub sends the `PUBLIC_HOST` Host and no Origin). Refusals: body over `max_body_bytes` 413 · signature missing or wrong 401 · no `X-GitHub-Event` 400 · not `application/json` 415 · malformed payload 400. `ping` 200; any other event 204 (ignored) |
+| marks | `pull_request` → that PR's `pr:N` state row and its `pr:N` / `merge:N` check rows; `status` / `check_run` / `check_suite` → the check rows whose head is that commit, the PRs the payload names, and the repo's `merge:*` rows. Repo matched case-insensitively. Column `dirty` (a counter, migration `20261208472000`): a poll clears only the mark it read |
+| proxy | modes 2 / 3 only (GitHub must reach `https://<PUBLIC_HOST>`). The nginx template's `location = /api/github/hook` takes its body cap from the same `github_hook.max_body_bytes` (`bin/render-deploy` reads config/busyyaks.yml: one number, never a second one in nginx — its default 1m would 413 first) and passes `Host` unchanged; with `none` it answers 404 at the proxy. Re-render and reload nginx after changing `github_hook`. Localhost-only (mode 1): leave it `none` |
+
+**Upgrading an existing deployment** (one with no `github_hook` yet): add both lines, even to keep the hook off —
+
+```
+# config/busyyaks.yml
+github_hook: none
+# .env
+GITHUB_WEBHOOK_SECRET=
+```
+
+Without the config key every service stops at boot (`missing keys: github_hook`); without the env key compose refuses
+to start the stack (`GITHUB_WEBHOOK_SECRET` unset) and the web boot says `GITHUB_WEBHOOK_SECRET not in the web
+service's env`.
+
+**Turning it on** (the operator, once per repo whose PRs the board tracks):
+
+1. `.env`: `GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)`; `config/busyyaks.yml`: `github_hook: { max_body_bytes: 1048576, wake_seconds: 5 }`.
+2. `docker compose up -d --no-build web github` (the web boot checks the pair; the github service reads `wake_seconds`);
+   modes 2 / 3: `bin/render-deploy nginx`, install it on the proxy host and reload nginx (the hook's location changes from
+   404 to the proxied route with the body cap).
+3. GitHub → the repo → Settings → Webhooks → Add webhook: Payload URL `https://<PUBLIC_HOST>/api/github/hook`, Content
+   type `application/json`, Secret = the same value, SSL verification on, events "Let me select": Pull requests,
+   Statuses, Check runs, Check suites. Or `gh api repos/<owner>/<repo>/hooks -f name=web -F active=true
+   -f 'events[]=pull_request' -f 'events[]=status' -f 'events[]=check_run' -f 'events[]=check_suite'
+   -f config[url]=https://<PUBLIC_HOST>/api/github/hook -f config[content_type]=json -f config[secret]=<secret>`.
+4. **Live check**: GitHub → the webhook → Recent Deliveries: the `ping` delivery (sent on creation; or **Redeliver** it)
+   answered **200** with body `{"ok":"pong"}`. A 401 = the secrets differ; 404 = `github_hook: none` at the app (JSON
+   body) or at the proxy (nginx's page: re-render); 421 = the Host is not `PUBLIC_HOST`; 413 = over `max_body_bytes`.
+   Then push to a PR a card shows: its delivery answers 200 `{"event":"pull_request","marked":N}` and
+   `docker compose logs github` prints `hook woke the pollers polled=N` within `wake_seconds`.
+
+Off again: `github_hook: none`, empty the secret, restart web + github, delete the webhook on GitHub.
 
 ## CI checks (the approval gate)
 

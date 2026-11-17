@@ -580,13 +580,17 @@ module Busyyaks
       # → number of rows answered (0 while paused). One row's failure — GitHub's, or any other (a body of an unexpected
       # shape, a bug) — is stored on that row and said by the Port; the rest of the batch still runs (as
       # PrStates::Poller). A rate-limited answer is the token's: it pauses the gate and fails the rest of the batch.
-      def run
+      # dirty: only the rows a GitHub webhook marked (GithubHook; card #472); every selected row's mark is cleared
+      # unless a hook marked it again since.
+      def run(dirty: false)
         now = @clock.call
         # in id order: one batch, the same order on every database (PostgreSQL returns an updated row last)
-        rows = @db[:gh_pr_checks].where(Sequel.lit("requested_at >= ?", now - @wanted_for)).order(:id).all
+        scope = @db[:gh_pr_checks].where(Sequel.lit("requested_at >= ?", now - @wanted_for))
+        rows = (dirty ? scope.exclude(dirty: nil) : scope).order(:id).all
         paused = @gate.paused
         if paused
           rows.each { |row| fail_row(row, paused) }
+          clean(rows)
           return 0
         end
 
@@ -601,6 +605,7 @@ module Busyyaks
         rescue StandardError => e
           fail_row(row, [GithubNetwork::Error, Unconfigured].any? { |k| e.is_a?(k) } ? e.message : "#{e.class}: #{e.message}")
         end
+        clean(rows)
         @db[:gh_pages].where(Sequel.like(:url, "#{PAGE}%")).where(Sequel.lit("at < ?", now - @wanted_for)).delete
         rows.size
       end
@@ -608,6 +613,8 @@ module Busyyaks
       private
 
       def fail_row(row, error) = @db[:gh_pr_checks].where(id: row[:id]).update(error: error[0, 500], checked_at: nil)
+
+      def clean(rows) = rows.each { |row| GithubHook.clean(@db[:gh_pr_checks], row) }
 
       # One conditional GET → the body's KEEP fields (a 304 = the stored ones, its row marked read now); a 404 with
       # missing_ok → nil.
