@@ -1160,4 +1160,26 @@ class CiChecksTest < Minitest::Test
                   "not answered inside the 600s poll window: its Approve is refused until each is read",],
                  log.string.lines.map(&:chomp)
   end
+
+  # public review round 1: inside the window, a row the github service stopped answering refuses the Approve
+  # (Unavailable) — the guard names it: requested and never polled, or an answer older than stale_after
+  def test_the_gate_guard_names_a_stalled_github_service
+    gates = gated_cards
+    n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: StringIO.new)
+    wait_in_the_gates(n, 60)
+    first = gates.fetch("local_human_review")
+    @conn[:gh_pr_checks].where(repo: "o/r_local", ref: "pr:112").update(checked_at: @now - 181)
+    assert_raises(CK::Unavailable) { @port.approval_checks(@kb.card(first), CK.steps(@kb.board_of("o-r")).first) }
+    @conn[:gh_pr_checks].where(repo: "o/r_local", ref: "pr:112").update(checked_at: @now - 181, requested_at: @now)
+    stale = CK.stale_gates(@kb, @port).to_h { |g| [g[:card], g[:reads]] }
+    assert_equal({ first => [{ repo: "o/r_local", ref: "pr:112", age: 0,
+                               why: "answer older than 180s (github service stopped?)", }] }, stale)
+    @conn[:gh_pr_checks].where(repo: "o/r_local", ref: "pr:112").update(checked_at: nil, requested_at: @now - 181)
+    assert_equal [{ repo: "o/r_local", ref: "pr:112", age: 181,
+                    why: "requested, not polled within 180s (github service running?)", }],
+                 CK.stale_gates(@kb, @port).to_h { |g| [g[:card], g[:reads]] }[first]
+    log = StringIO.new
+    CK::GateGuard.new(log: log, window: 600).check(CK.stale_gates(@kb, @port))
+    assert_match(/card #{first} \(local_human_review\): o\/r_local pr:112 requested, not polled within 180s/, log.string)
+  end
 end
