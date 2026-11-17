@@ -189,11 +189,21 @@ module Busyyaks
       AgentsKanban::Notifier.new(st, client: LauncherClient, grace: grace, spawner: -> { a.spawn_pass }, ci: ci_port(st.db))
     end
 
+    # Card #511: the cards the operator can Approve whose step reads a request the github service no longer polls
+    # (CiChecks.stale_gates) — the notifier's gate guard after each watch pass, and /github.
+    # Each with `path` = the card's page.
+    def stale_gates(st = default)
+      CiChecks.stale_gates(st, ci_port(st.db)).map { |g| g.merge(path: card_path(g[:project], g[:card])) }
+    end
+
+    # The poll window of the CI requests (CiChecks.wanted_for of GITHUB_CI_INTERVAL_SECONDS), in seconds.
+    def ci_window = CiChecks.wanted_for(Integer(ENV.fetch("GITHUB_CI_INTERVAL_SECONDS")))
+
     # The notifier's watch pass keeps every gated card's approval checks asked (the engine's approval prefetch), so
     # the github service always holds a fresh answer (card #247). A pass slower than the poller's window lets a request
     # lapse between two passes, and Approve waits for a CI read again — refused at boot (bin/notifier).
     def watch_fits!(watch:, interval:)
-      window = CiChecks.wanted_for(Integer(ENV.fetch("GITHUB_CI_INTERVAL_SECONDS")))
+      window = ci_window
       period = [watch, interval].max # the watch runs inside the deliver loop, which sleeps `interval` between turns
       return if period < window
 

@@ -104,6 +104,24 @@ export function GitHub() {
           <span>config ci.required</span>
         </p>
       )}
+      {data.gate_stale.map((g) => (
+        <p key={g.card} className="ghp-status t-bad">
+          <i className="tl-dot" />
+          <span>
+            <a href={g.path} data-card-id={g.card}>
+              card {g.card}
+            </a>{" "}
+            · {g.column}
+          </span>
+          {g.reads.map((r) => (
+            <span key={`${r.repo} ${r.ref}`}>
+              {r.repo} {r.ref} ·{" "}
+              {r.error ? `poll failed: ${r.error}` : r.age === null ? "never asked" : `asked ${r.age}s ago`}
+            </span>
+          ))}
+          <span>not answered inside the {data.ci_window}s poll window · Approve refused until read</span>
+        </p>
+      ))}
       <div className="ghp-grid">
         <div className="ghp-main">
           <section className="ghp-feed" aria-label="Feed">
