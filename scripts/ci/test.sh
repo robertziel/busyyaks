@@ -97,6 +97,7 @@ HOST_RUBY_IMAGE=ruby:3.2.3-slim      # Busyyaks::CLI::MIN_RUBY's version (test/u
 # the standalone tests of what runs on the host (none requires test_helper: no app, no gems)
 HOST_TESTS=(test/unit/cli_test.rb test/unit/cli_remote_test.rb test/unit/cli_chooser_test.rb test/integration/yaks_test.rb test/unit/env_file_test.rb
             test/unit/launcher_rules_test.rb test/unit/deploy_template_test.rb test/unit/install_launcher_test.rb test/unit/deploy_units_test.rb
+            test/unit/collector_test.rb test/unit/install_collector_test.rb test/integration/collector_test.rb
             test/unit/setup_test.rb test/unit/ci_stages_test.rb
             test/unit/skills_test.rb test/unit/no_global_skill_test.rb)
 

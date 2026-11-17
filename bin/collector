@@ -1,0 +1,183 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# busyyaks's agent-session collector (card #479; systemd --user, deploy/busyyaks-collector.service). Every
+# Collector::INTERVAL_S: this uid's tmux panes + /proc → the snapshot of every pane running a coding agent (Claude Code,
+# Hermes: lib/busyyaks/collector/families.rb), replaced atomically at config/busyyaks.yml agents.collector.snapshot;
+# and the read socket at agents.collector.read_socket answers bin/launcher's screen / send (lib/busyyaks/collector/
+# server.rb). Both paths in one 0700 dir outside every container mount. Nothing is guessed: what it cannot read is
+# null with the reason (the pane's `unknown`, the snapshot's `error`).
+#   bin/collector          run (the unit)
+#   bin/collector --once   one snapshot printed to stdout, nothing written, no socket (a check by hand)
+#   bin/collector --check  the start checks only (config, engines, the dir — created 0700), then exit: the installer's
+require "json"
+require "yaml"
+require "socket"
+require "open3"
+require_relative "../lib/busyyaks/clock"
+require_relative "../lib/busyyaks/env_file"
+require_relative "../lib/busyyaks/agent_collector"
+require_relative "../lib/busyyaks/engines"
+require_relative "../lib/busyyaks/private_socket"
+require_relative "../lib/busyyaks/collector"
+require_relative "../vendor/agents_kanban/ruby/lib/agents_kanban/session_dialog"
+
+$stdout.sync = true
+ROOT = File.expand_path("..", __dir__)
+ONCE = ARGV == ["--once"]
+CHECK = ARGV == ["--check"]
+abort "usage: bin/collector [--once | --check]" unless ARGV.empty? || ONCE || CHECK
+
+ENV_FILE = begin
+  Busyyaks::EnvFile.read(File.join(ROOT, ".env"))
+rescue Busyyaks::EnvFile::Invalid => e
+  abort e.message
+end
+def env!(key) = ENV_FILE[key].to_s.empty? ? abort("#{key} missing in .env") : ENV_FILE[key]
+
+CONFIG = YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))
+PATHS = begin
+  Busyyaks::AgentCollector.parse(CONFIG["agents"]) or
+    abort "config/busyyaks.yml agents.collector is none: set {snapshot, read_socket} to run busyyaks's collector " \
+          "(README \"Agent sessions\")"
+rescue Busyyaks::AgentCollector::Invalid => e
+  abort "config/busyyaks.yml: #{e.message}"
+end
+ENGINES = begin
+  Busyyaks::Engines.load(CONFIG["engines"])
+rescue Busyyaks::Engines::Invalid => e
+  abort "engines: #{e.message}"
+end
+FAMILIES = Busyyaks::Collector.families(claude_sessions_dir: env!("CLAUDE_SESSIONS_DIR"))
+begin
+  Busyyaks::Collector.check_engines!(FAMILIES, ENGINES)
+  Busyyaks::Collector.dir!(PATHS, projects_root: env!("PROJECTS_ROOT"), checkout: ROOT, run_dir: env!("LAUNCHER_RUN_DIR"),
+                                  uid: Process.uid) unless ONCE
+rescue Busyyaks::Collector::Invalid => e
+  abort "bin/collector: #{e.message}"
+end
+
+if CHECK
+  puts "bin/collector: ok · #{PATHS.snapshot} · #{PATHS.read_socket} · families #{FAMILIES.map(&:name).join(', ')}"
+  exit
+end
+
+PROCFS = Busyyaks::Collector::Procfs.new("/proc")
+# tmux, an argv (no shell), TMUX / TMUX_PANE cleared (a collector started from a pane acts relative to none)
+TMUX_ENV = { "TMUX" => nil, "TMUX_PANE" => nil }.freeze
+# one tmux call within `seconds` (agents.collector.tmux_timeout_seconds): its own process group, killed whole at the
+# deadline → the timed-out error (that request's answer), never a hung read or a waiter left parked
+def drain(outs, bufs, deadline)
+  until outs.empty?
+    left = deadline - Busyyaks::Clock.monotonic
+    ready = left.positive? ? IO.select(outs, nil, nil, left) : nil
+    return false unless ready
+
+    ready.first.each do |io|
+      chunk = io.read_nonblock(65_536, exception: false)
+      next if chunk == :wait_readable
+
+      chunk.nil? ? outs.delete(io) : bufs[io] << chunk
+    end
+  end
+  true
+end
+
+RUN_TMUX = lambda do |argv, stdin, seconds|
+  deadline = Busyyaks::Clock.monotonic + seconds
+  Open3.popen3(TMUX_ENV, *argv, pgroup: true) do |i, o, e, t|
+    begin
+      i.write(stdin.to_s)
+    rescue Errno::EPIPE
+      nil # it read no stdin: its answer says why
+    end
+    i.close
+    bufs = { o => String.new(encoding: Encoding::BINARY), e => String.new(encoding: Encoding::BINARY) }
+    done = drain([o, e], bufs, deadline)
+    left = deadline - Busyyaks::Clock.monotonic
+    unless done && left.positive? && t.join(left)
+      begin
+        Process.kill("KILL", -t.pid)
+      rescue Errno::ESRCH
+        nil
+      end
+      next ["", Busyyaks::Collector::Tmux.timed_out(seconds), false]
+    end
+    # tmux writes UTF-8 (a pane's ❯, its box drawing): the bytes as read, as the text they are
+    [bufs[o].force_encoding(Encoding::UTF_8), bufs[e].force_encoding(Encoding::UTF_8), t.value.success?]
+  end
+rescue SystemCallError => e
+  ["", "#{Busyyaks::Collector::Tmux::NOT_RUNNABLE} (#{argv.first}: #{e.class})", false]
+end
+TMUX = Busyyaks::Collector::Tmux.new(dir: Busyyaks::Collector::Tmux.dir_for(ENV, Process.uid), uid: Process.uid,
+                                     runner: RUN_TMUX, timeout: PATHS.tmux_timeout_seconds)
+
+# one snapshot; a bug here SHOWS as the snapshot's error with no sessions, never an old list kept
+def collect
+  rows, error = TMUX.rows
+  Busyyaks::Collector::Snapshot.build(rows, procfs: PROCFS, families: FAMILIES, interval_s: Busyyaks::Collector::INTERVAL_S,
+                                            error: error)
+rescue StandardError => e
+  [{ "version" => Busyyaks::Collector::Snapshot::VERSION, "generated_at" => Busyyaks::Clock.now.to_f,
+     "host" => Socket.gethostname, "interval_s" => Busyyaks::Collector::INTERVAL_S,
+     "error" => "collector: #{e.class}: #{e.message}"[0, 300], "sessions" => [], }, {},]
+end
+
+if ONCE
+  puts JSON.pretty_generate(collect.first)
+  exit
+end
+
+LATEST = Busyyaks::Collector::Latest.new
+SERVER = Busyyaks::Collector::Server.new(
+  latest: LATEST, procfs: PROCFS, tmux: TMUX,
+  dialog: ->(text) { AgentsKanban::SessionDialog.parse(text)&.slice(:question, :command, :options, :escape, :free_text, :hash) },
+  typeable: ->(engine) { ENGINES.known?(engine) && ENGINES.fetch(engine).family.typeable? }
+)
+
+sock = PATHS.read_socket
+# one collector per dir: a second one (by hand while the unit runs) is refused here, before it writes the live
+# snapshot or touches the live socket
+lock_path = File.join(File.dirname(sock), "collector.lock")
+LOCK = File.open(lock_path, File::RDWR | File::CREAT, 0o600)
+unless LOCK.flock(File::LOCK_EX | File::LOCK_NB)
+  abort "bin/collector: another collector runs at #{File.dirname(sock)} (#{lock_path} is locked): stop it first"
+end
+
+# the first snapshot before the socket: a request is answered from a snapshot, never from none
+snap, targets = collect
+LATEST.set(targets)
+Busyyaks::Collector::Snapshot.write_atomic(PATHS.snapshot, JSON.generate(snap))
+abort "#{sock} exists and is not a socket (a symlink or a file): remove it" if File.symlink?(sock) || (File.exist?(sock) && !File.socket?(sock))
+File.unlink(sock) if File.socket?(sock) # the last run's
+server = Busyyaks::PrivateSocket.bind(sock)
+trap("TERM") do
+  File.unlink(sock) rescue nil
+  exit
+end
+# a thread that dies ends the process (Collector.supervised): logged, the socket removed, exit 1 → the unit restarts it
+LOG = ->(m) { warn m }
+DIE = lambda do |code|
+  File.unlink(sock) rescue nil
+  $stdout.flush
+  exit!(code)
+end
+puts "collector: #{PATHS.snapshot} every #{Busyyaks::Collector::INTERVAL_S}s · #{sock} · tmux #{TMUX.dir} · " \
+     "families #{FAMILIES.map(&:name).join(', ')}"
+Busyyaks::Collector.supervised("accept", log: LOG, die: DIE) do
+  loop do
+    conn = server.accept
+    Busyyaks::Collector.supervised("connection", log: LOG, die: DIE) { SERVER.serve(conn) }
+  end
+end
+
+loop do
+  sleep Busyyaks::Collector::INTERVAL_S
+  snap, targets = collect
+  LATEST.set(targets)
+  begin
+    Busyyaks::Collector::Snapshot.write_atomic(PATHS.snapshot, JSON.generate(snap))
+  rescue SystemCallError => e
+    warn "collector: cannot write #{PATHS.snapshot}: #{e.message}"
+  end
+end

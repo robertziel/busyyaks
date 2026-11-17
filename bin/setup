@@ -65,6 +65,31 @@ shape() {
     | sed 's/^\([0-9]*\):\([^=]*\)=.*/line \1: \2: a backslash inside double quotes (escapes are not supported)/' || true
 }
 
+# config/busyyaks.yml agents.collector as bin/setup reads it (the example's block layout): "none", or one
+# "snapshot <path>" / "read_socket <path>" line each (a trailing comment dropped; quotes kept, stripped by the caller)
+collector_conf() {
+  awk '
+    /^[^[:space:]#]/ { a = ($0 ~ /^agents:/); if (a && $0 ~ /collector:[[:space:]]*none/) { print "none"; exit }; next }
+    a && /^[[:space:]]+collector:[[:space:]]*none([[:space:]]|$)/ { print "none"; exit }
+    a && /^[[:space:]]+(snapshot|read_socket):/ {
+      k = $1; sub(/:$/, "", k); v = $0; sub(/^[^:]*:[[:space:]]*/, "", v); sub(/[[:space:]]+#.*$/, "", v); print k " " v
+    }
+  ' config/busyyaks.yml
+}
+
+# a fresh config/busyyaks.yml: the example's /home/you/ collector paths → this user's $HOME (as HOST_UID: this user)
+collector_home() {
+  case "${HOME:-}" in
+    /*) ;;
+    *) die "HOME is not an absolute path (got '${HOME:-}'): bin/setup writes agents.collector's paths under it" ;;
+  esac
+  (umask 077 && SETUP_HOME=${HOME%/} awk '/^[[:space:]]+(snapshot|read_socket):[[:space:]]*\/home\/you\// {
+      sub(/\/home\/you\//, ENVIRON["SETUP_HOME"] "/") } { print }' config/busyyaks.yml > config/busyyaks.yml.tmp)
+  cat config/busyyaks.yml.tmp > config/busyyaks.yml
+  rm -f config/busyyaks.yml.tmp
+  say "wrote    agents.collector paths under $HOME (config/busyyaks.yml; collector: none for no agents sidebar)"
+}
+
 # N random bytes as hex
 secret() { od -An -v -tx1 -N "$1" /dev/urandom | tr -d ' \n'; }
 
@@ -122,6 +147,7 @@ init() {
         chmod 600 .env   # it holds the secrets
         fresh=1
       fi
+      [ "$to" != config/busyyaks.yml ] || collector_home
     fi
   done
   bad_shape=$(shape)
@@ -205,6 +231,27 @@ SHAPE
   case "$(value DICTATION_TOKEN)" in
     *[[:space:]]* | *[[:cntrl:]]*) bad "DICTATION_TOKEN has whitespace or control characters: the web app refuses it" ;;
   esac
+
+  # agents.collector (README § Agent sessions): bin/collector and bin/launcher refuse a path they cannot use; named here,
+  # before deploy/install-collector.sh would stop on a bare mkdir. The full reading is `bin/collector --check` (host Ruby)
+  conf=$(collector_conf)
+  if [ "$conf" != none ]; then
+    for k in snapshot read_socket; do
+      p=$(printf '%s\n' "$conf" | sed -n "s/^$k //p" | tail -n 1)
+      case "$p" in \"*\") p=${p#\"}; p=${p%\"} ;; \'*\') p=${p#\'}; p=${p%\'} ;; esac
+      case "$p" in
+        '') bad "config/busyyaks.yml agents.collector.$k not found (bin/setup reads the example's block layout): set it, or \`collector: none\`" ;;
+        /home/you/*) [ "${HOME:-}" = /home/you ] || bad "config/busyyaks.yml agents.collector.$k is the example's $p: put it under your home (${HOME:-~}/.local/state/busyyaks/collector/), or \`collector: none\`" ;;
+        /*)
+          a=$(dirname "$p")
+          while [ ! -e "$a" ]; do a=$(dirname "$a"); done
+          { [ -d "$a" ] && [ -w "$a" ]; } \
+            || bad "config/busyyaks.yml agents.collector.$k $p: its dir cannot be created by you ($a is not a dir you can write): pick a dir of yours, or \`collector: none\`"
+          ;;
+        *) bad "config/busyyaks.yml agents.collector.$k must be an absolute path (got $p)" ;;
+      esac
+    done
+  fi
 
   uid=$(value HOST_UID) gid=$(value HOST_GID)
   if [ -n "$uid$gid" ] && [ "$uid:$gid" != "$(id -u):$(id -g)" ]; then

@@ -85,12 +85,19 @@ class ConfigTest < Minitest::Test
     e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.except("agents")) }
     assert_match(/missing keys: agents/, e.message)
     assert_nil Busyyaks::Config.new(OK).agent_collector
-    paths = { "snapshot" => "/c/sessions.json", "read_socket" => "/c/read.sock" }
+    paths = { "snapshot" => "/c/sessions.json", "read_socket" => "/c/read.sock", "tmux_timeout_seconds" => 5,
+              "answer_timeout_seconds" => 30, }
     c = Busyyaks::Config.new(OK.merge("agents" => { "collector" => paths })).agent_collector
-    assert_equal ["/c/sessions.json", "/c/read.sock"], [c.snapshot, c.read_socket]
+    assert_equal ["/c/sessions.json", "/c/read.sock", 5, 30],
+                 [c.snapshot, c.read_socket, c.tmux_timeout_seconds, c.answer_timeout_seconds]
+    bad_paths = [paths.except("read_socket"), paths.merge("snapshot" => "rel/s.json"), paths.merge("extra" => "/x"),
+                 paths.except("tmux_timeout_seconds"), paths.except("answer_timeout_seconds"),
+                 paths.merge("tmux_timeout_seconds" => 0), paths.merge("tmux_timeout_seconds" => 61),
+                 paths.merge("tmux_timeout_seconds" => "5"),
+                 # a send is 4 tmux calls: the launcher's answer deadline must be above 4 × the tmux one
+                 paths.merge("answer_timeout_seconds" => 20), paths.merge("answer_timeout_seconds" => 2.5),]
     [nil, "none", {}, { "collector" => nil }, { "collector" => "off" }, { "collector" => "none", "x" => 1 },
-     { "collector" => paths.except("read_socket") }, { "collector" => paths.merge("snapshot" => "rel/s.json") },
-     { "collector" => paths.merge("extra" => "/x") },].each do |bad|
+     *bad_paths.map { { "collector" => _1 } },].each do |bad|
       assert_raises(Busyyaks::Config::Invalid, bad.inspect) { Busyyaks::Config.new(OK.merge("agents" => bad)) }
     end
   end
@@ -127,7 +134,11 @@ class ConfigTest < Minitest::Test
   def test_shipped_example_has_no_sign_in
     ex = YAML.safe_load_file(File.expand_path("../../config/busyyaks.example.yml", __dir__))
     assert_equal({ "provider" => "none", "allow_unauthenticated" => true }, ex["auth"])
-    assert_equal({ "collector" => "none" }, ex["agents"], "a fresh box has no collector: the example says none")
+    # busyyaks ships its collector (card #479): the example runs bin/collector at its own private dir
+    assert_equal({ "collector" => { "snapshot" => "/home/you/.local/state/busyyaks/collector/sessions.json",
+                                    "read_socket" => "/home/you/.local/state/busyyaks/collector/read.sock",
+                                    "tmux_timeout_seconds" => 5, "answer_timeout_seconds" => 30, } },
+                 ex["agents"])
   end
 
   def test_missing_key_fails

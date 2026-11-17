@@ -13,6 +13,16 @@ class DeployUnitsTest < Minitest::Test
     assert_equal ["process"], service.scan(/^KillMode=(\S+)/).flatten
   end
 
+  # bin/collector's unit (card #479): a stop never takes a tmux server down, and it starts before the launcher, which
+  # reads its paths at start
+  def test_collector_unit
+    unit = File.read(File.expand_path("../../deploy/busyyaks-collector.service", __dir__))
+    service = unit[/^\[Service\]\n(.*?)(?=^\[|\z)/m, 1]
+    assert_equal ["process"], service.scan(/^KillMode=(\S+)/).flatten
+    assert_includes unit, "Before=busyyaks-launcher.service\n"
+    assert_includes unit, "ExecStart=__RUBY__ __DIR__/bin/collector\n"
+  end
+
   # A launcher that re-read config/kanban.yml per launch against the engine it loaded at start failed
   # every spawn once the checkout gained a key the old engine did not know. The file and engine are read together,
   # once; the agent part is the revision each launch carries, allowlisted by launch.commands read at start.

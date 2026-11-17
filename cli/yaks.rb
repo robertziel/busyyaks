@@ -6,6 +6,7 @@ require "optparse"
 require_relative "../lib/busyyaks/clock"
 require_relative "../lib/busyyaks/env_file"
 require_relative "../lib/busyyaks/deploy_template"
+require_relative "../lib/busyyaks/agent_collector"
 
 module Busyyaks
   # `yaks`: the operator's command line over one busyyaks checkout (bin/yaks, reached through a symlink on PATH).

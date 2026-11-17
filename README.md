@@ -95,19 +95,41 @@ from <a href="https://robertz.co/feeds/architecture/how-i-reached-100-prs-a-day/
 | signing in | nothing on localhost (`auth: { provider: none, allow_unauthenticated: true }`); anything reachable from elsewhere needs an [auth provider](#sign-in) |
 | GitHub pages and merged PRs | a GitHub login and a read-only token in `.env` (`gh auth token` with the [`gh` CLI](https://cli.github.com), or a fine-grained token with no repository access) |
 | connecting Claude Code (`bin/env` reads `.env`), the launcher (`bin/launcher`, on the host: Launch, claim, dialog answers, new repos), [`yaks`](#the-yaks-command) | Ruby 3.2+ on the host (stdlib only, no gems); the launcher also `git`, `tmux`, the `claude` CLI and a systemd user manager (`systemctl --user`; on a server without a login session: `loginctl enable-linger`) |
-| the agents sidebar, typing comments into sessions (optional) | an **agent-session collector** ([below](#agent-sessions)) |
+| the agents sidebar, typing comments into sessions (optional) | an **agent-session collector**: busyyaks ships one, `bin/collector` (Ruby 3.2+, `tmux`, a systemd user manager; [below](#agent-sessions)) |
 | the daily report (optional) | the runner's CLI (e.g. `hermes`), Ruby 3.2+ (`bin/env` reads `.env`), `jq`, `curl`, `flock`, `timeout` on the host, a systemd user manager, and an OpenAI-compatible LLM gateway |
 
 ### Agent sessions
 
-An agent-session collector is a separate host program that walks `/proc` and tmux, writes a JSON snapshot of every
-pane running a coding agent, and answers `screen` / `send` requests on a unix socket. The collector this project runs
-with is not published yet, so you state which you have in `config/busyyaks.yml` `agents` (required, no default):
+An agent-session collector is a host program that walks `/proc` and tmux, writes a JSON snapshot of every pane running
+a coding agent, and answers `screen` / `send` requests on a unix socket; `bin/launcher` reads both. busyyaks ships one,
+**`bin/collector`** (stdlib Ruby, a systemd `--user` unit from `deploy/install-collector.sh`): every 5 s it reads this
+user's tmux servers only, finds each pane's agent by its process (Claude Code: `claude`; Hermes: `hermes` with its
+bootstrap), writes the snapshot atomically and serves the socket owner-only. You state which collector you run in
+`config/busyyaks.yml` `agents` (required, no default):
 
 | `agents:` | |
 |---|---|
-| `{ collector: none }` (the shipped example) | works: dashboard, scanner, MCP, boards, Launch, `kanban_claim`, the watchdog, reports, GitHub; a dialog is turned into a question on its card (and answered from there) only when a comment to that session is pending. Off, each saying `agent-session collector off (config/busyyaks.yml agents.collector: none)` where it shows: the agents sidebar, session states and links on cards, Clear idle, the subagent list, typing card comments and answers into a session (the ping is marked failed with that reason), spotting a session stuck on a dialog before anyone comments |
-| `{ collector: { snapshot: <file>, read_socket: <socket> } }` | everything; host paths read by `bin/launcher`, which refuses to start while either is missing |
+| `{ collector: { snapshot: <file>, read_socket: <socket>, tmux_timeout_seconds: <1..60>, answer_timeout_seconds: <n> } }` (the shipped example: 5 and 30) | everything; host paths read by `bin/launcher`, which refuses to start while either is missing. Both deadlines are required: `bin/collector` kills a tmux call still running at `tmux_timeout_seconds` and answers that request with the error; `bin/launcher` and `yaks doctor` refuse a collector whose whole answer has not arrived by `answer_timeout_seconds` (above 4 × the tmux one: a send is 4 tmux calls), naming it. `bin/collector` writes exactly these two, in ONE dir it creates 0700 outside `PROJECTS_ROOT`, the checkout and `LAUNCHER_RUN_DIR` (the socket types into sessions: no container may reach it). Another collector speaking the same snapshot + socket may write them instead |
+| `{ collector: none }` | works: dashboard, scanner, MCP, boards, Launch, `kanban_claim`, the watchdog, reports, GitHub; a dialog is turned into a question on its card (and answered from there) only when a comment to that session is pending. Off, each saying `agent-session collector off (config/busyyaks.yml agents.collector: none)` where it shows: the agents sidebar, session states and links on cards, Clear idle, the subagent list, typing card comments and answers into a session (the ping is marked failed with that reason), spotting a session stuck on a dialog before anyone comments |
+
+What `bin/collector` reads, per engine (anything it cannot read is `null` in the snapshot, with the reason in the
+pane's `unknown`):
+
+| | Claude Code | Hermes |
+|---|---|---|
+| listed in the sidebar, its project from the pane's dir | yes | yes |
+| state (working · blocked · idle) | its own record `CLAUDE_SESSIONS_DIR/<pid>.json` (idle · busy · waiting, title, when) + its screen | its screen (`bin/launcher`'s Hermes rules: an approval or a question = blocked) |
+| a dialog answered from the card / sidebar | yes | no (shown as blocked) |
+| card comments typed into the session | yes (one bracketed paste + Enter, only while the same agent process runs and no dialog is on screen) | no |
+| live phase line (thinking · tool · writing) | yes | no |
+| subagents, workflows, background tasks | not read (the sidebar says so) | not read |
+
+Install it before the launcher (`yaks doctor` checks it: a fresh snapshot, the socket, the unit):
+
+```bash
+deploy/install-collector.sh      # bin/collector --check, then the unit; waits for its first snapshot
+deploy/install-launcher.sh       # the launcher reads the collector's paths at its start
+```
 
 ---
 
@@ -139,8 +161,9 @@ docker compose up -d --build --wait web mcp scanner github notifier
 ```
 <!-- quickstart:end -->
 
-config/busyyaks.yml as copied: every repo under `PROJECTS_ROOT`, no sign-in (`auth: none`, localhost only), no
-agent-session collector; config/kanban.yml: the board's caps, theme and gates (the launchers and agent types are
+config/busyyaks.yml as copied: every repo under `PROJECTS_ROOT`, no sign-in (`auth: none`, localhost only), the
+agent-session collector `bin/collector` at `agents.collector`'s paths (`bin/setup` writes them under your `$HOME`
+when it copies the file, and `bin/setup check` names one it cannot use; `collector: none` for no agents sidebar); config/kanban.yml: the board's caps, theme and gates (the launchers and agent types are
 edited on Settings → Agents & launchers, in the database; a fresh one starts with config/agents.template.yml: plain
 `claude`).
 
@@ -159,17 +182,19 @@ claude mcp add --transport http --scope user busyyaks "http://$MCP_HOST:$MCP_HOS
   --header "Authorization: Bearer $MCP_TOKEN"
 ```
 
-Install the host launcher (systemd `--user`; host Ruby 3.2+, `tmux`, `claude`). Fill `.env` group 3 (`LAUNCHER_STATE_DIR`,
-`CLAUDE_SESSIONS_DIR`) first. Agents' board tools check the agent's tmux session through it, and the launch bar starts
-sessions with it:
+Install the agent-session collector, then the host launcher (both systemd `--user`; host Ruby 3.2+, `tmux`, `claude`).
+Fill `.env` group 3 (`LAUNCHER_STATE_DIR`, `CLAUDE_SESSIONS_DIR`) first. Agents' board tools check the agent's tmux
+session through the launcher, the launch bar starts sessions with it, and the agents sidebar reads the collector
+through it:
 
 ```bash
+deploy/install-collector.sh   # bin/collector at config/busyyaks.yml agents.collector (set `collector: none` to skip it)
 deploy/install-launcher.sh
 ```
 
 An agent then starts with `whats_new` and works its project's board with the `kanban_*` tools. Without the launcher,
 the dashboard, the scanner and MCP's read tools work, but agents cannot register, claim, create or ask on cards. The
-agents sidebar and typing comments into sessions also need an [agent-session collector](#agent-sessions).
+agents sidebar and typing comments into sessions also need the [agent-session collector](#agent-sessions).
 
 Optional: the [daily report](#the-daily-report) timer, `deploy/install-daily-timer.sh`.
 
@@ -608,7 +633,8 @@ never be exposed. The daily report has its own bearer, `MCP_REPORT_TOKEN`, which
 - All ports bind to `127.0.0.1`. **Localhost only is the default** and needs nothing more. To reach the dashboard
   from elsewhere, use same-host nginx + TLS or an frp tunnel to a public proxy host: [`docs/DEPLOY.md`](docs/DEPLOY.md).
   `deploy/` has templates only; `bin/render-deploy` fills them from `.env` into `deploy/rendered/` (gitignored).
-- The two host processes are systemd `--user` units: `deploy/install-launcher.sh` and `deploy/install-daily-timer.sh`.
+- The host processes are systemd `--user` units: `deploy/install-collector.sh`, `deploy/install-launcher.sh` and
+  `deploy/install-daily-timer.sh`.
   The launcher unit uses `KillMode=process`, so restarting it leaves your tmux sessions running.
 - Back up `data/` (card attachments, and the SQLite file: `VACUUM INTO` while it runs, [`docs/DEPLOY.md`](docs/DEPLOY.md#the-database)) — on PostgreSQL, the server too (`pg_dump`). Migrations run when `web` starts.
 - The containers run as `HOST_UID:HOST_GID`, the launcher's user. Every service (`bin/entrypoint`) refuses to start

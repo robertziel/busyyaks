@@ -185,41 +185,43 @@ module Busyyaks
     # container mounts that, and a read-only mount does not stop connect() on a socket) or under the checkout (./data,
     # .env, the test service's .:/app); one that contains either; an existing one owned by another uid or open to group
     # / other (never repaired: what another user put there earlier would stay). A dir it cannot create → Invalid.
-    def run_dir!(path, projects_root:, checkout:, uid:)
-      raise Invalid, "LAUNCHER_RUN_DIR must be an absolute path (got #{path.inspect})" unless path.to_s.start_with?("/")
+    # name: the setting the messages name; mounted: more dirs it may not overlap ({what => path}; bin/collector's
+    # dir also stays out of LAUNCHER_RUN_DIR, which three containers mount).
+    def run_dir!(path, projects_root:, checkout:, uid:, name: "LAUNCHER_RUN_DIR", mounted: {})
+      raise Invalid, "#{name} must be an absolute path (got #{path.inspect})" unless path.to_s.start_with?("/")
 
       real = resolve(path)
       # compose mounts the path AS WRITTEN and the launcher binds the real one: they must be the same path
       unless File.expand_path(path) == real
-        raise Invalid, "LAUNCHER_RUN_DIR #{path} goes through a symlink (it is #{real}): write #{real}"
+        raise Invalid, "#{name} #{path} goes through a symlink (it is #{real}): write #{real}"
       end
       # ./data by its own real path too: a data dir symlinked out of the checkout is mounted by every container
       { "PROJECTS_ROOT" => projects_root, "the busyyaks checkout" => checkout,
-        "./data" => File.join(checkout, "data"), }.each do |what, other|
+        "./data" => File.join(checkout, "data"), }.merge(mounted).each do |what, other|
         o = resolve(other)
         if inside?(real, o) || inside?(o, real)
-          raise Invalid, "LAUNCHER_RUN_DIR #{path} (#{real}) overlaps #{what} (#{o}): every container mounts it, and " \
+          raise Invalid, "#{name} #{path} (#{real}) overlaps #{what} (#{o}): every container mounts it, and " \
                          "a socket in it is reachable from all of them; put it outside both"
         end
       end
-      parents!(real, uid)
+      parents!(real, uid, name)
       begin
         FileUtils.mkdir_p(real, mode: 0o700)
       rescue SystemCallError => e
-        raise Invalid, "LAUNCHER_RUN_DIR #{real} cannot be created: #{e.message}"
+        raise Invalid, "#{name} #{real} cannot be created: #{e.message}"
       end
       st = File.stat(real)
-      raise Invalid, "LAUNCHER_RUN_DIR #{real} is not a directory" unless st.directory?
+      raise Invalid, "#{name} #{real} is not a directory" unless st.directory?
       parent = File.stat(File.dirname(real))
       unless parent.uid == uid
-        raise Invalid, "LAUNCHER_RUN_DIR #{real}: its parent #{File.dirname(real)} is owned by uid #{parent.uid}, not #{uid}"
+        raise Invalid, "#{name} #{real}: its parent #{File.dirname(real)} is owned by uid #{parent.uid}, not #{uid}"
       end
       unless st.uid == uid
-        raise Invalid, "LAUNCHER_RUN_DIR #{real} is owned by uid #{st.uid}, not #{uid} (created by Docker before the " \
+        raise Invalid, "#{name} #{real} is owned by uid #{st.uid}, not #{uid} (created by Docker before the " \
                        "launcher? remove it and run deploy/install-launcher.sh before compose starts)"
       end
       if st.mode.anybits?(0o077)
-        raise Invalid, "LAUNCHER_RUN_DIR #{real} is mode #{format('%o', st.mode & 0o777)}: open to group / other; check " \
+        raise Invalid, "#{name} #{real} is mode #{format('%o', st.mode & 0o777)}: open to group / other; check " \
                        "what is in it, then chmod 700 #{real}"
       end
 
@@ -229,17 +231,17 @@ module Busyyaks
     # Every existing ancestor (up to /) is this uid's or root's and not writable by group / other — else another user
     # could swap a path component between the launcher's bind and compose's mount, or (a sticky /tmp too) create the
     # dir first while it is absent, after a reboot, so the containers mount theirs.
-    def parents!(real, uid)
+    def parents!(real, uid, name)
       dir = File.dirname(real)
       loop do
         if File.exist?(dir)
           st = File.lstat(dir)
-          raise Invalid, "LAUNCHER_RUN_DIR #{real}: #{dir} is a symlink" if st.symlink?
+          raise Invalid, "#{name} #{real}: #{dir} is a symlink" if st.symlink?
           unless [uid, 0].include?(st.uid)
-            raise Invalid, "LAUNCHER_RUN_DIR #{real}: its parent #{dir} is owned by uid #{st.uid}, not #{uid} or root"
+            raise Invalid, "#{name} #{real}: its parent #{dir} is owned by uid #{st.uid}, not #{uid} or root"
           end
           if st.mode.anybits?(0o022)
-            raise Invalid, "LAUNCHER_RUN_DIR #{real}: its parent #{dir} is writable by group / other " \
+            raise Invalid, "#{name} #{real}: its parent #{dir} is writable by group / other " \
                            "(mode #{format('%o', st.mode & 0o7777)})"
           end
         end

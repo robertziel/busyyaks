@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
+require "json"
 require "yaml"
+require "socket"
 
 module Busyyaks
   module CLI
@@ -8,6 +10,10 @@ module Busyyaks
     # only when config/busyyaks.yml has `daily_report_runners` (what the host may run for it; the settings themselves are
     # in the database). One row per tool, plus one for that file (missing, unreadable or still holding the
     # moved `daily_report` block: FAIL, and the daily report's tools are not asked); exit 1 when one is missing.
+    # The agent-session collector (config/busyyaks.yml agents.collector, card #479): `none` is ok (the sidebar is off);
+    # named paths need a fresh snapshot (≤ 3 × its interval_s old, as bin/launcher reads it) and a read socket that
+    # ANSWERS (a ping within answer_timeout_seconds: a JSON object back, whatever collector writes those paths) — and
+    # the row says whether busyyaks's own unit (busyyaks-collector.service) runs, since another collector may write them.
     # `yaks panel`'s needs (xdg-open, a graphical session) are OPTIONAL — a server without a desktop runs the stack
     # fine: shown `miss`, never counted.
     # Then the first start's checks, read-only — `bin/setup check` makes what they look for: `.env` parses
@@ -33,8 +39,9 @@ module Busyyaks
         CLI.no_more!(args)
         rows = TOOLS.map { |t, why| tool(ctx, t, why) }
         rows << compose(ctx) << user_manager(ctx) << graphical(ctx)
-        config, daily = config(ctx)
+        config, daily, doc = config(ctx)
         rows << config
+        rows << collector(ctx, doc) if doc
         rows += DAILY.map { |t| tool(ctx, t, "the daily report") } if daily
         rows << ["ruby", true, "#{ctx.ruby} (>= #{MIN_RUBY})", "yaks, the launcher, bin/env"]
         rows += first_start(ctx)
@@ -45,6 +52,63 @@ module Busyyaks
           ctx.out.puts "#{mark.ljust(4)}  #{t.ljust(width)}  #{f.ljust(found)}  #{why}"
         end
         rows.all? { |t, ok, _, _| ok || OPTIONAL.include?(t) } ? 0 : 1
+      end
+
+      COLLECTOR = "agent collector"
+      COLLECTOR_FOR = "the agents sidebar, typing comments into sessions"
+      COLLECTOR_UNIT = "busyyaks-collector.service"
+
+      def collector(ctx, doc)
+        c = doc["agents"].is_a?(Hash) ? doc["agents"]["collector"] : nil
+        return [COLLECTOR, true, "none: the agents sidebar is off", COLLECTOR_FOR] if c == "none"
+
+        paths = begin
+          Busyyaks::AgentCollector.parse(doc["agents"])
+        rescue Busyyaks::AgentCollector::Invalid => e
+          return [COLLECTOR, false, "agents.collector: #{e.message}", COLLECTOR_FOR]
+        end
+
+        unit = collector_unit(ctx)
+        snap = JSON.parse(File.read(c["snapshot"]))
+        age = (Busyyaks::Clock.now.to_f - snap.fetch("generated_at").to_f).round
+        if age > 3 * snap.fetch("interval_s").to_f
+          return [COLLECTOR, false, "snapshot #{age}s old (stale) · #{unit}", COLLECTOR_FOR]
+        end
+        sock = c["read_socket"]
+        return [COLLECTOR, false, "no socket at #{sock} · #{unit}", COLLECTOR_FOR] unless File.socket?(sock)
+
+        silent = silent(sock, paths.answer_timeout_seconds)
+        return [COLLECTOR, false, "#{sock} #{silent} · #{unit}", COLLECTOR_FOR] if silent
+
+        [COLLECTOR, true, "snapshot #{age}s old · #{snap.fetch('sessions').size} sessions · #{unit}", COLLECTOR_FOR]
+      rescue SystemCallError, JSON::ParserError, KeyError, NoMethodError => e
+        [COLLECTOR, false, "snapshot #{c['snapshot']} unreadable (#{e.class}) · #{unit}", COLLECTOR_FOR]
+      end
+
+      # nil when the socket answers a ping with a JSON object within `seconds`, else why not
+      def silent(sock, seconds)
+        line = UNIXSocket.open(sock) do |u|
+          u.puts('{"op":"ping"}')
+          Busyyaks::AgentCollector.read_line(u, seconds, max: Busyyaks::AgentCollector::ANSWER_MAX)
+        end
+        return "closed without an answer" if line.nil?
+
+        JSON.parse(line).is_a?(Hash) ? nil : "answered no JSON object"
+      rescue Busyyaks::AgentCollector::Slow
+        "does not answer (no reply within #{seconds}s)"
+      rescue Busyyaks::AgentCollector::TooLarge, JSON::ParserError
+        "answered no JSON object"
+      rescue SystemCallError => e
+        "does not answer (#{e.class})"
+      end
+
+      def collector_unit(ctx)
+        return "#{COLLECTOR_UNIT} unknown (no systemctl)" unless ctx.runner.which("systemctl")
+
+        out, ok = ctx.runner.capture("systemctl", "--user", "is-active", COLLECTOR_UNIT)
+        return "#{COLLECTOR_UNIT} active" if ok
+
+        "#{COLLECTOR_UNIT} #{out.strip.empty? ? 'not active' : out.strip}"
       end
 
       def graphical(ctx)
@@ -140,7 +204,7 @@ module Busyyaks
 
         daily = doc.key?("daily_report_runners")
         [["config/busyyaks.yml", true, daily ? "daily_report_runners set" : "no daily_report_runners", "every service"],
-         daily,]
+         daily, doc,]
       rescue Psych::Exception, SystemCallError => e
         [["config/busyyaks.yml", false, e.message.lines.first.strip, "every service"], false]
       end
