@@ -3,6 +3,8 @@
 require "etc"
 require "json"
 require "optparse"
+require "yaml"
+require_relative "../lib/busyyaks/ci_settings"
 require_relative "../lib/busyyaks/clock"
 require_relative "../lib/busyyaks/env_file"
 require_relative "../lib/busyyaks/deploy_template"
@@ -64,6 +66,7 @@ module Busyyaks
       ["desktop uninstall", "remove that entry"],
       ["env KEY...", "`export KEY='value'` lines from .env, for eval (bin/env)"],
       ["env --ports", "this server's host name and ports as JSON (what `yaks remote connect` asks over ssh)"],
+      ["ci required OWNER/NAME", "the repo's required CI checks (config/busyyaks.yml ci.required), one per line"],
       ["remote add|remove TARGET", "save / forget a busyyaks server reached over ssh (a Host alias or user@host)"],
       ["remote list", "the saved servers (connects to nothing)"],
       ["remote connect TARGET [--mcp]", "forward its dashboard (and MCP) to this machine over ssh, until ssh ends"],
@@ -99,6 +102,7 @@ module Busyyaks
       when "desktop" then Desktop.run(ctx, args)
       when "remote" then Remote.run(ctx, args)
       when "env" then env(ctx, args)
+      when "ci" then ci(ctx, args)
       when "doctor" then Doctor.run(ctx, args)
       when "help", "-h", "--help" then ctx.out.puts(usage) || 0
       when nil then raise Usage, "no command"
@@ -114,6 +118,31 @@ module Busyyaks
       0
     rescue EnvFile::Invalid => e
       raise Refused, e.message
+    end
+
+    # `ci required OWNER/NAME`: the status contexts / check-run names that gate the repo's PRs, from
+    # config/busyyaks.yml ci.required — the list the board's approval gate reads (Busyyaks::CiSettings, the one parser),
+    # so a merge tool gates on the same checks. A repo not listed is refused, never guessed.
+    def ci(ctx, args)
+      raise Usage, "ci needs: required OWNER/NAME" unless args.shift == "required"
+
+      repo = args.shift or raise Usage, "ci required needs OWNER/NAME"
+      no_more!(args)
+      file = File.join(ctx.home, "config", "busyyaks.yml")
+      doc = YAML.safe_load_file(file)
+      settings = CiSettings.parse!(doc.is_a?(Hash) ? doc["ci"] : nil)
+      contexts = settings.required_for(repo) or
+        raise Refused, "config/busyyaks.yml ci.required does not list #{repo}: add its required CI check(s) there"
+      ctx.out.puts contexts
+      0
+    rescue Errno::ENOENT
+      raise Refused, "no config/busyyaks.yml at #{file}"
+    rescue SystemCallError => e
+      raise Refused, "config/busyyaks.yml: #{e.message}"
+    rescue Psych::Exception => e
+      raise Refused, "config/busyyaks.yml: #{e.message}"
+    rescue CiSettings::Invalid => e
+      raise Refused, "config/busyyaks.yml: #{e.message}"
     end
 
     # `env --ports`: what a remote `yaks remote connect` forwards — this machine's name and the loopback ports

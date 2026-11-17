@@ -36,6 +36,10 @@ module Busyyaks
       Settings.new(max_pending_minutes: max, required: required!(value["required"]))
     end
 
+    # one GitHub check name: a non-empty single line with no surrounding whitespace (it is matched exactly, and
+    # `yaks ci required` prints one per line)
+    def context?(name) = name.is_a?(String) && !name.empty? && name == name.strip && !name.match?(/[\r\n]/)
+
     def required!(value)
       unless value.is_a?(Hash) && value.any?
         raise Invalid, "ci.required must be a non-empty mapping of owner/name → [contexts that gate]"
@@ -43,8 +47,9 @@ module Busyyaks
 
       value.each_with_object({}) do |(repo, contexts), out|
         raise Invalid, "ci.required: #{repo.inspect} is not owner/name" unless repo.is_a?(String) && repo.match?(REPO)
-        unless contexts.is_a?(Array) && contexts.any? && contexts.all? { |c| c.is_a?(String) && !c.strip.empty? }
-          raise Invalid, "ci.required.#{repo} must be a non-empty list of status contexts / check-run names"
+        unless contexts.is_a?(Array) && contexts.any? && contexts.all? { |c| context?(c) }
+          raise Invalid, "ci.required.#{repo} must be a non-empty list of status contexts / check-run names " \
+                         "(each one line, no leading or trailing space: GitHub matches the name exactly)"
         end
         raise Invalid, "ci.required.#{repo} lists a context twice" if contexts.uniq.size != contexts.size
 
