@@ -10,12 +10,34 @@ class SetupAPITest < Minitest::Test
 
   API = Busyyaks::SetupAPI
 
+  # what bin/launcher's harnesses op answers (JSON round-tripped: string keys)
+  PROBE = {
+    "ok" => true, "shell" => "bash -ic",
+    "harnesses" => [
+      { "key" => "claude", "label" => "Claude Code", "command" => "claude", "kind" => "claude_code", "launch_args" => [],
+        "install_url" => "https://c.example", "found" => true, "type" => "file", "path" => "/u/bin/claude",
+        "version" => "2.1.3", "version_error" => nil, },
+      { "key" => "hermes", "label" => "Hermes Agent", "command" => "hermes", "kind" => "hermes", "launch_args" => ["chat"],
+        "install_url" => "https://h.example", "found" => false, "type" => nil, "path" => nil, "version" => nil,
+        "version_error" => nil, },
+      { "key" => "codex", "label" => "Codex CLI", "command" => "codex", "kind" => nil, "launch_args" => [],
+        "install_url" => "https://x.example", "found" => true, "type" => "file", "path" => "/u/bin/codex", "version" => nil,
+        "version_error" => "timed out after 5 s", },
+    ],
+    "commands" => [{ "command" => "claude", "found" => true, "type" => "file", "path" => "/u/bin/claude" },
+                   { "command" => "fullclaude", "found" => true, "type" => "function", "path" => nil },],
+    "allowlist" => [{ "kind" => "claude_code", "command" => "claude", "args" => [], "via_shell" => false },
+                    { "kind" => "claude_code", "command" => "fullclaude", "args" => [], "via_shell" => true },],
+  }.freeze
+
   Up = Struct.new(:list) do
     def sessions = list
+    def harnesses = PROBE
   end
 
   class Down
     def sessions = raise(Busyyaks::LauncherClient::Unavailable, "launcher socket missing")
+    def harnesses = raise(Busyyaks::LauncherClient::Unavailable, "launcher socket missing")
   end
 
   def db = Hanami.app["db.gateway"].connection
@@ -87,5 +109,74 @@ class SetupAPITest < Minitest::Test
     assert API.completed?(db)
     API.complete(by: "op2", **deps)
     assert_equal "op2", API.completed(db)[:author]
+  end
+
+  COMMANDS = [{ "kind" => "claude_code", "command" => "claude", "args" => [], "via_shell" => false },
+              { "kind" => "claude_code", "command" => "fullclaude", "args" => [], "via_shell" => true },].freeze
+
+  class Fake
+    def initialize(&blk) = @blk = blk
+    def harnesses = @blk.call
+  end
+
+  # card 520: each harness the launcher found, joined with this host's allowlist
+  def test_harnesses_carry_the_allowlist_and_the_line_to_add
+    status, body = API.harnesses(launcher: Up.new([]), commands: COMMANDS)
+    assert_equal 200, status
+    c, he, x = body[:harnesses]
+    assert_equal [true, [0, 1], "- { kind: claude_code, command: claude, args: [], via_shell: false }", "2.1.3"],
+                 c.values_at(:launchable, :allowed, :allow_line, :version)
+    assert_equal [true, false, [], "- { kind: hermes, command: hermes, args: [chat], via_shell: false }"],
+                 he.values_at(:launchable, :found, :allowed, :allow_line)
+    assert_equal [false, [], nil, "timed out after 5 s"], x.values_at(:launchable, :allowed, :allow_line, :version_error)
+    assert_nil c[:allow_note]
+  end
+
+  # a harness found only as a shell function / alias: its line runs it through the shell, where the kind allows that
+  def test_the_line_for_a_shell_function_says_via_shell_or_why_none
+    fn = ->(key, kind, args) {
+      PROBE["harnesses"].find { |h| h["key"] == key }.merge("kind" => kind, "found" => true, "type" => "function",
+                                                            "path" => nil, "launch_args" => args)
+    }
+    probe = PROBE.merge("harnesses" => [fn.("claude", "claude_code", []), fn.("hermes", "hermes", ["chat"])])
+    _, body = API.harnesses(launcher: Fake.new { probe }, commands: COMMANDS)
+    c, he = body[:harnesses]
+    assert_equal "- { kind: claude_code, command: claude, args: [], via_shell: true }", c[:allow_line]
+    assert_equal [nil, "hermes is a shell function: hermes needs a program on PATH to launch"],
+                 he.values_at(:allow_line, :allow_note)
+    assert_equal [{ at: 0, found: true, type: "file", path: "/u/bin/claude" },
+                  { at: 1, found: true, type: "function", path: nil },], body[:commands]
+    assert_equal "bash -ic", body[:shell]
+    assert body[:allowlist_in_sync]
+    # the launcher read another launch.commands than this process (one of them started before an edit): said
+    _, stale = API.harnesses(launcher: Fake.new { PROBE.merge("allowlist" => [COMMANDS.first]) }, commands: COMMANDS)
+    refute stale[:allowlist_in_sync]
+    assert_kind_of Integer, body[:checked_at]
+  end
+
+  def test_a_launcher_that_cannot_answer_is_said_never_guessed
+    assert_equal [503, { error: "launcher socket missing" }], API.harnesses(launcher: Down.new, commands: COMMANDS)
+    old = Fake.new { raise Busyyaks::LauncherClient::Refused, "unknown op" }
+    status, body = API.harnesses(launcher: old, commands: COMMANDS)
+    assert_equal 501, status
+    assert_match(/restart it/, body[:error])
+    failed = Fake.new { raise Busyyaks::LauncherClient::Refused, "harness probe: bash -ic timed out after 8 s" }
+    assert_equal [500, { error: "harness probe: bash -ic timed out after 8 s" }],
+API.harnesses(launcher: failed, commands: COMMANDS)
+    # a launcher started before an allowlist edit did not resolve the new command: unknown, out of sync — never "not found"
+    stale = Fake.new { PROBE.merge("commands" => [PROBE["commands"].first]) }
+    status, body = API.harnesses(launcher: stale, commands: COMMANDS)
+    assert_equal 200, status
+    assert_equal({ at: 1, found: nil, type: nil, path: nil }, body[:commands].last)
+    refute body[:allowlist_in_sync]
+  end
+
+  def test_show_carries_the_kind_labels
+    assert_equal({ "claude_code" => "Claude Code", "hermes" => "Hermes Agent" }, show.last[:kinds])
+  end
+
+  def test_show_carries_the_daily_report_state
+    assert_equal [false, false], show.last[:daily_report].values_at(:configured, :saved)
+    assert_match(/no daily report settings saved/, show.last[:daily_report][:reason])
   end
 end

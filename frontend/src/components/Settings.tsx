@@ -95,7 +95,7 @@ export function SettingsView({ open, onToggle, email, signOut, csrf, wrap, btn }
           Shortcuts
         </Link>
         <Link className="settings-link" to="/hello">
-          Setup (hello screen)
+          Setup
         </Link>
         <div className="settings-row">
           <span className="settings-label">Skin</span>

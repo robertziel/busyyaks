@@ -145,7 +145,10 @@ edited on Settings → Agents & launchers, in the database; a fresh one starts w
 `claude`).
 
 Open `http://127.0.0.1:8080` (`WEB_HOST_PORT`) — with `provider: none` there is no sign-in; the first page is the
-hello screen (`/hello`), which checks the database, the scanner, the launcher and GitHub and says what each needs.
+hello screen (`/hello`), which checks the database, the scanner, the launcher and GitHub and says what each needs, and
+looks for the agent CLIs on the host (Claude Code, Hermes, Codex — `config/harnesses.yml`): found with its version, or
+an install link, and the `launch.commands` line to add for one installed but not allowed. Reopened from the settings
+cog (Setup), it lands on a summary of the current settings, each step editable.
 The scanner reads every repo under `PROJECTS_ROOT` (mounted read-only) within `SCAN_INTERVAL_SECONDS`.
 
 Connect Claude Code to the MCP server:

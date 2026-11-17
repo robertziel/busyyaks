@@ -367,6 +367,10 @@ class WebTest < Minitest::Test
     assert_nil j["completed"]
     assert_equal %w[database scanner launcher agents github], j["checks"].map { |c| c["key"] }
     assert_equal ENV.fetch("PROJECTS_ROOT"), j["projects"]["host_root"]
+    assert_equal false, j["daily_report"]["configured"]
+    h = api(:get, "/api/setup/harnesses")
+    assert_equal 503, last_response.status, "no launcher in the test: the harnesses say why, never a guess"
+    assert_match(/launcher not reachable/, h["error"])
     api(:post, "/api/setup/complete", {})
     assert_equal 403, last_response.status, "no CSRF token"
     refute Busyyaks::SetupAPI.completed?(Hanami.app["db.gateway"].connection), "refused: nothing written"

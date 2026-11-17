@@ -49,7 +49,7 @@ describe("SettingsView", () => {
     expect(html).toMatch(/<a class="settings-link" href="\/settings"[^>]*>Agents &amp; launchers<\/a>/);
     expect(html).toMatch(/<a class="settings-link" href="\/settings\/daily-report"[^>]*>Daily report<\/a>/);
     expect(html).toMatch(/<a class="settings-link" href="\/settings\/shortcuts"[^>]*>Shortcuts<\/a>/);
-    expect(html).toMatch(/<a class="settings-link" href="\/hello"[^>]*>Setup \(hello screen\)<\/a>/);
+    expect(html).toMatch(/<a class="settings-link" href="\/hello"[^>]*>Setup<\/a>/);
     expect(html.match(/role="radio"/g)).toHaveLength(4);
     expect(html).toMatch(/aria-checked="false">Dusk &lt;1&gt;</);
     expect(html).toMatch(/aria-checked="true" class="on">Dark</);

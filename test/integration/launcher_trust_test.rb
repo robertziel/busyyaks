@@ -30,7 +30,7 @@ class LauncherTrustTest < Minitest::Test
   # launch.start_seconds of the sandbox: far above the 13 s a slow wrapper below takes, so a refusal "at
   # once" is told from one on the clock by its reason and its distance from this, never by the machine's speed
   START_SECONDS = 120
-  COPY = %w[bin/launcher lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml skills].freeze
+  COPY = %w[bin/launcher lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml config/harnesses.yml skills].freeze
 
   def setup
     # under the user's home: the run dir's parents must not be writable by another user (LauncherRules.run_dir!)

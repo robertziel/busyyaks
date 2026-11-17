@@ -60,6 +60,8 @@ require_relative "../lib/busyyaks/agent_settings"
 require_relative "../lib/busyyaks/skills"
 # the live terminal's stream: its frames, names and limits — the same file the web relays it with
 require_relative "../lib/busyyaks/terminal"
+# the agent harnesses the hello screen looks for (config/harnesses.yml; card 520)
+require_relative "../lib/busyyaks/harnesses"
 
 $stdout.sync = true
 ROOT = File.expand_path("..", __dir__)
@@ -152,6 +154,13 @@ CLAUDE_SESSION_URL = ENV_FILE.fetch("CLAUDE_SESSION_URL") { abort "CLAUDE_SESSIO
 # The engines the collector may report (config/engines.yml + config/busyyaks.yml `engines:`), read once at start like the board
 # config below: a bad table fails the launcher's start; a pane whose engine is not in it is shown, with the reason.
 ENGINES = Busyyaks::Engines.load(YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["engines"])
+# config/harnesses.yml, read once at start (a bad file fails the start); the `harnesses` op looks each one up on THIS
+# process's PATH (the systemd unit's) — the containers cannot see the host's programs
+HARNESSES = begin
+  Busyyaks::Harnesses.load
+rescue Busyyaks::Harnesses::Invalid => e
+  abort e.message
+end
 PANE_KEYS = %w[target cwd engine model context effort status waiting_for title status_at subagents_running].freeze
 
 # The host config FILE (config/kanban.yml): read ONCE, at start, beside the engine code it is parsed by — the checkout
@@ -339,6 +348,57 @@ def session_name(base)
   n = 1
   n += 1 while taken.include?("#{base}_#{n}")
   "#{base}_#{n}"
+end
+
+# card 520: config/harnesses.yml + every launch.commands command, resolved in the shell a launch runs in (bash -ic)
+# and each harness program's version read — read-only, no parameter: the web never names a command to run here.
+def harnesses_op
+  probe = Busyyaks::Harnesses.probe(HARNESSES, COMMANDS.map { |c| c["command"] },
+                                    env: { "PATH" => ENV.fetch("PATH"), "HOME" => ENV.fetch("HOME") },
+                                    run: method(:harness_run))
+  catalogue = HARNESSES.to_h { |h| [h.key, h.to_h] }
+  # allowlist: the launch.commands THIS launcher enforces (read at its start): the web compares it with its own read
+  { ok: true, shell: "bash -ic", harnesses: probe[:harnesses].map { |r| catalogue.fetch(r[:key]).merge(r) },
+    commands: probe[:commands], allowlist: COMMANDS, }
+rescue Busyyaks::Harnesses::Failed => e
+  { ok: false, error: e.message, status: 500 }
+end
+
+# The probe's children (Busyyaks::Harnesses.probe's runner; the services never spawn): its own process group, no
+# stdin, output read as it runs (the first Harnesses::OUTPUT_MAX bytes kept), killed with its group at the deadline
+# (read through the Clock). clean_env: only `env` (the version runs); else `env` over this process's (the launch shell).
+# → [output, 0 | the exit code | "signal N", or nil when killed at the deadline]
+def harness_run(env, argv, timeout_s:, err:, clean_env:)
+  max = Busyyaks::Harnesses::OUTPUT_MAX
+  r, w = IO.pipe
+  pid = Process.spawn(env, *argv, in: File::NULL, out: w, err: err == :out ? w : File::NULL, pgroup: true,
+                                  unsetenv_others: clean_env)
+  w.close
+  out = +""
+  deadline = Busyyaks::Clock.monotonic + timeout_s
+  loop do
+    chunk = r.read_nonblock(max, exception: false)
+    out << chunk if chunk.is_a?(String) && out.bytesize < max
+    _, status = Process.wait2(pid, Process::WNOHANG)
+    if status
+      rest = r.read_nonblock(max, exception: false)
+      out << rest if rest.is_a?(String) && out.bytesize < max
+      code = status.exitstatus || "signal #{status.termsig}"
+      return [out.byteslice(0, max).scrub, code]
+    end
+    if Busyyaks::Clock.monotonic >= deadline
+      begin
+        Process.kill("KILL", -pid)
+      rescue Errno::ESRCH
+        nil # it ended between the look and the kill
+      end
+      Process.wait(pid)
+      return [out.byteslice(0, max).scrub, nil]
+    end
+    Busyyaks::Clock.pause(0.02) unless chunk.is_a?(String)
+  end
+ensure
+  r&.close
 end
 
 # A free tmux session name for a board (the engine registers it, then asks for the launch under that name).
@@ -1198,6 +1258,7 @@ def handle(line)
   when "sessions"
     STAGE_LOCK.synchronize { sweep_stages("sessions") }
     { ok: true, sessions: sessions }
+  when "harnesses" then harnesses_op
   when "create" then create(req)
   when "jobs" then { ok: true, jobs: jobs }
   when "agents" then agents
