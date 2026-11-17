@@ -46,6 +46,10 @@
   --shadow-thumb: 0 1px 3px rgba(22, 24, 29, 0.16), 0 0 0 0.5px rgba(22, 24, 29, 0.12);
   --logo-light: block;
   --logo-dark: none;
+  /* the repo label's offset from the viewport edges and its phone-size box (card #505): the waiting widget rises by --repo-link-clear */
+  --repo-link-gutter: 12px;
+  --repo-link-box: 30px;
+  --repo-link-clear: calc(var(--repo-link-box) + var(--repo-link-gutter));
   /* the colour tokens are not here: each skin is a file, skins/<key>.yml (light, dark, any added), written into
      every page's <head> (Busyyaks::Skins, card #361); the --ak-* board tokens neither: the SPA shell writes
      config/kanban.yml `theme` onto :root */
@@ -595,5 +599,65 @@ form.note textarea {
   }
   .top {
     background: var(--panel);
+  }
+}
+
+/* the label linking to busyyaks's public repo (card #505, Busyyaks::RepoLink): fixed bottom-left on every page, on the
+   header's glass (--mat-bar, half transparent, blurred), --ink-dim text: >= 4.5:1 with ANY skin colour behind the glass
+   in both base skins, blur aside (test/unit/repo_link_test.rb measures it; --mat-fill and --ink-faint fall under). Under the
+   waiting widget (15, bottom-right), the agents drawer (20), the search overlay (30) and every <dialog> (top layer).
+   Below 640px only the mark shows, in a --repo-link-box square, and below 760px the waiting widget rises above it (waiting.css);
+   hidden in print. */
+.repo-link {
+  position: fixed;
+  left: max(var(--repo-link-gutter), env(safe-area-inset-left));
+  bottom: max(var(--repo-link-gutter), env(safe-area-inset-bottom));
+  z-index: 14;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: var(--radius-chip);
+  background: var(--mat-bar);
+  -webkit-backdrop-filter: var(--mat-blur);
+  backdrop-filter: var(--mat-blur);
+  box-shadow: inset 0 0 0 0.5px var(--line-strong);
+  color: var(--ink-dim);
+  font: 500 12px/1 var(--sans);
+  text-decoration: none;
+}
+.repo-link:hover {
+  color: var(--ink);
+  text-decoration: none;
+}
+.repo-link:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.repo-link svg {
+  flex: none;
+}
+/* narrow screens: the mark alone (its aria-label keeps the name), so it stays clear of the waiting widget's plate */
+@media (max-width: 640px) {
+  .repo-link {
+    justify-content: center;
+    width: var(--repo-link-box);
+    height: var(--repo-link-box);
+    padding: 0;
+  }
+  .repo-link span {
+    display: none;
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .repo-link {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--panel);
+  }
+}
+@media print {
+  .repo-link {
+    display: none;
   }
 }

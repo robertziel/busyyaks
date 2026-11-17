@@ -7,7 +7,7 @@
 .waiting-widget {
   position: fixed;
   right: max(16px, env(safe-area-inset-right));
-  bottom: max(16px, env(safe-area-inset-bottom));
+  bottom: calc(max(16px, env(safe-area-inset-bottom)) + var(--ww-raise));
   z-index: 15;
   display: flex;
   flex-direction: column-reverse;
@@ -33,9 +33,23 @@
   --ww-plate: var(--panel-2);
   --ww-lift: 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 10px 28px -8px rgba(0, 0, 0, 0.7);
 }
-/* the page keeps the widget's height clear at its bottom, so the last row is never under it */
+/* the page keeps the widget's height clear at its bottom (+ its raise), so the last row is never under it */
+:root {
+  --ww-clear: 72px;
+  --ww-raise: 0px;
+}
 .wrap {
-  padding-bottom: calc(var(--ww-clear, 72px) + env(safe-area-inset-bottom));
+  padding-bottom: calc(var(--ww-clear) + var(--ww-raise) + env(safe-area-inset-bottom));
+}
+/* the repo label (card #505, app.css .repo-link: fixed bottom-left, 90 px wide with its text at 12 px from the edge,
+   a 30 px mark below 640 px) and the plate at its widest (3 segments, 2-digit counts, full avatar stacks: 596 px
+   measured at 700 and 1280) meet when 12 + 90 + 12 + plate + 16 > the viewport: 726 px today; 760 px leaves 630 px
+   for it (3-digit counts). Below that the plate rises by the label's box + one gutter (--repo-link-clear) and the
+   page clears the extra height. */
+@media (max-width: 760px) {
+  :root {
+    --ww-raise: var(--repo-link-clear);
+  }
 }
 
 /* ---- the plate ---- */

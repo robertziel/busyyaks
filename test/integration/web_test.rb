@@ -87,6 +87,7 @@ class WebTest < Minitest::Test
     assert_equal 200, last_response.status
     assert_includes last_response.body, '<meta name="csrf-token" content="'
     assert_includes last_response.body, '<meta name="user-email" content="owner@example.com">'
+    assert_includes last_response.body, Busyyaks::RepoLink.html # card #505: the repo label on every SPA page
     assert_match(%r{<script type="module" src="/app/assets/[^"]+\.js"></script>}, last_response.body)
     refute_includes last_response.body, "<script>x</script>"
     get "/reports/components" # any client route → the same shell
@@ -290,6 +291,7 @@ class WebTest < Minitest::Test
     assert_equal 200, last_response.status
     assert_includes last_response.body, '<p id="stub-login">stub sign-in</p>'
     assert_includes last_response.body, '<script src="/auth/stub-login.js" defer></script>'
+    assert_includes last_response.body, Busyyaks::RepoLink.html # card #505: the repo label on the server pages too
     sign_in
     get "/login"
     assert_equal "/", URI(last_response.location).path, "signed in → the app"

@@ -85,6 +85,9 @@ module Busyyaks
 
       def e(s) = ERB::Util.h(s.to_s)
 
+      # the bottom-left label linking to busyyaks's public repo (card #505), on the shell and every server page
+      def repo_link = RepoLink.html
+
       # every page's custom skins (card #361, Busyyaks::Skins: the skins/<key>.yml files): skins_meta for
       # <meta name="skins"> (skin.js reads it before first paint), skins_css for the <style> after app.css
       def skins_head
