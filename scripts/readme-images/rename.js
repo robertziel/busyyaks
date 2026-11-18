@@ -6,13 +6,16 @@
 //   busyyaks' own working slug (the live checkout's dir)  → busyyaks (every spelling)
 //   the projects named in spec input `keep` (KEEP)        → kept as they are (busyyaks' own other projects); every
 //                                                            name is still checked by the gate's terms
-//   busyyaks' public repos (spec.ownRepos)                → kept; every other owner/repo is another project
+//   busyyaks' public repos (spec.ownRepos)                → kept behind github.com/ (links); bare, as text, by their
+//                                                            repo name alone (no owner login on screen); every other
+//                                                            owner/repo is another project
 //   every other project and group, in /api/projects order → acme-N / group-N: its slug, its slug as a tmux session
 //                                                            name, its repo name, each with _ - / spellings, as a
 //                                                            whole word anywhere, any case (an ordinary word that is
 //                                                            also a project's name is renamed too)
 //   a card, commit, report or question of another project → "Task N" / "Commit N" / … (its text never shown)
-//   another project's tmux session / agent                → agent_N (claude-agent_N, …), also in its links
+//   another project's tmux session / agent                → agent_N (claude-agent_N, …), also in its links; a session
+//                                                            outside every tracked repo too
 //   busyyaks' own text that holds a private term          → the same placeholders (the term list: read at capture
 //                                                            time from the private-term files, never written here)
 //   an email                                              → "operator" (no @ left)
@@ -58,6 +61,10 @@ const KEPT_HOSTS = new Set(["127.0.0.1", "localhost", "github.com", "ci.example.
 const isHost = (h) => /^\d/.test(h) || !FILE_EXT.test(h.split(".").pop());
 const hostsIn = (s) => [...s.matchAll(HOST)].map((m) => ({ host: m[2], index: m.index })).filter((h) => isHost(h.host));
 const GITHUB_REPO = /\bgithub\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)/g;
+// A bare owner/repo as a whole word: never part of a path (github.com/owner/repo, a/owner/repo) or a longer name
+// (owner/repo_x, owner/repo.git); a sentence's full stop after it still ends it
+const bareRepoRegExp = (repo, flags = "gi") =>
+  new RegExp(`(^|[^A-Za-z0-9./_-])${esc(repo)}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9]|/[A-Za-z0-9])`, flags);
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
 
 // The GitHub repos /api/today names (your merged PRs): every one of them, or an error naming what is missing
@@ -158,6 +165,8 @@ function makeRenamer(spec) {
     );
     for (const [re, generic] of names) out = out.replace(re, (m, pre) => `${pre}${generic}`);
     for (const re of people) out = out.replace(re, (m, pre) => `${pre}Dev Example`);
+    for (const repo of spec.ownRepos)
+      out = out.replace(bareRepoRegExp(repo), (m, pre) => `${pre}${repo.split("/").pop()}`);
     return out;
   };
 
@@ -166,7 +175,9 @@ function makeRenamer(spec) {
   const isRepo = (v) => /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(v);
   const otherValue = (v) =>
     spec.others.includes(v) || (isRepo(v) && !spec.ownRepos.includes(v) && !isOwnWorkingRepo(v));
-  const isOther = (o) => PROJECT_KEYS.some((k) => typeof o[k] === "string" && otherValue(o[k]));
+  // the agents sidebar's group of sessions outside every tracked repo (slug null): not busyyaks, so another's
+  const untracked = (o) => "slug" in o && o.slug === null && Array.isArray(o.sessions);
+  const isOther = (o) => untracked(o) || PROJECT_KEYS.some((k) => typeof o[k] === "string" && otherValue(o[k]));
   const FREE = {
     title: "Task",
     subject: "Commit",
@@ -255,6 +266,10 @@ function leaks(text, spec) {
     const repo = `${m[1]}/${m[2]}`;
     if (!spec.ownRepos.includes(repo) && repo !== "acme/acme-repo") found.push(["GitHub repo", `offset ${m.index}`]);
   }
+  for (const repo of spec.ownRepos) {
+    const m = text.match(bareRepoRegExp(repo, "i"));
+    if (m) found.push(["owner login", `offset ${m.index}`]);
+  }
   spec.others.forEach((slug, i) => {
     for (const name of nameVariants(slug))
       if (nameRegExp(name).test(text)) found.push(["project name", `project ${i + 1} of the dashboard`]);
@@ -268,5 +283,49 @@ function leaks(text, spec) {
   return found;
 }
 
+// A word the page splits with <wbr> (the Links rail breaks a repo name at its _) is one word on screen, while each
+// piece is its own text node. children = an element's child nodes in order, each {text: "…"} | {wbr: true} |
+// {element: true} → the runs of 2+ text pieces joined across a <wbr>: [{nodes: [child index, …], text}]. An element
+// child ends a run (it is never part of the word).
+function wbrRuns(children) {
+  const runs = [];
+  let cur = null;
+  const close = () => {
+    if (cur && cur.wbr && cur.nodes.length > 1)
+      runs.push({ nodes: cur.nodes, text: cur.nodes.map((i) => children[i].text).join("") });
+    cur = null;
+  };
+  children.forEach((c, i) => {
+    if (typeof c.text === "string") (cur ??= { nodes: [], wbr: false }).nodes.push(i);
+    else if (c.wbr) (cur ??= { nodes: [], wbr: false }).wbr = true;
+    else close();
+  });
+  close();
+  return runs;
+}
+
+// The rule on those runs: Map(child index → its new text) for each run whose joined text the rule changes — the whole
+// renamed word in the run's first piece, the others emptied; <wbr> and element children are never touched
+function renameRuns(children, rename) {
+  const out = new Map();
+  for (const run of wbrRuns(children)) {
+    const t = rename(run.text);
+    if (t === run.text) continue;
+    run.nodes.forEach((i, k) => out.set(i, k === 0 ? t : ""));
+  }
+  return out;
+}
+
 if (typeof module !== "undefined")
-  module.exports = { makeRenamer, leaks, specFrom, mergedRepos, nameRegExp, nameVariants, hostsIn, KEPT_HOSTS };
+  module.exports = {
+    makeRenamer,
+    leaks,
+    specFrom,
+    mergedRepos,
+    nameRegExp,
+    nameVariants,
+    hostsIn,
+    KEPT_HOSTS,
+    wbrRuns,
+    renameRuns,
+  };

@@ -20,7 +20,7 @@ kind() {
 status() {
   k=$(kind "$1") || return 1
   case $k in
-    thinking | tool | permission) echo '"busy"' ;;
+    thinking | tool | writing | subagents | working | permission) echo '"busy"' ;;
     idle) echo '"idle"' ;;
     *) echo "collector: session $1 has an unknown screen kind $k" >&2; return 1 ;;
   esac

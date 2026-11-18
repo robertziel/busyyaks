@@ -80,7 +80,7 @@ taken from a real deployment:
 # auth none on 127.0.0.1, stand-in tmux sessions and agent-session collector (scripts/readme-images/collector)
 README_DEMO_WEB_PORT=18241 README_DEMO_MCP_PORT=18242 scripts/readme-images/demo-stack up /tmp/rd
 # seed it (the board through the MCP tools + operator API, the merged PRs into the demo DB), capture every screenshot in
-# the light skin — the module's with its part outlined and the host dimmed — and check every captured word against the
+# the dark skin — the module's with its part outlined and the host dimmed — and check every captured word against the
 # term lists; writes docs/images/*.webp here and <module checkout>/docs/images/*.webp
 PRIVATE_TERMS=.private-terms:<module checkout>/.private-terms scripts/readme-images/build /tmp/rd <module checkout>
 scripts/readme-images/demo-stack down /tmp/rd && rm -rf /tmp/rd
@@ -91,6 +91,32 @@ scripts/readme-images/demo-stack down /tmp/rd && rm -rf /tmp/rd
 docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/w -v <module checkout>:/module -w /w python:3.13-slim \
   python scripts/readme-images/svgs.py /module [<article page.html>]
 ```
+
+**busyyaks' own five shots** (`today`, `board`, `card`, `today-mobile`, `workflow`) come from the same stage made from
+a **dump** of busyyaks' own board — reused for every capture, dumped again only to refresh its content:
+
+```sh
+# once: busyyaks' board on your live dashboard (cards, comments, checklists, labels, PRs + their last GitHub state, the
+# cards' pictures), its commit subjects of the last year and its merged PRs — renamed by the rule
+# (scripts/readme-images/rename.js) and gated (dump.js: every word; every picture read by tesseract, a card keeping
+# its newest clean one, each skip named in report.json) into a private dir outside the repo. Reads only.
+PRIVATE_TERMS=.private-terms:<the kanban module's private terms> scripts/readme-images/dump <live checkout> ~/.local/state/readme-dump
+# every capture: the stage with the dump's busyyaks repo + engine repo (enrolled, the dump's commits) beside acme/*;
+# build loads the dump (load-dump.rb), seeds what a quiet day lacks (seed-busyyaks.js: lead + workers + sub team,
+# labels, a question with options, a session dialog, a checklist, due dates, a sub-card, a cover, a review thread on
+# the README card, a daily report), captures, gates and writes docs/images/{today,board,card,today-mobile,workflow}.webp
+README_DEMO_WEB_PORT=18241 README_DEMO_MCP_PORT=18242 scripts/readme-images/demo-stack up ~/.local/state/rd --from ~/.local/state/readme-dump
+PRIVATE_TERMS=.private-terms:<module checkout>/.private-terms scripts/readme-images/build ~/.local/state/rd <module checkout>
+```
+
+The picture gate reads a picture's **words** only (tesseract): a face, a logo or an icon with no text passes it, so
+look at the kept pictures once before the first build — `dump` prints their paths, `<dumpdir>/report.json` lists kept
+and skipped (card, picture, kinds); `DROP=<file>` (outside the dump dir, one picture id per line) rules one out by
+hand. Real pictures are kept only where a README shot shows one: the README card's, and the covers of the board's first
+`COVER_COLUMNS` (default 5) columns. `CARD` (required) is the card the README opens, `PICTURES` (default 10) how many
+of its pictures it keeps, `CANDIDATES` (default 8) how many of each other card's newest are tried.
+
+`scripts/readme-images/live` (the shots straight off the live dashboard, renamed in the page) stays for a one-off.
 
 The workdir path must stay under 80 bytes (the collector's unix socket lives in it). `build` refuses to write any image
 when a term is in the captured text, in the scripts, in the SVGs or in the READMEs, or when an image is over 400 KB.

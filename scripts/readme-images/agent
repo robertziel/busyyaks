@@ -8,6 +8,8 @@
 # No screen = it exits naming the file, and bin/launcher's start check refuses the launch.
 # {elapsed} in a screen = the time since this agent started (its one turn began at Launch), as Claude Code's status line
 # counts a turn: what its session wrote on a card since stays inside the turn (the card dialog shows it at work there).
+# {tokens} = the turn's ↓ count, rising 0.1k a second from 2.0k: output streaming, which bin/launcher reads as writing
+# (Busyyaks::AgentActivity.settle: the count rose between two reads of the pane).
 # Its sleep child keeps the launcher's start check satisfied.
 # Kind hermes: bin/launcher's start check asks `<command> skills list` in the session's own environment whether the
 # per-launch entry skill is listed (docs/DEPLOY.md § Skills). The stand-in answers as hermes would with the
@@ -31,11 +33,12 @@ while :; do
     echo "readme-agent: no screen for session $session ($f; scripts/readme-images/build writes it before seeding)" >&2
     exit 1
   fi
-  now=$(sed "s/{elapsed}/$((t / 60))m $((t % 60))s/" "$f")
+  k=$((20 + t))
+  now=$(sed -e "s/{elapsed}/$((t / 60))m $((t % 60))s/" -e "s/{tokens}/$((k / 10)).$((k % 10))k/" "$f")
   if [ "$now" != "$shown" ]; then
     clear
     printf '%s\n' "$now"
     shown=$now
   fi
-  sleep 2
+  sleep 1
 done

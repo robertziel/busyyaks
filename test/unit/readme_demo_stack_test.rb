@@ -6,6 +6,7 @@ require "json"
 require "open3"
 require "tmpdir"
 require "yaml"
+require "busyyaks/agent_activity"
 
 # The README screenshots' stage (scripts/readme-images/demo-stack) writes its own .env and config/busyyaks.yml. Every
 # key compose requires and every key the config loader requires has no default, so a key added to .env.example or to
@@ -18,6 +19,8 @@ class ReadmeDemoStackTest < Minitest::Test
   NOT_THE_STACKS = %w[TLS_CERT_PATH TLS_KEY_PATH PROXY_UPSTREAM FRPC_SUBDOMAIN CI_GITHUB_READ_TOKEN CI_GITHUB_CACHE_DIR].freeze
   # optional in the loader: a deployment adds engines, the daily-report runners it may execute
   OPTIONAL_CONFIG = %w[engines daily_report_runners].freeze
+  # mappings whose keys are a deployment's data, not config keys: ci.required = repo → its required checks
+  DATA_MAPPINGS = %w[ci.required].freeze
 
   def heredoc(marker, tag)
     body = STACK[/#{Regexp.escape(marker)} <<#{tag}\n(.*?)\n#{tag}\n/m, 1]
@@ -38,6 +41,26 @@ class ReadmeDemoStackTest < Minitest::Test
     stage = YAML.safe_load(heredoc('cat > "$w/config/busyyaks.yml"', "YML"))
     assert_empty example.keys - OPTIONAL_CONFIG - stage.keys, "config keys the README demo stage does not write"
     assert_empty example.fetch("launch").keys - stage.fetch("launch").keys, "launch keys the stage does not write"
+  end
+
+  # every nested key too, wherever the example and the stage both hold a mapping (agents.collector's timeouts were
+  # added to the example and not here: the stage's launcher refused to start)
+  def test_the_stage_config_has_every_nested_key_the_example_has
+    example = YAML.safe_load_file(File.join(ROOT, "config/busyyaks.example.yml"))
+    stage = YAML.safe_load(heredoc('cat > "$w/config/busyyaks.yml"', "YML"))
+    missing = []
+    walk = lambda do |ex, st, where|
+      return unless ex.is_a?(Hash) && st.is_a?(Hash)
+
+      ex.each do |k, v|
+        next missing << "#{where}#{k}" unless st.key?(k)
+        next if DATA_MAPPINGS.include?("#{where}#{k}")
+
+        walk.call(v, st[k], "#{where}#{k}.")
+      end
+    end
+    walk.call(example.except(*OPTIONAL_CONFIG), stage, "")
+    assert_empty missing, "nested config keys the README demo stage does not write"
   end
 
   # the stand-in agent is the stage's one launch command: seed.js makes it every type's launcher
@@ -78,7 +101,8 @@ class ReadmeDemoStackTest < Minitest::Test
 
   def test_the_collector_reads_each_kind
     with_collector_dir do |d|
-      { "thinking" => ['"busy"', "null"], "permission" => ['"busy"', '"permission"'], "idle" => ['"idle"', "null"] }
+      busy = %w[thinking tool writing subagents working].to_h { [_1, ['"busy"', "null"]] }
+      busy.merge("permission" => ['"busy"', '"permission"'], "idle" => ['"idle"', "null"])
         .each do |kind, (status, waiting)|
           File.write(File.join(d, "kinds", "s"), "#{kind}\n")
           assert_equal [status, waiting], [run_collector(d, "status s")[0].strip, run_collector(d, "waiting_for s")[0].strip]
@@ -88,6 +112,25 @@ class ReadmeDemoStackTest < Minitest::Test
       refute st.success?
       assert_includes err, "unknown screen kind dancing"
     end
+  end
+
+  # each screen the stand-in draws (scripts/readme-images/screens/) reads as its phase, as bin/launcher reads it: the
+  # board shot's Working lane shows one session per phase. Writing = the ↓ count rose
+  # between two reads ({tokens} rises a 0.1k each second the agent runs); working = a status line and no evidence.
+  def test_each_screen_reads_as_its_phase
+    read = lambda do |kind, t|
+      screen = File.read(File.join(ROOT, "scripts/readme-images/screens/#{kind}.txt"))
+      Busyyaks::AgentActivity.claude(screen.gsub("{elapsed}", "1m #{t}s").gsub("{tokens}", format("%.1fk", 2 + (t / 10.0))))
+    end
+    assert_equal({ "thinking" => "thinking", "tool" => "tool", "subagents" => "subagents" },
+                 %w[thinking tool subagents].to_h { [_1, read.call(_1, 5)&.dig(:phase)] })
+    first, memo = Busyyaks::AgentActivity.settle(read.call("writing", 5), nil, 100)
+    assert_nil first[:phase], "one read is no evidence of writing"
+    assert_equal "writing", Busyyaks::AgentActivity.settle(read.call("writing", 7), memo, 102)[0][:phase]
+    still, memo = Busyyaks::AgentActivity.settle(read.call("working", 5), nil, 100)
+    assert_nil still[:phase]
+    assert_nil Busyyaks::AgentActivity.settle(read.call("working", 7), memo, 102)[0][:phase], "working: the count never rises"
+    %w[idle permission].each { |k| assert_nil read.call(k, 5)&.dig(:phase), k }
   end
 
   # the stand-in agent with no screen exits, naming the file (bin/launcher's start check then refuses the launch)

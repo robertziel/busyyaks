@@ -6,8 +6,9 @@
 #
 #   README_DEMO_WEB_PORT=… README_DEMO_MCP_PORT=… scripts/readme-images/demo-stack up <workdir>
 #   PRIVATE_TERMS=<file>[:<file>…] scripts/readme-images/build <workdir> <module checkout>
-#     → <workdir>/images/busyyaks/{today,board,card,today-mobile,workflow}.webp (the demo's: busyyaks's README images
-#       come from the live dashboard, scripts/readme-images/live)
+#     → <workdir>/images/busyyaks/{today,board,card,today-mobile,workflow}.webp; on a stage made from a dump
+#       (demo-stack up … --from <dumpdir>: busyyaks' own board, renamed and gated) they are busyyaks' README images and
+#       go to this checkout's docs/images/ too, taken on the busyyaks board (the dump's, plus seed-busyyaks.js)
 #     → <module checkout>/docs/images/{board,card,launch-bar,workflow-editor}.webp
 #   scripts/readme-images/demo-stack down <workdir>
 #
@@ -47,6 +48,23 @@ SESSIONS=(
   "acme_storefront_worker_1 tool"
   "acme_storefront_team permission"
 )
+# the busyyaks board's sessions (seed-busyyaks.js), on a stage made from a dump
+dumped=""
+[ -e "$w/dump" ] && dumped=$(cat "$w/dump")
+# (the operator's ask: two need you — the lead's question, the sub team's dialog —, five working, each phase its own
+# screen, two idle (the lead's question puts it under Needs you); seed-busyyaks.js launches them in this order)
+BUSYYAKS_SESSIONS=(
+  "busyyaks_teamlead idle"
+  "busyyaks_worker thinking"
+  "busyyaks_worker_1 tool"
+  "busyyaks_team permission"
+  "busyyaks_worker_2 writing"
+  "busyyaks_worker_3 subagents"
+  "busyyaks_worker_4 working"
+  "busyyaks_worker_5 idle"
+  "busyyaks_worker_6 idle"
+)
+[ -n "$dumped" ] && SESSIONS+=("${BUSYYAKS_SESSIONS[@]}")
 for pair in "${SESSIONS[@]}"; do
   read -r session kind <<< "$pair"
   [ -r "$here/screens/$kind.txt" ] || { echo "build: no screen $kind for $session" >&2; exit 1; }
@@ -54,33 +72,52 @@ for pair in "${SESSIONS[@]}"; do
   cp "$here/screens/$kind.txt" "$w/collector/screens/$session"
 done
 
+dc() { docker compose -p readme-demo --project-directory "$w" --env-file "$w/.env" -f "$repo/docker-compose.yml" -f "$w/override.yml" "$@"; }
+# the dump first: its cards keep their ids (the README opens its card by id), the seeded ones come after
+if [ -n "$dumped" ] && [ ! -e "$w/loaded" ]; then
+  dc exec -T -e DUMP_DIR=/dump web bundle exec ruby -I lib - load < "$here/load-dump.rb"
+  touch "$w/loaded"
+fi
 if [ ! -e "$w/seeded" ]; then
   docker run --rm --network host -e WEB="$web" -e MCP="$mcp" -e MCP_TOKEN="$token" \
     -v "$here:/s:ro" -v "$repo/vendor/agents_kanban/fixtures/boards:/boards:ro" "$NODE" node /s/seed.js > "$w/seeded.tmp"
-  docker compose -p readme-demo --project-directory "$w" --env-file "$w/.env" -f "$repo/docker-compose.yml" \
-    -f "$w/override.yml" exec -T web bundle exec ruby -I lib - < "$here/seed-github.rb"
+  dc exec -T web bundle exec ruby -I lib - < "$here/seed-github.rb"
   mv "$w/seeded.tmp" "$w/seeded"
+fi
+readme_card=""
+if [ -n "$dumped" ]; then
+  readme_card=$(cat "$dumped/card")
+  [[ "$readme_card" =~ ^[1-9][0-9]*$ ]] || { echo "build: $dumped/card holds no card id" >&2; exit 1; }
+  if [ ! -e "$w/seeded-busyyaks" ]; then
+    docker run --rm --network host -e WEB="$web" -e MCP="$mcp" -e MCP_TOKEN="$token" -e CARD="$readme_card" \
+      -v "$here:/s:ro" "$NODE" node /s/seed-busyyaks.js > "$w/seeded-busyyaks.tmp"
+    mv "$w/seeded-busyyaks.tmp" "$w/seeded-busyyaks"
+  fi
 fi
 card=$(sed -nE 's/.*"card":([0-9]+).*/\1/p' "$w/seeded")
 [ -n "$card" ] || { echo "build: no card id in $w/seeded" >&2; exit 1; }
 # the sessions Launch started are exactly the ones above (a name the launcher chose otherwise has no screen)
-launched=$(sed -nE 's/.*"sessions":\[([^]]*)\].*/\1/p' "$w/seeded" | tr ',' '\n' | tr -d '"' | sort)
+launched=$(cat "$w/seeded" ${dumped:+"$w/seeded-busyyaks"} | sed -nE 's/.*"sessions":\[([^]]*)\].*/\1/p' | tr ',' '\n' | tr -d '"' | sort)
 expected=$(printf '%s\n' "${SESSIONS[@]}" | cut -d' ' -f1 | sort)
 [ "$launched" = "$expected" ] ||
   { printf 'build: seed.js launched [%s], the screens are for [%s]\n' "$launched" "$expected" | tr '\n' ' ' >&2; exit 1; }
 
 # the board turns a session's permission dialog into a question on its card once the dialog has stayed on screen
 # (config/kanban.yml session_dialogs.settle_seconds) — the images show it asked, so wait for it
-dialog=$(sed -nE 's/.*"dialog":([0-9]+).*/\1/p' "$w/seeded")
-[ -n "$dialog" ] || { echo "build: no dialog card id in $w/seeded" >&2; exit 1; }
-asked() { curl -fsS "$web/api/cards/$dialog" | grep -q '"question":"[^"]'; }
-for _ in $(seq 1 60); do asked && break; sleep 2; done
-asked || { echo "build: the permission dialog on card $dialog never became a question" >&2; exit 1; }
+for seeded in "$w/seeded" ${dumped:+"$w/seeded-busyyaks"}; do
+  dialog=$(sed -nE 's/.*"dialog":([0-9]+).*/\1/p' "$seeded")
+  [ -n "$dialog" ] || { echo "build: no dialog card id in $seeded" >&2; exit 1; }
+  asked() { curl -fsS "$web/api/cards/$dialog" | grep -q '"question":"[^"]'; }
+  for _ in $(seq 1 60); do asked && break; sleep 2; done
+  asked || { echo "build: the permission dialog on card $dialog never became a question" >&2; exit 1; }
+done
+# the dump's PR states as GitHub answered them, read now (the stage runs no poller; the board shows a recent read only)
+[ -z "$dumped" ] || dc exec -T -e DUMP_DIR=/dump web bundle exec ruby -I lib - touch < "$here/load-dump.rb"
 
 rm -rf "$w/raw" "$w/images"
 mkdir -p "$w/raw" "$w/images/busyyaks" "$w/images/module"
 docker run --rm --network host -u "$(id -u):$(id -g)" -e HOME=/tmp -e WEB="$web" -e CARD="$card" \
-  -e OUT_BUSYYAKS=/out/busyyaks -e OUT_MODULE=/out/module -e RAW=/raw \
+  -e OUT_BUSYYAKS=/out/busyyaks -e OUT_MODULE=/out/module -e RAW=/raw -e BUSYYAKS_CARD="$readme_card" \
   -v "$w/images:/out" -v "$w/raw:/raw" -v "$here:/s:ro" "$PLAYWRIGHT" \
   sh -euc 'mkdir -p /tmp/w && cd /tmp/w && npm init -y >/dev/null && npm install --silent playwright@1.63.0 >/dev/null && NODE_PATH=/tmp/w/node_modules node /s/capture.js'
 
@@ -98,4 +135,5 @@ MAX_BYTES=409600
 big=$(find "$w/images" -name '*.webp' -size +"$MAX_BYTES"c)
 [ -z "$big" ] || { echo "build: over $MAX_BYTES bytes: $big; docs/images/ left as they were" >&2; exit 1; }
 cp "$w"/images/module/*.webp "$module/docs/images/"
+[ -z "$dumped" ] || cp "$w"/images/busyyaks/*.webp "$repo/docs/images/"
 echo "build: no private term in $(cat "$w"/raw/*.txt | wc -w) captured words + the scripts + the SVGs → the module's docs/images/, the demo's busyyaks images in $w/images/busyyaks/"

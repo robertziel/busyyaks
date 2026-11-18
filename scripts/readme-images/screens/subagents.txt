@@ -1,0 +1,10 @@
+● Dispatched the QA agent and the reviewer on head 4c1e2a9,
+  in parallel; CI runs on the same head.
+
+✻ Waiting for 2 background agents to finish
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 2 background tasks · ↓ to manage
+  ◯ general-purpose  QA on the PR head  1m 12s · ↓ 18.4k tokens
+  ◯ general-purpose  Reviewer round 1  58s · ↓ 9.7k tokens

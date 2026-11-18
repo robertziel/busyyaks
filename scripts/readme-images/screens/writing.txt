@@ -1,0 +1,11 @@
+● Read(frontend/src/components/TodayParts.tsx)
+  ⎿  Read 212 lines
+
+● The waiting widget now counts each kind on its own. Writing
+  the vitest cases for the approved segment next: a gate card
+
+✢ Composing… ({elapsed} · ↓ {tokens} tokens)
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · esc to interrupt
