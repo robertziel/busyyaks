@@ -30,8 +30,8 @@ with you. :)
 
 <table>
   <tr>
-    <td width="50%" valign="top"><img src="docs/images/board.webp" alt="A project's board: …"></td>
-    <td width="50%" valign="top"><img src="docs/images/card.webp" alt="A card opened: …"></td>
+    <td width="50%" valign="top"><img src="docs/images/board.webp" alt="busyyaks' own board: the session lanes (Needs you 2: the lead's question with its choices, the sub team's permission dialog with its keys; Working 5: thinking, a running tool, writing, waiting for subagents, working; Quiet 2: idle), the launch bar, the column counts and the label filters, and the columns with cards — screenshot covers, labels, due dates, flags and the session that owns each"></td>
+    <td width="50%" valign="top"><img src="docs/images/card.webp" alt="A busyyaks card opened: its hand-off box with the PR, the CI build, how to check it and its screenshots, its review thread (the operator, QA, author and reviewer comments with their status headers), and the Links rail with the PRs grouped by role, the CI build, branches and repo links"></td>
   </tr>
 </table>
 
@@ -57,14 +57,15 @@ timer). All state is one database: a SQLite file by default, or PostgreSQL ([Dat
 **one operator on one Linux box**: see [When not to use it](#when-not-to-use-it).
 
 <p align="center">
-  <img src="docs/images/today.webp" width="960" alt="The Today page in the dark skin: commit, own-commit, repo and merged-PR tiles with 7-day sparklines, a year-long commit heatmap, a 7-day table and the list of merged PRs; the agents sidebar on the right lists the running agent sessions per project (needs input, PR review, finished); the waiting widget in the corner counts to answer, to review and external. Projects other than busyyaks are shown as acme-N">
+  <img src="docs/images/today.webp" width="960" alt="The Today page in the dark skin: commit, own-commit, repo and merged-PR tiles with 7-day sparklines, the uncommitted and unpushed repos, today's commits across busyyaks and the demo's other repos, the list of merged PRs, the latest report and a 7-day table; the agents sidebar on the right lists the running agent sessions per project (needs input, PR review, thinking, tool, each with its card); the waiting widget in the corner counts to answer, to review, external and approved">
 </p>
 
 <p align="center"><sub><b>Today</b> (dark skin): the numbers come from the scanner's git reads and from GitHub, never
-from a model. The right rail lists the live agent sessions per project. The screenshots are the author's own dashboard
-building busyyaks: every other project is renamed <code>acme-N</code> and its text replaced, emails, hosts and people's
-pictures removed, and a gate refuses any private word left — captured with
-<a href="scripts/readme-images/live"><code>scripts/readme-images/live</code></a>.</sub></p>
+from a model. The right rail lists the live agent sessions per project. The screenshots are busyyaks' own board, dumped
+from the author's dashboard (every other project renamed <code>acme-N</code>, emails and hosts removed, each picture
+read by OCR, a gate refusing any private word) and loaded into a throwaway stage beside synthetic <code>acme/*</code>
+repos — <a href="scripts/readme-images/dump"><code>scripts/readme-images/dump</code></a>, then
+<code>demo-stack up --from</code> and <code>build</code> (docs/TESTING.md § README images).</sub></p>
 
 ## The project
 
@@ -334,7 +335,7 @@ over projects, cards, commits and reports (`⌘K`).
 **Desktop app**: the dashboard runs as an app in a window of its own — see [Desktop app](#desktop-app).
 
 <p align="center">
-  <img src="docs/images/board.webp" width="960" alt="busyyaks' own board: the session lanes on top (Needs you: a PR to review; Quiet: finished workers) and the launch bar with Launch, Worker, Sub team and Plain on their launcher; the column counts (waiting for you, waiting for CI, Local and Public review loops, Done); below them the columns Backlog, To do, In progress and Local: Agent review with cards, their picture covers, review rounds and the session that owns each">
+  <img src="docs/images/board.webp" width="960" alt="busyyaks' own board: the session lanes on top (Needs you 2: the lead's question with its choices and the sub team's permission dialog with its keys; Working 5, one per phase: thinking, a running tool, writing, waiting for its subagents, working; Quiet 2: idle) and the launch bar with Launch, Worker, Sub team and Plain; the column counts (waiting for you, approved, blocked externally, Local and Public review loops, Done) and the label filters; below them the board's columns with cards: screenshot covers, labels, due dates (one overdue), priorities, the needs-you and dialog flags and the session that owns each">
 </p>
 
 <p align="center"><sub><b>Board</b>: the session lanes say who needs you (answer a dialog or a question in place),
@@ -343,8 +344,8 @@ card shows the session that owns it and whether anyone is listening.</sub></p>
 
 <table>
   <tr>
-    <td width="72%"><img src="docs/images/card.webp" alt="A busyyaks card (the waiting widget's kind counters) opened in Awaiting merge: its hand-off box with the public PR, the CI build, how to check it and its screenshots (drawn as blank plates), the Links rail with the local and public PRs and their state, the CI build, branches and commits, and the owner session panel with its Claude, iTerm and Terminal links and the last ping"></td>
-    <td width="28%"><img src="docs/images/today-mobile.webp" alt="The Today page on a phone in the dark skin: the stat tiles two per row, the commit heatmap and the waiting widget"></td>
+    <td width="72%"><img src="docs/images/card.webp" alt="A busyyaks card (its subject: the waiting widget's kind counters) opened in Done: its hand-off box with the public PR, the CI build, how to check it and its screenshots, then its activity — the comment box and the review thread (the operator's comment, the QA agent's PASS table, the author's FIXED and the reviewer's OPEN with their status headers); the Links rail with the local and public PRs grouped by role and their state, the CI build, branches and repo links, and the owner session panel with its session, links and last ping"></td>
+    <td width="28%"><img src="docs/images/today-mobile.webp" alt="The Today page on a phone in the dark skin: the stat tiles two per row, the uncommitted and unpushed repos, today's commits and the waiting widget"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Card</b>: the hand-off (PR, CI, how to check it), its PRs and their state, and the session comments are typed into.</sub></td>
@@ -526,7 +527,7 @@ A board's workflow is data, stored in the database: its **columns**, each of one
 | API | `GET` / `POST` / `DELETE /api/projects/<slug>/workflow` ([`docs/API-kanban.md`](docs/API-kanban.md)) |
 
 <p align="center">
-  <img src="docs/images/workflow.webp" width="720" alt="The Workflow graph editor on busyyaks' own 15-column board, top to bottom: Backlog (parked) → To do (queued) → In progress (working) → Agent review ↔ Author response loops, Local and Public Human review, Deploy check and Awaiting merge gates marked waits for you, Done and Cancelled; each arrow is a named transition such as Start work, Hand over, Approve, Merge, Rework; the column list with each column's type is on the right">
+  <img src="docs/images/workflow.webp" width="720" alt="The Workflow graph editor on busyyaks' own 15-column board, top to bottom: Backlog (parked) → To do (queued) → In progress (working) → Agent review ↔ Author response loops, Local and Public Human review, Deploy check and Awaiting merge gates marked waits for you, Done and Cancelled; each arrow is a named transition such as Start work, Hand over, Approve, Merge (Rework, from every review and gate, is a note on In progress); the column list with each column's type is on the right">
 </p>
 
 <p align="center"><sub><b>Workflow</b>: busyyaks' own board, the engine's local-repo shape (15 columns, two review

@@ -5,10 +5,16 @@
 # runs the sessions seed.js Launches (lead first) as stand-in agents (scripts/readme-images/agent) drawing Claude Code
 # screens, read through a stand-in collector (scripts/readme-images/collector). Nothing of a real deployment is read.
 #
-#   scripts/readme-images/demo-stack up <workdir>     build + start (prints the web and MCP URLs)
+#   scripts/readme-images/demo-stack up <workdir> [--from <dumpdir>]   build + start (prints the web and MCP URLs)
 #   scripts/readme-images/demo-stack down <workdir>   stop and remove the containers (workdir kept)
 #
 # Then scripts/readme-images/build <workdir> <module checkout> seeds the demo and captures the images.
+#
+# --from <dumpdir> (scripts/readme-images/dump: busyyaks' own board, renamed and gated): the README's busyyaks stage.
+# Two more repos, `busyyaks` (the dump's commit subjects of the last year, on its working branch `local`) and
+# `busyyaks_kanban_engine`, both enrolled as own-mode local repos with the demo's remotes (dev-example/<name>_dev →
+# dev-example/<name>, the names dump.js gives their PRs); the dump mounted read-only into web at /dump, where build
+# loads it (load-dump.rb) before seeding.
 # Ports: README_DEMO_WEB_PORT / README_DEMO_MCP_PORT (both required, free ports on 127.0.0.1). The workdir: at most 80
 # bytes, and no dir above it writable by group / other (bin/launcher refuses a socket dir under e.g. /tmp) — e.g.
 # ~/.local/state/readme-demo.
@@ -60,15 +66,69 @@ make_repo() {
     git checkout -q main' sh "$slug" "$seed"
 }
 
+# busyyaks' own repo from a dump: its commit subjects (commits.tsv: <epoch>\t<subject>, newest first) replayed oldest
+# first on `local` by the demo author, each moved forward by the dump's age ($5 s: the board's times move the same),
+# `main` at the same tip; enrolled like the live checkout (the guard.*
+# keys the scanner reads) with the demo's remotes, so the board reads the dump's local and public PRs as this repo's.
+make_dump_repo() {
+  local w=$1 slug=$2 public=$3 commits=$4 shift=$5
+  docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$w/projects:/p" -v "$commits:/commits.tsv:ro" -w /p \
+    --entrypoint sh "$IMAGE" -euc '
+    slug=$1; public=$2; shift=$3; mkdir -p "$slug"; cd "$slug"
+    git init -q -b local
+    git remote add origin "https://github.com/dev-example/${public}_dev.git"
+    git remote add upstream "https://github.com/dev-example/$public.git"
+    git config guard.mode own
+    git config guard.mirrorRemote origin
+    git config guard.upstreamRemote upstream
+    git config guard.publicRemote upstream
+    git config guard.localBranch local
+    git config guard.publicBase upstream/main
+    # bytes, not characters (fast-import counts bytes); the subject = everything after the first tab
+    tac /commits.tsv | LC_ALL=C awk -F "\t" -v shift="$shift" "BEGIN { mark = 1 }
+      NF >= 2 && \$1 ~ /^[0-9]+\$/ {
+        msg = substr(\$0, index(\$0, \"\\t\") + 1); body = \"change \" mark \"\\n\"
+        print \"blob\"; print \"mark :\" mark; print \"data \" length(body) + 0; printf \"%s\", body; print \"\"
+        t = \$1 + shift
+        print \"commit refs/heads/local\"; print \"author Dev Example <dev@example.com> \" t \" +0000\"
+        print \"committer Dev Example <dev@example.com> \" t \" +0000\"
+        print \"data \" length(msg); print msg
+        print \"M 100644 :\" mark \" CHANGELOG.md\"; print \"\"
+        mark++
+      }" | git fast-import --quiet
+    [ "$(git rev-list --count local)" -gt 0 ] || { echo "demo-stack: no commit in the dump for $slug" >&2; exit 1; }
+    git branch -q main local
+    git update-ref refs/remotes/upstream/main local
+    # work in flight, as on a working checkout: the last 2 commits not pushed yet, one file not committed
+    git config branch.local.remote origin
+    git config branch.local.merge refs/heads/local
+    if [ "$(git rev-list --count local)" -gt 2 ]; then git update-ref refs/remotes/origin/local local~2; else git update-ref refs/remotes/origin/local local; fi
+    git checkout -q local
+    echo "notes in progress" > NOTES.md' sh "$slug" "$public" "$shift"
+}
+
 up() {
-  local checkout w
+  local checkout w dump=
   checkout=$(cd "$(dirname "$0")/../.." && pwd)
   mkdir -p "${1:?workdir}"
   w=$(cd "$1" && pwd)
+  if [ "${2:-}" = --from ]; then
+    dump=$(cd "${3:?--from <dumpdir>}" && pwd)
+    for f in board.json card commits.tsv merged.json attachments; do
+      [ -e "$dump/$f" ] || die "$dump has no $f: not a dump (scripts/readme-images/dump)"
+    done
+  elif [ -n "${2:-}" ]; then
+    die "usage: $0 up <workdir> [--from <dumpdir>]"
+  fi
   : "${README_DEMO_WEB_PORT:?a free port for the demo web app}" "${README_DEMO_MCP_PORT:?a free port for the demo MCP}"
   # the collector's read socket lives under it: a unix socket path has at most 107 bytes
   [ "${#w}" -le 80 ] || die "workdir path $w is longer than 80 bytes: pick a shorter one (a unix socket goes under it)"
   [ -e "$w/data" ] && die "$w/data exists: use a fresh workdir (down + rm -rf it first)"
+  # build's markers belong to the stack they were made on: one left over would skip a load or a seed
+  local m
+  for m in dump loaded seeded seeded-busyyaks; do
+    [ -e "$w/$m" ] && die "$w/$m exists (left from another stage): use a fresh workdir (down + rm -rf it first)"
+  done
   echo "$checkout" > "$w/checkout"
 
   docker build -q -t "$IMAGE" "$checkout" >/dev/null
@@ -83,18 +143,32 @@ up() {
   chmod 0700 "$w/launcher" "$w/launcher/run" "$w/launcher/state"
   local i=0
   for r in "${REPOS[@]}"; do i=$((i + 1)); make_repo "$w" "$r" "$i"; done
+  local repos=("${REPOS[@]}")
+  if [ -n "$dump" ]; then
+    echo "$dump" > "$w/dump"
+    local at age
+    at=$(grep -o '"exported_at":[0-9]*' "$dump/board.json" | cut -d: -f2)
+    [ -n "$at" ] || die "$dump/board.json has no exported_at"
+    age=$(( $(date +%s) - at ))
+    make_dump_repo "$w" busyyaks busyyaks "$dump/commits.tsv" "$age"
+    # the engine: its own enrolled repo (the dump's cards hold its PRs too); its history is not the README's subject:
+    # one commit, a month before the dump
+    printf '%s\tVendor the kanban engine\n' "$((at - 30 * 86400))" > "$w/engine-commits.tsv"
+    make_dump_repo "$w" busyyaks_kanban_engine busyyaks_agents_kanban_module "$w/engine-commits.tsv" "$age"
+    repos+=(busyyaks busyyaks_kanban_engine)
+  fi
 
   cp "$checkout/config/kanban.example.yml" "$w/config/kanban.yml"
   cat > "$w/config/busyyaks.yml" <<YML
 roots:
   - { path: /projects, prefix: "" }
 search_depth: 2
-owner_remotes: [github.com/acme/]
+owner_remotes: [github.com/acme/, github.com/dev-example/]
 author_emails: [dev@example.com]
 window_days: 7
 auth: { provider: none, allow_unauthenticated: true }
 reap_protect: []
-agents: { collector: { snapshot: $w/collector/snapshot.json, read_socket: $w/collector/read.sock } }
+agents: { collector: { snapshot: $w/collector/snapshot.json, read_socket: $w/collector/read.sock, tmux_timeout_seconds: 5, answer_timeout_seconds: 30 } }
 dictation: none
 terminal: { public_host: deny, max_open: 4 }
 skills: { max_bytes: 65536, max_start_bytes: 32768, project: deny, local_dir: null }
@@ -166,10 +240,11 @@ TEST_WORKERS=1
 ENV
   cat > "$w/override.yml" <<YML
 services:
-  web: { image: $IMAGE, restart: "no" }
+  web: { image: $IMAGE, restart: "no"${dump:+, volumes: ["$dump:/dump:ro"]} }
   mcp: { image: $IMAGE, restart: "no" }
   scanner: { image: $IMAGE, restart: "no" }
   notifier: { image: $IMAGE, restart: "no" }
+  writer: { image: $IMAGE, restart: "no" }
   launcher:
     image: $LAUNCHER_IMAGE
     network_mode: none
@@ -202,12 +277,13 @@ YML
   for _ in $(seq 1 60); do curl -fsS "http://127.0.0.1:$README_DEMO_WEB_PORT/up" >/dev/null 2>&1 && break; sleep 1; done
   curl -fsS "http://127.0.0.1:$README_DEMO_WEB_PORT/up" >/dev/null || { compose "$w" logs web >&2; die "web never answered /up"; }
   # the notifier: pings, the watch pass, and the session dialogs it turns into questions on the cards
-  compose "$w" up -d --no-build mcp scanner notifier
+  # the writer: a board's shape is saved through it (seed.js gives a demo board the local-repo workflow)
+  compose "$w" up -d --no-build mcp scanner notifier writer
   # the scanner's first pass: every demo repo is a project before anything seeds its board
   local api="http://127.0.0.1:$README_DEMO_WEB_PORT/api/projects" r ok
   for _ in $(seq 1 90); do
     ok=1
-    for r in "${REPOS[@]}"; do curl -fsS "$api" | grep -q "\"slug\":\"$r\"" || ok=0; done
+    for r in "${repos[@]}"; do curl -fsS "$api" | grep -q "\"slug\":\"$r\"" || ok=0; done
     [ "$ok" = 1 ] && break
     sleep 1
   done
@@ -224,5 +300,5 @@ down() {
 case "${1:-}" in
   up) shift; up "$@" ;;
   down) shift; down "$@" ;;
-  *) die "usage: $0 up <workdir> | down <workdir>" ;;
+  *) die "usage: $0 up <workdir> [--from <dumpdir>] | down <workdir>" ;;
 esac

@@ -1,0 +1,9 @@
+● Bash(scripts/ci/test.sh frontend)
+  ⎿  Test Files  59 passed (59)
+          Tests  675 passed (675)
+
+✶ Brewing… ({elapsed} · ↓ 6.1k tokens)
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · esc to interrupt

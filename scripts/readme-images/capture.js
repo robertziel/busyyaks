@@ -18,6 +18,15 @@ if (!WEB || !OUT.busyyaks || !OUT.module || !RAW || !CARD)
 const BOARD = `${WEB}/projects/acme/storefront?tab=board`;
 // the board running the engine's local-repo workflow (seed.js): the README's workflow graph
 const WORKFLOW_BOARD = `${WEB}/projects/acme/payments-api?tab=board`;
+// the stage's mode, named by build (never read off what is missing): BUSYYAKS_CARD = the README card's id on a stage
+// made from a dump (demo-stack up … --from: busyyaks' README shots on the busyyaks board and that card), "" on the
+// demo's own stage (the acme boards); unset, 0 or anything else → refused
+if (process.env.BUSYYAKS_CARD === undefined || !/^([1-9]\d*)?$/.test(process.env.BUSYYAKS_CARD))
+  throw new Error('capture: BUSYYAKS_CARD is required: the README card id on a dump stage, "" on the demo stage');
+const BUSYYAKS_CARD = process.env.BUSYYAKS_CARD === "" ? null : Number(process.env.BUSYYAKS_CARD);
+const OWN_BOARD = BUSYYAKS_CARD ? `${WEB}/projects/busyyaks?tab=board` : BOARD;
+const OWN_CARD = BUSYYAKS_CARD ?? CARD;
+const OWN_WORKFLOW = BUSYYAKS_CARD ? OWN_BOARD : WORKFLOW_BOARD;
 
 const SCALE = 2;
 const ACCENT = "#0F9F8F";
@@ -35,6 +44,52 @@ const liveLine = (page) =>
   page.locator("dialog.kb-dialog[open] .kb-work-labels", { hasText: "thinking" }).waitFor({ timeout: 30000 });
 // the page at rest: web fonts loaded, every finite animation / transition finished (an endless one — a live dot's
 // pulse — never finishes, so it is not waited for), then two frames painted
+// busyyaks' README card: its hand-off and, under it, its comment thread — its long description, its Terminals and its
+// Attachments (the hand-off's pictures again) are folded away for this shot, so the thread is in the frame; the live
+// line's poll answered (a failed one shows its error in the thread)
+const FOLDED = ["Description", "Terminals", "Attachments"];
+const toComments = async (page) => {
+  await page.locator("dialog.kb-dialog[open] ol.kb-activity > li.c").first().waitFor();
+  await page.locator("dialog.kb-dialog[open] .kb-live-err").waitFor({ state: "detached", timeout: 30000 });
+  const missing = await page.evaluate((names) => {
+    const heads = [...document.querySelectorAll("dialog.kb-dialog[open] section.kb-sec")].map((sec) => [
+      sec,
+      [...(sec.querySelector("h3")?.childNodes ?? [])]
+        .filter((n) => n.nodeType === 3)
+        .map((n) => n.nodeValue.trim())
+        .join(""),
+    ]);
+    return names.filter((name) => {
+      const hit = heads.find(([, t]) => t === name || t.startsWith(`${name} `));
+      if (hit) hit[0].style.display = "none";
+      return !hit;
+    });
+  }, FOLDED);
+  if (missing.length) throw new Error(`capture: card: no ${missing.join(", ")} section to fold`);
+};
+// the board shot's session lanes as the seed set them, read off the page (the sidebar's /api/agents read, every 10 s;
+// writing shows once a second read of its pane sees the ↓ count rise): each lane's count and each Working chip's own
+// phase word, exactly. busyyaks' board (a dump stage, seed-busyyaks.js — the operator's ask): two need you, five working
+// with a phase each, two quiet; the demo's acme board (seed.js): its lead and sub team blocked, a worker in review, one
+// running a tool
+const LANES = BUSYYAKS_CARD
+  ? { you: 2, working: ["subagents", "thinking", "tool", "working", "writing"], quiet: 2 }
+  : { you: 3, working: ["tool"], quiet: 0 };
+const lanes = async (page) => {
+  const want = JSON.stringify(LANES);
+  let seen = "";
+  for (let i = 0; i < 30; i++) {
+    seen = await page.evaluate(() => {
+      const count = (id) => Number(document.getElementById(id)?.querySelector("span")?.textContent ?? 0);
+      const body = document.getElementById("lane-working")?.closest("section")?.querySelector(".lane-body");
+      const words = [...(body?.querySelectorAll(".lane-work .lane-st-w") ?? [])].map((w) => w.textContent.trim());
+      return JSON.stringify({ you: count("lane-you"), working: words.sort(), quiet: count("lane-quiet") });
+    });
+    if (seen === want) return;
+    await page.waitForTimeout(2000);
+  }
+  throw new Error(`capture: board: the session lanes are ${seen}, the README shot wants ${want}`);
+};
 const settled = (page) =>
   page.evaluate(async () => {
     await document.fonts.ready;
@@ -48,14 +103,22 @@ const settled = (page) =>
 // the module's first element with a margin of dimmed host).
 const SHOTS = [
   { readme: "busyyaks", name: "today", url: `${WEB}/`, ready: ".heatmap", viewport: DESKTOP },
-  { readme: "busyyaks", name: "board", url: BOARD, ready: ".kb-board .kb-card", viewport: BOARD_VIEW },
+  {
+    readme: "busyyaks",
+    name: "board",
+    url: OWN_BOARD,
+    ready: ".kb-board .kb-card",
+    viewport: BOARD_VIEW,
+    before: lanes,
+  },
   {
     readme: "busyyaks",
     name: "card",
-    url: `${BOARD}&card=${CARD}`,
+    url: `${OWN_BOARD}&card=${OWN_CARD}`,
     ready: "dialog.kb-dialog[open]",
-    viewport: DESKTOP,
-    before: liveLine,
+    viewport: BUSYYAKS_CARD ? { width: 1440, height: 1300 } : DESKTOP,
+    // the demo's card has its agent at work (the live line); busyyaks' README card is finished: its comment thread
+    before: BUSYYAKS_CARD ? toComments : liveLine,
   },
   {
     readme: "busyyaks",
@@ -67,7 +130,7 @@ const SHOTS = [
   {
     readme: "busyyaks",
     name: "workflow",
-    url: WORKFLOW_BOARD,
+    url: OWN_WORKFLOW,
     ready: ".kb-board",
     viewport: { width: 1440, height: 2500 }, // tall: the whole graph (15 columns, top to bottom) at its reading size
     before: openWorkflow,

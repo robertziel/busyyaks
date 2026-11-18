@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# The README screenshot environment's DUMP: busyyaks' own board on the operator's live dashboard (its cards, comments,
+# checklists, labels, PRs and their last GitHub state, the cards' pictures), busyyaks' commit subjects of the last year
+# and its merged PRs — renamed by the rule (rename.js) and gated (dump.js; the pictures through tesseract and the same
+# gate) — into a PRIVATE dir outside the repo. Nothing of it is committed. The demo stack loads it
+# (scripts/readme-images/demo-stack up <workdir> --from <dumpdir>) for every capture after; dump again only to refresh
+# the board's content. Reads only: the live database through its web container (dump-board.rb), the dashboard's
+# /api/projects + /api/today for the rule's names (signed in with bin/qa-cookie), and the checkout's git log.
+#
+#   PRIVATE_TERMS=<file>[:<file>…] OWN=<slug> KEEP="<slug> …" CARD=<busyyaks card id> [PICTURES=<n>] [CANDIDATES=<n>] [COVER_COLUMNS=<n>] \
+#     scripts/readme-images/dump <live checkout> <dumpdir>
+#
+# <dumpdir>: must not exist yet (a refused dump leaves nothing); keep it outside every repo — e.g.
+# ~/.local/state/readme-dump. CARD (required): the card the README opens, kept whatever its age, with its newest
+# PICTURES (default 10) pictures that pass the gate; a card in the board's first
+# COVER_COLUMNS (default 5: the columns the board shot shows) keeps its newest picture that passes (its face), out of its
+# newest CANDIDATES (default 8); every other card keeps none (only what a README shot shows). A picture whose words (tesseract) fail the gate is skipped for the next
+# one, and named (card, picture id, kind) in <dumpdir>/report.json . DROP=<file>
+# (optional, kept outside the dump dir: one picture id per line, # comments) rules pictures out by hand. The gate reads
+# a picture's WORDS only: a face, a logo or an icon with no text passes it, so look at the kept pictures (printed at the
+# end) once before the first build.
+set -euo pipefail
+
+NODE=node:22-bookworm-slim   # the Dockerfile's frontend stage
+OCR_IMAGE=busyyaks:readme-ocr
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+live=$(cd "${1:?the live deployment checkout}" && pwd)
+out=${2:?a dump dir (outside the repo; must not exist yet)}
+[ -e "$out" ] && { echo "dump: $out exists: pick a new dir (or remove the old dump)" >&2; exit 1; }
+: "${CARD:?the busyyaks card the README opens (its id on the busyyaks board)}"
+# busyyaks' project slug on the dashboard, and the other projects shown as they are (busyyaks' own; set, may be empty):
+# named, never derived from a directory or a name pattern (as scripts/readme-images/live)
+: "${OWN:?busyyaks project slug on the dashboard}"
+: "${KEEP?the projects shown as they are, space-separated slugs (empty for none)}"
+PICTURES=${PICTURES:-10}
+CANDIDATES=${CANDIDATES:-8}
+COVER_COLUMNS=${COVER_COLUMNS:-5}
+IFS=: read -r -a lists <<< "${PRIVATE_TERMS:?term list files, colon-separated (one term per line, # comments)}"
+for l in "${lists[@]}"; do [ -r "$l" ] || { echo "dump: term list $l is not readable" >&2; exit 1; }; done
+
+env_of() {
+  local v
+  v=$(grep "^$1=" "$live/.env" | cut -d= -f2-) || true
+  printf '%s\n' "$v"
+}
+port=$(env_of WEB_HOST_PORT)
+[ -n "$port" ] || { echo "dump: WEB_HOST_PORT is not set in $live/.env" >&2; exit 1; }
+public_host=$(env_of PUBLIC_HOST)
+gh_name() { sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##' <<< "$1"; }
+public_repo=$(gh_name "$(git -C "$live" remote get-url "$(git -C "$live" config guard.upstreamRemote)")") ||
+  { echo "dump: $live has no guard.upstreamRemote with a URL" >&2; exit 1; }
+branch=$(git -C "$live" config guard.localBranch) || { echo "dump: $live has no guard.localBranch" >&2; exit 1; }
+engine_repo=$(sed -nE 's#.*\(https://github\.com/([A-Za-z0-9-]+/[A-Za-z0-9._-]+)\).*#\1#p' "$repo/vendor/agents_kanban/VENDOR.md" | head -1)
+[ -n "$engine_repo" ] || { echo "dump: no engine repo in vendor/agents_kanban/VENDOR.md" >&2; exit 1; }
+
+secret=$(mktemp -d)
+chmod 700 "$secret"
+trap 'rm -rf "$secret"' EXIT
+(cd "$live" && docker compose exec -T web bin/qa-cookie) > "$secret/cookie"
+name=$(git -C "$live" config user.name) || { echo "dump: no git user.name in $live" >&2; exit 1; }
+{
+  cat "${lists[@]}"
+  [ -z "$public_host" ] || printf '%s\n' "$public_host"
+} > "$secret/terms"
+{
+  printf '%s\n' "$name"
+  tr -s ' ' '\n' <<< "$name"
+} > "$secret/names"
+
+# the board, read only, from the live database (the web container's own connection)
+(cd "$live" && docker compose exec -T -e DUMP_SLUG="$OWN" -e DUMP_CARD="$CARD" -e DUMP_CANDIDATES="$CANDIDATES" -e DUMP_COVER_COLUMNS="$COVER_COLUMNS" \
+  web bundle exec ruby -I lib - < "$here/dump-board.rb") > "$secret/raw.json"
+git -C "$live" log "$branch" --since=365.days --format='%at%x09%s' > "$secret/commits.tsv"
+
+node_run() {
+  docker run --rm --network host -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$here:/s:ro" -v "$secret:/secret" "$@"
+}
+node_run "$NODE" node /s/dump.js extract /secret/raw.json /secret/pictures
+
+# tesseract reads every picture (its words go through the gate with the rest)
+printf 'FROM debian:bookworm-slim\nRUN apt-get update -qq && apt-get install -y -qq --no-install-recommends tesseract-ocr tesseract-ocr-eng >/dev/null && rm -rf /var/lib/apt/lists/*\n' |
+  docker build -q -t "$OCR_IMAGE" - >/dev/null
+docker run --rm -u "$(id -u):$(id -g)" -v "$secret:/secret" "$OCR_IMAGE" sh -euc '
+  mkdir -p /secret/ocr
+  # one tesseract per CPU; a picture it cannot read stops the dump (dump.js refuses a candidate with no text file too)
+  find /secret/pictures -type f -print0 | xargs -0 -r -P "$(nproc)" -I{} sh -c '"'"'
+    id=$(basename "${1%.*}")
+    OMP_THREAD_LIMIT=1 tesseract "$1" "/secret/ocr/$id" >/dev/null 2>&1 || { echo "dump: tesseract could not read picture $id" >&2; exit 255; }
+  '"'"' sh {}'
+
+drop_args=()
+if [ -n "${DROP:-}" ]; then
+  [ -r "$DROP" ] || { echo "dump: DROP=$DROP is not readable" >&2; exit 1; }
+  cp "$DROP" "$secret/drop"
+  drop_args=(-e DROP_FILE=/secret/drop)
+fi
+mkdir -p "$secret/out"
+node_run -e WEB="http://127.0.0.1:$port" -e COOKIE_FILE=/secret/cookie -e OWN="$OWN" -e KEEP="$KEEP" \
+  -e OWN_REPOS="$public_repo $engine_repo" -e PICTURES="$PICTURES" "${drop_args[@]}" -e TERMS=/secret/terms -e NAMES=/secret/names \
+  "$NODE" node /s/dump.js gate /secret/raw.json /secret/ocr /secret/commits.tsv /secret/out
+mkdir -p "$(dirname "$out")"
+mv "$secret/out" "$out"
+chmod 700 "$out"
+echo "dump: $out (its kept pictures: $out/attachments/)"

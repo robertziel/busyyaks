@@ -8,6 +8,7 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 const SOURCE = readFileSync(new URL("../../../scripts/readme-images/rename.js", import.meta.url), "utf8");
+const SAMPLES = readFileSync(new URL("../../../scripts/readme-images/samples.js", import.meta.url), "utf8");
 
 type Spec = {
   own: Record<string, string>;
@@ -32,7 +33,10 @@ type Rule = {
     people: string[];
   }): Spec;
   mergedRepos(today: unknown): string[];
+  wbrRuns(children: Piece[]): { nodes: number[]; text: string }[];
+  renameRuns(children: Piece[], rename: (s: string) => string): Map<number, string>;
 };
+type Piece = { text: string } | { wbr: true } | { element: true };
 
 function load(): Rule {
   const module = { exports: {} as Rule };
@@ -187,6 +191,15 @@ describe("rename.js: text", () => {
     expect(r.text("pubowner/busyyaks_private_mirror")).toMatch(/^acme-\d+$/);
   });
 
+  it("shows busyyaks' public repos by their repo name as text, keeps them whole behind github.com", () => {
+    expect(r.text("pubowner/busyyaks #69 merged")).toBe("busyyaks #69 merged");
+    expect(r.text("PUBOWNER/busyyaks_agents_kanban_module")).toBe("busyyaks_agents_kanban_module");
+    expect(r.text("github.com/pubowner/busyyaks/pull/9")).toBe("github.com/pubowner/busyyaks/pull/9");
+    expect(r.text("pubowner/busyyaks_work/pull/4")).toBe("pubowner/busyyaks/pull/4");
+    expect(r.text("x pubowner/busyyaks_extra y")).toBe("x pubowner/busyyaks_extra y");
+    expect(r.text("merged pubowner/busyyaks.")).toBe("merged busyyaks.");
+  });
+
   it("renames the operator's name and its words as whole words, never inside a longer word", () => {
     expect(r.text("by Alex Sample, thanks alex")).toBe("by Dev Example, thanks Dev Example");
     expect(r.text("Alexander")).toBe("Alexander");
@@ -218,12 +231,73 @@ describe("rename.js: json", () => {
     expect(out.merged_prs[0].title).toBe("Task 1");
   });
 
+  it("renames a session outside every tracked repo and hides its text", () => {
+    const fresh = rule.makeRenamer(spec);
+    const out = fresh.json({
+      groups: [
+        {
+          label: "outside tracked repos",
+          slug: null,
+          sessions: [
+            {
+              key: "default/side_job",
+              name: "side_job",
+              socket: "default",
+              title: "Render the weekly clips",
+              terminal_url: "https://term.example.org/#s=side_job&sock=default",
+              ssh_attach: "ssh -t host tmux attach -t side_job",
+            },
+          ],
+        },
+      ],
+    }) as { groups: [{ label: string; sessions: [Record<string, string>] }] };
+    const s = out.groups[0].sessions[0];
+    expect(out.groups[0].label).toBe("outside tracked repos");
+    expect(s.name).toBe("agent_1");
+    expect(s.key).toBe("default/agent_1");
+    expect(s.title).toBe("Task 1");
+    expect(s.ssh_attach).toBe("ssh -t host tmux attach -t agent_1");
+    expect(JSON.stringify(out)).not.toContain("side_job");
+  });
+
   it("replaces busyyaks' own text that holds a private term", () => {
     const fresh = rule.makeRenamer(spec);
     expect(fresh.json({ slug: "busyyaks_work", title: "about secretword" })).toEqual({
       slug: "busyyaks_work",
       title: "Task 1",
     });
+  });
+});
+
+describe("rename.js: a word split by <wbr>", () => {
+  // <span>x <b>#1</b>proj_<wbr>one<i>!</i></span>: the Links rail's repo name, a sibling element on each side
+  const children: Piece[] = [
+    { text: "x " },
+    { element: true },
+    { text: "proj_" },
+    { wbr: true },
+    { text: "one" },
+    { element: true },
+  ];
+
+  it("joins the pieces across a <wbr>, never across an element", () => {
+    expect(rule.wbrRuns(children)).toEqual([{ nodes: [2, 4], text: "proj_one" }]);
+    expect(rule.wbrRuns([{ text: "a" }, { element: true }, { text: "b" }])).toEqual([]);
+    expect(rule.wbrRuns([{ wbr: true }, { text: "alone" }])).toEqual([]);
+  });
+
+  it("renames the joined word in its text pieces only, keeping every element and the <wbr>", () => {
+    const out = rule.renameRuns(children, (s) => rule.makeRenamer(spec).text(s));
+    expect([...out.keys()]).toEqual([2, 4]);
+    expect(out.get(2)).toMatch(/^acme-\d+$/);
+    expect(out.get(4)).toBe("");
+    expect(rule.renameRuns([{ text: "busy" }, { wbr: true }, { text: "yaks" }], (s) => s).size).toBe(0);
+  });
+
+  it("is what the gate needs: one text node per piece hides the name, the joined word does not", () => {
+    expect(kinds("proj_\none")).not.toContain("project name");
+    const words = rule.wbrRuns(children).map((run) => run.text);
+    expect(kinds(words.join("\n"))).toContain("project name");
   });
 });
 
@@ -245,6 +319,8 @@ describe("rename.js: leaks (the gate)", () => {
     ["zone", "group name"],
     ["busyyaks_work", "project name"],
     ["by Alex", "operator's name"],
+    ["pubowner/busyyaks #69", "owner login"],
+    ["merged pubowner/busyyaks.", "owner login"],
   ])("refuses %s", (text, kind) => {
     expect(kinds(text)).toContain(kind);
   });
@@ -255,5 +331,34 @@ describe("rename.js: leaks (the gate)", () => {
     );
     expect(rule.leaks(shown, spec)).toEqual([]);
     expect(kinds("busyyaks · github.com/pubowner/busyyaks · app.rb · 127.0.0.1 · ci.example.com")).toEqual([]);
+  });
+});
+
+describe("samples.js: the pictures shown for a card's attachments", () => {
+  const module = {
+    exports: {} as { samplePicture: (id: unknown) => { kind: string; svg: string }; KIND_NAMES: string[] },
+  };
+  runInNewContext(SAMPLES, { module });
+  const { samplePicture, KIND_NAMES } = module.exports;
+
+  it("draws shapes only: an SVG with no text, no font, no link and no outside reference", () => {
+    for (let id = 0; id < 40; id++) {
+      const { svg } = samplePicture(id);
+      expect(svg).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"[^>]*>.*<\/svg>$/s);
+      expect(svg).not.toMatch(/<(text|tspan|foreignObject|image|use|a|style|script)\b|href|font|url\(/i);
+      expect(svg).not.toMatch(/NaN|undefined/);
+    }
+  });
+
+  it("is the same picture for the same id, and neighbouring ids get every kind", () => {
+    expect(samplePicture(2498)).toEqual(samplePicture("2498"));
+    const kinds = new Set(Array.from({ length: KIND_NAMES.length }, (_, i) => samplePicture(100 + i).kind));
+    expect([...kinds].sort()).toEqual([...KIND_NAMES].sort());
+    expect(samplePicture(7).svg).not.toBe(samplePicture(7 + KIND_NAMES.length).svg);
+  });
+
+  it("refuses an id that is not a plain attachment number", () => {
+    for (const id of ["download", "", " ", null, undefined, "0x1F", "1e3", "-4", "2.5"])
+      expect(() => samplePicture(id)).toThrow(/numeric attachment id/);
   });
 });

@@ -15,7 +15,9 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
-const { makeRenamer, leaks, specFrom, mergedRepos } = require("./rename.js");
+const { makeRenamer, leaks } = require("./rename.js");
+const { liveSpec } = require("./live-spec.js");
+const { samplePicture } = require("./samples.js");
 
 const { WEB, COOKIE_FILE, OWN, KEEP, OUT, RAW, TERMS, NAMES, OWN_REPOS } = process.env;
 const COOKIE = COOKIE_FILE && fs.readFileSync(COOKIE_FILE, "utf8").trim();
@@ -28,57 +30,37 @@ const QUALITY = 0.8;
 const SKIN = "dark";
 const DESKTOP = { width: 1440, height: 900 };
 const BOARD = `${WEB}/projects/${OWN}?tab=board`;
-// a card's picture, as the README shows it: a plain plate (its pixels could hold any word)
-const PLATE =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="300"><rect width="480" height="300" fill="#262a33"/>' +
-  '<rect x="40" y="40" width="400" height="36" rx="6" fill="#3a4050"/><rect x="40" y="100" width="260" height="14" ' +
-  'rx="7" fill="#323845"/><rect x="40" y="130" width="320" height="14" rx="7" fill="#323845"/></svg>';
-
-const lines = (file) =>
-  fs
-    .readFileSync(file, "utf8")
-    .split("\n")
-    .map((t) => t.trim())
-    .filter((t) => t && !t.startsWith("#"));
-const terms = lines(TERMS);
-const people = lines(NAMES); // the operator's name and its words
-
-async function api(p) {
-  const res = await fetch(`${WEB}${p}`, { headers: { Cookie: COOKIE } });
-  if (!res.ok) throw new Error(`capture-live: GET ${p}: ${res.status}`);
-  return res.json();
-}
-
-// the rule's input, read now: the dashboard's projects and groups, the repos Today names (specFrom refuses an empty
-// term list; mergedRepos a Today answer without its merged_prs)
-async function readSpec() {
-  const tree = (await api("/api/projects")).tree;
-  const slugs = [];
-  const groups = [];
-  const walk = (n) => {
-    if (n.project) slugs.push(n.project.slug);
-    else if (n.path) groups.push(n.path);
-    (n.children ?? []).forEach(walk);
-  };
-  tree.forEach(walk);
-  const repos = mergedRepos(await api("/api/today"));
-  return specFrom({
-    slugs,
-    groups,
-    repos,
-    own: OWN,
-    keep: KEEP.split(/\s+/).filter(Boolean),
-    ownRepos: OWN_REPOS.split(/\s+/).filter(Boolean),
-    terms,
-    people,
-  });
-}
+// the rule's input, read now from the live dashboard (live-spec.js: specFrom refuses an empty term list, mergedRepos a
+// Today answer without its merged_prs)
+const readSpec = async () =>
+  (
+    await liveSpec({
+      web: WEB,
+      cookie: COOKIE,
+      own: OWN,
+      keep: KEEP,
+      ownRepos: OWN_REPOS,
+      termsFile: TERMS,
+      namesFile: NAMES,
+      who: "capture-live",
+    })
+  ).spec;
 
 // in the page: the same rule on every text node and attribute, now and on every change the page makes
 function pageRule({ source, spec }) {
   // eslint-disable-next-line no-new-func
-  const { makeRenamer } = new Function("module", `${source}; return { makeRenamer };`)({});
+  const { makeRenamer, wbrRuns, renameRuns } = new Function(
+    "module",
+    `${source}; return { makeRenamer, wbrRuns, renameRuns };`,
+  )({});
   const r = makeRenamer(spec);
+  // an element's child nodes as rename.js's wbrRuns reads them (the gate in pageText reads them the same way)
+  const pieces = (el) =>
+    [...el.childNodes].map((n) =>
+      n.nodeType === Node.TEXT_NODE ? { text: n.nodeValue } : n.nodeName === "WBR" ? { wbr: true } : { element: true },
+    );
+  window.__wbrWords = (el) => wbrRuns(pieces(el)).map((run) => run.text);
+  const hasWbr = (el) => [...el.children].some((c) => c.tagName === "WBR");
   // every attribute but these: what draws the page (an icon's src keeps loading), never words
   const SKIP = new Set(["class", "style", "src", "srcset", "id", "d", "viewBox", "fill", "stroke", "transform"]);
   const fix = (node) => {
@@ -88,6 +70,12 @@ function pageRule({ source, spec }) {
       return;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
+    // a word split by <wbr> (the Links rail breaks a repo name at its _) is one word on screen: renamed as one, only
+    // its text pieces rewritten (the element's other children and the <wbr> stay)
+    if (hasWbr(node)) {
+      const nodes = [...node.childNodes];
+      for (const [i, t] of renameRuns(pieces(node), r.text)) nodes[i].nodeValue = t;
+    }
     for (const { name, value } of [...node.attributes]) {
       if (SKIP.has(name)) continue;
       const t = r.text(value);
@@ -136,6 +124,12 @@ function pageText() {
     if (tag !== "SCRIPT" && tag !== "STYLE") parts.push(w.currentNode.nodeValue); // code and styles are never shown
   }
   for (const el of document.querySelectorAll("*")) {
+    // a word split by <wbr> reads as one word: each joined word too (one text node per piece would hide it); the
+    // pieces are read by the init script's rename.js (pageRule), never by a second copy of the rule
+    if ([...el.children].some((c) => c.tagName === "WBR")) {
+      if (typeof window.__wbrWords !== "function") throw new Error("capture-live: the rename rule is not in the page");
+      parts.push(...window.__wbrWords(el));
+    }
     for (const a of el.attributes) {
       // what a reader can see or follow: tooltips, labels, links, alt text, form values (not src: a picture's address)
       if (/^(title|aria-.*|href|alt|placeholder|value|data-.*|content)$/.test(a.name)) parts.push(a.value);
@@ -197,10 +191,12 @@ async function main() {
       const serve = async (route) => {
         const u = new URL(route.request().url());
         if (u.host !== ORIGIN.host) return route.abort(); // only the local dashboard: no person's picture, no tracker
-        // pictures carry words no text gate reads: a card's attachments are drawn as a blank plate, another
-        // project's icon is not served (the page shows its initials)
-        if (u.pathname.startsWith("/api/attachments/"))
-          return route.fulfill({ status: 200, contentType: "image/svg+xml", body: PLATE });
+        // pictures carry words no text gate reads: a card's attachments are drawn as a text-free sample picture
+        // (samples.js, by the attachment's id), another project's icon is not served (the page shows its initials)
+        if (u.pathname.startsWith("/api/attachments/")) {
+          const id = u.pathname.split("/")[3];
+          return route.fulfill({ status: 200, contentType: "image/svg+xml", body: samplePicture(id).svg });
+        }
         if (u.pathname.startsWith("/api/icons/") && decodeURIComponent(u.pathname.slice(11)) !== OWN)
           return route.fulfill({ status: 404, contentType: "application/json", body: '{"error":"not shown"}' });
         if (!u.pathname.startsWith("/api/")) return route.continue();
@@ -220,8 +216,22 @@ async function main() {
           `capture-live: ${shot.name}: ${e.message.split("\n")[0]}; page errors: ${errors.join(" | ") || "none"}`,
         );
       });
+      // the live board's launch-failure alert (the engine's LaunchFailureAlert: a lead that ended, a start that failed)
+      // is the operator's notice of the moment, not part of the page: dismissed as the operator would, with its OK —
+      // once the page is ready and again once it has settled (it opens when /api/waiting answers); one still open at
+      // the screenshot refuses the run
+      const alert = page.locator("dialog.ak-alert[open]");
+      const dismissAlert = async () => {
+        if (!(await alert.isVisible())) return;
+        await alert.locator(".ak-alert-actions button").click();
+        await alert.waitFor({ state: "hidden" });
+      };
+      await dismissAlert();
       if (shot.before) await shot.before(page);
       await settled(page);
+      await dismissAlert();
+      await settled(page);
+      if (await alert.isVisible()) throw new Error(`capture-live: ${shot.name}: the launch alert is still open`);
       let clip = { x: 0, y: 0, ...shot.viewport };
       if (shot.crop) {
         const r = await page.locator(shot.crop).boundingBox();
