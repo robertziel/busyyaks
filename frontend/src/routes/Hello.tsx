@@ -1,16 +1,16 @@
 // /hello — the setup wizard (re-enterable settings + harness detection). Five steps, any of them
 // reachable from the stepper and named in the URL (?step=checks|skin|projects|agents|summary): Checks (every check
 // GET /api/setup ran; first run: the trotting yak ticks them in), Skin (this browser's skin, applied live), Projects
-// (the host dir, read-only — .env), Agents (the agent CLIs the launcher finds on the host — GET /api/setup/harnesses —
+// (the host dir — typed or picked from a host dir browser, checked and applied by bin/launcher; card 532), Agents (the agent CLIs the launcher finds on the host — GET /api/setup/harnesses —
 // and which allowlisted commands become launchers + the default: a new agent settings revision) and Summary (the
 // current values, an Edit per row). Two modes from GET /api/setup's `completed`: a FIRST RUN (the shell opens /hello
 // while <meta name="setup"> is "pending"; Skip setup / Open busyyaks POST /api/setup/complete) and a REOPEN from the
 // settings cog (lands on Summary, Close / Done write nothing). The Agents draft lives here, so jumping steps keeps
 // it; leaving with it unsaved brings you back to Agents. Every step carries "ask your agent to set it up for you"
-// with a prompt to copy: the host-only parts (.env, the launch.commands allowlist) are its job, never this page's.
+// with a prompt to copy: the host-only parts (the launch.commands allowlist) are its job, never this page's.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ApiError, apiPost, invalidate, useResource } from "../api";
+import { ApiError, apiGet, apiPost, invalidate, useResource } from "../api";
 import { CopyChip } from "../components/Copy";
 import { SkinSwitch, skinName } from "../components/Skin";
 import { ErrorState } from "../components/States";
@@ -21,7 +21,12 @@ import {
   STEP_KEYS,
   STEP_LABELS,
   agentPrompt,
+  applyPhase,
   applyRows,
+  childPath,
+  crumbs,
+  failureParts,
+  parentPath,
   defaultFrom,
   draftDirty,
   harnessLine,
@@ -32,10 +37,13 @@ import {
   stepFrom,
   typeChanges,
   usedMissing,
+  type BrowseData,
   type Check,
   type Harness,
   type HarnessesData,
   type Resolved,
+  type RootPlan,
+  type RootStatus,
   type Row,
   type SetupData,
   type StepKey,
@@ -136,7 +144,8 @@ function Boot({ checks, onNext }: { checks: Check[] | null; onNext: () => void }
       {doneBooting && (
         <div className="hello-actions">
           <span className="muted">
-            {total - failed}/{total} ok{failed > 0 && <b className="hello-bad"> · {failed} failed</b>}
+            {total - failed}/{total} ok
+            {failed > 0 && <b className="hello-bad"> · {failed} failed</b>}
           </span>
           <button type="button" className="btn primary" onClick={onNext} autoFocus>
             {failed > 0 ? "Continue anyway" : "Start setup"}
@@ -220,69 +229,512 @@ export function Skin() {
 function Projects({ data }: { data: SetupData }) {
   const p = data.projects;
   const scan = data.checks.find((c) => c.key === "scanner");
+  const none = p.repos === 0;
   return (
     <section className="hello-step">
       <StepHeading>Projects</StepHeading>
-      <dl className="hello-facts">
-        <dt>host dir</dt>
-        <dd>
-          <code>{p.host_root}</code>
-        </dd>
-        <dt>in containers</dt>
-        <dd>
-          <code>{p.mount}</code>
-        </dd>
-        <dt>roots</dt>
-        <dd>
+      <div className={`hello-proj-now ${none || (scan && !scan.ok) ? "bad" : "ok"}`}>
+        <div className="hello-proj-dir">
+          <span className="hello-proj-label">projects dir</span>
+          <code className="hello-proj-path">{p.host_root}</code>
+        </div>
+        <dl className="hello-proj-stats">
+          <div>
+            <dt>repos</dt>
+            <dd className={none ? "hello-bad" : ""}>{p.repos}</dd>
+          </div>
+          <div>
+            <dt>in containers</dt>
+            <dd>
+              <code>{p.mount}</code>
+            </dd>
+          </div>
+          <div>
+            <dt>search depth</dt>
+            <dd>{p.search_depth}</dd>
+          </div>
+          {scan && (
+            <div>
+              <dt>scan</dt>
+              <dd className={scan.ok ? "hello-ok" : "hello-bad"} title={scan.detail}>
+                {scan.ok ? "✓ ok" : "✗ failed"}
+              </dd>
+            </div>
+          )}
+        </dl>
+        {none && <p className="hello-bad">no git repo under {p.host_root}</p>}
+        {scan && !scan.ok && <p className="hello-bad">{scan.detail}</p>}
+        {p.sample.length > 0 && (
+          <div className="hello-chips hello-proj-sample">
+            {p.sample.slice(0, SAMPLE).map((s) => (
+              <span key={s} className="chip">
+                {s}
+              </span>
+            ))}
+            {p.repos > Math.min(SAMPLE, p.sample.length) && (
+              <span className="muted">+{p.repos - Math.min(SAMPLE, p.sample.length)} more</span>
+            )}
+          </div>
+        )}
+        <div className="hello-proj-roots muted">
+          roots{" "}
           {p.roots.map((r) => (
             <code key={r.path}>
               {r.path}
               {r.prefix && ` → ${r.prefix}`}
             </code>
-          ))}{" "}
-          · depth {p.search_depth}
-        </dd>
-        <dt>repos</dt>
-        <dd>
-          <b className={p.repos === 0 ? "hello-bad" : ""}>
-            {p.repos}
-            {p.repos === 0 && ` repos under ${p.host_root}`}
-          </b>
-          {p.sample.length > 0 && (
-            <span className="hello-chips">
-              {p.sample.map((s) => (
-                <span key={s} className="chip">
-                  {s}
-                </span>
-              ))}
-              {p.repos > p.sample.length && <span className="muted">+{p.repos - p.sample.length}</span>}
-            </span>
-          )}
-        </dd>
-        {scan && (
-          <>
-            <dt>scan</dt>
-            <dd className={scan.ok ? "muted" : "hello-bad"}>
-              {scan.ok ? "✓" : "✗"} {scan.detail}
-            </dd>
-          </>
-        )}
-      </dl>
-      <p className="muted hello-host">
-        change (host only): <code>.env</code>{" "}
-        <CopyChip text="PROJECTS_ROOT=/path/to/projects" title="Copy: PROJECTS_ROOT=/path/to/projects">
-          <code>PROJECTS_ROOT=/path/to/projects</code>
-        </CopyChip>{" "}
-        →{" "}
-        <CopyChip text="docker compose up -d" title="Copy: docker compose up -d">
-          <code>docker compose up -d</code>
-        </CopyChip>
-      </p>
+          ))}
+        </div>
+      </div>
+      <RootEditor current={p.host_root} />
     </section>
   );
 }
 
-type Detect = { data: HarnessesData | undefined; error: ApiError | undefined; checking: boolean; recheck: () => void };
+const SAMPLE = 6; // repo names shown under the current dir
+const ROOT_API = "/api/setup/projects-root";
+const POLL_MS = 2000;
+
+// the host dir picker: a breadcrumb of the dir, its subdirs (git repos marked) as rows, "Use this dir" in the footer
+function DirBrowser({ start, onPick, onClose }: { start: string; onPick: (dir: string) => void; onClose: () => void }) {
+  const [at, setAt] = useState(start);
+  const [data, setData] = useState<BrowseData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    const ctl = new AbortController();
+    setError(null);
+    setLoading(true);
+    apiGet<BrowseData>(`/api/setup/browse?path=${encodeURIComponent(at)}`, ctl.signal).then(
+      (d) => {
+        setData(d);
+        setLoading(false);
+      },
+      (e: unknown) => {
+        if (ctl.signal.aborted) return;
+        setData(null); // never offer the previous dir while this one's error shows
+        setError(why(e));
+        setLoading(false);
+      },
+    );
+    return () => ctl.abort();
+  }, [at]);
+  const trail = crumbs(data?.path ?? at);
+  return (
+    <div className="hello-browse" role="group" aria-label="Choose the projects dir">
+      <nav className="hello-crumbs" aria-label="host dir">
+        {trail.map((c, i) => (
+          <span key={c.path}>
+            {i > 1 && <i aria-hidden="true">/</i>}
+            {i === trail.length - 1 ? (
+              <b aria-current="location">{c.name}</b>
+            ) : (
+              <button type="button" onClick={() => setAt(c.path)}>
+                {c.name}
+              </button>
+            )}
+          </span>
+        ))}
+      </nav>
+      {error && (
+        <div className="flash bad" role="alert">
+          <i className="dot bad" />
+          <span>{error}</span>
+        </div>
+      )}
+      <ul className={`hello-browse-list${loading ? " stale" : ""}`} aria-busy={loading}>
+        {at !== "/" && (
+          <li>
+            <button type="button" onClick={() => setAt(data?.parent ?? parentPath(at))}>
+              <span className="hello-dir up" aria-hidden="true" />
+              <span className="hello-dir-name">..</span>
+              <span className="muted">up</span>
+            </button>
+          </li>
+        )}
+        {data?.entries.map((e) => (
+          <li key={e.name}>
+            <button type="button" onClick={() => setAt(childPath(data.path, e.name))}>
+              <span className={`hello-dir${e.git ? " git" : ""}`} aria-hidden="true" />
+              <span className="hello-dir-name">{e.name}</span>
+              {e.git && <span className="hello-badge ok">git</span>}
+              <span className="hello-dir-go" aria-hidden="true">
+                ›
+              </span>
+            </button>
+          </li>
+        ))}
+        {data && data.entries.length === 0 && <li className="muted hello-browse-empty">no subdirs</li>}
+        {data?.truncated && <li className="muted hello-browse-empty">first {data.entries.length} shown</li>}
+      </ul>
+      <div className="hello-browse-foot">
+        <span className="muted">
+          {data ? `${plural(data.repos, "git repo")} directly here` : loading ? "reading…" : ""}
+        </span>
+        <button type="button" className="btn small" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn small primary"
+          disabled={!data || !!error || loading}
+          onClick={() => data && !loading && onPick(data.path)}
+        >
+          Use this dir
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// the plan bin/launcher checked: old → new, what moves, what restarts; Apply in its footer. aria-disabled only while
+// busy: any [aria-disabled] — "false" too — is dimmed by the shared .btn[aria-disabled] rule (reports.css)
+export function PlanCard({
+  plan,
+  busy,
+  onApply,
+  onCancel,
+}: {
+  plan: RootPlan;
+  busy: boolean;
+  onApply: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <section className="hello-plan" aria-label="the change, checked">
+      <header>
+        <b>✓ checked</b>
+        <span className="muted">the launcher ran every check on this host</span>
+      </header>
+      <div className="hello-plan-move">
+        <span className="hello-proj-label">from</span>
+        <code className="old">{plan.from}</code>
+        <span className="hello-proj-label">to</span>
+        <code className="new">{plan.to}</code>
+      </div>
+      <dl className="hello-proj-stats">
+        <div>
+          <dt>repos</dt>
+          <dd className={plan.repos === 0 ? "hello-warn" : ""}>{plan.repos}</dd>
+        </div>
+        <div>
+          <dt>trusted paths</dt>
+          <dd>{plan.trusted.length}</dd>
+        </div>
+        <div>
+          <dt>lose trust</dt>
+          <dd className={plan.loses_trust.length ? "hello-warn" : ""}>{plan.loses_trust.length}</dd>
+        </div>
+        <div>
+          <dt>restarts</dt>
+          <dd>{plan.services.length + 1}</dd>
+        </div>
+      </dl>
+      <div className="hello-plan-block">
+        <h3>roots</h3>
+        <ul className="hello-plan-map">
+          {plan.roots.map((r) => (
+            <li key={r.path}>
+              <code>{r.path}</code>
+              <span className="muted">→</span>
+              <code>{r.host}</code>
+            </li>
+          ))}
+        </ul>
+      </div>
+      {plan.trusted.length > 0 && (
+        <div className="hello-plan-block">
+          <h3>trusted paths move</h3>
+          <ul className="hello-plan-map">
+            {plan.trusted.map((t) => (
+              <li key={t.path} className="moved">
+                <code className="old">{t.from}</code>
+                <code>
+                  <span className="muted">→ </span>
+                  {t.to}
+                </code>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {plan.loses_trust.length > 0 && (
+        <div className="hello-plan-block warn">
+          <h3>! lose folder trust</h3>
+          <p className="muted">created here by the launcher; trusted by their old path only</p>
+          <ul className="hello-plan-map">
+            {plan.loses_trust.map((d) => (
+              <li key={d}>
+                <code>{d}</code>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="hello-plan-block">
+        <h3>restarts</h3>
+        <div className="hello-chips">
+          {[...plan.services, "launcher"].map((s) => (
+            <span key={s} className="chip">
+              {s}
+            </span>
+          ))}
+        </div>
+      </div>
+      <footer>
+        <span className="muted">.env is backed up first; a failed start puts it back</span>
+        {/* aria-disabled while busy: a refused Apply keeps the focus on it */}
+        <button
+          type="button"
+          className="btn small"
+          onClick={() => !busy && onCancel()}
+          aria-disabled={busy || undefined}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn small primary"
+          onClick={() => !busy && onApply()}
+          aria-disabled={busy || undefined}
+        >
+          Apply
+        </button>
+      </footer>
+    </section>
+  );
+}
+
+// where an apply stands: .env → services → reload, the running step marked
+function Applying({ plan, phase }: { plan: RootPlan; phase: ReturnType<typeof applyPhase> | null }) {
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => ref.current?.focus({ preventScroll: true }), []); // Apply unmounted the editor: focus lands here
+  const at = phase === "restarting" ? 1 : 0;
+  const steps = [
+    ["rewrite .env", ".env backed up, PROJECTS_ROOT set"],
+    ["restart", `${plan.services.join(" · ")} · launcher`],
+    ["reload", "this page, once they run on the new dir"],
+  ];
+  return (
+    <section ref={ref} tabIndex={-1} className="hello-plan hello-applying" role="status" aria-live="polite">
+      <header>
+        <b>Moving the projects dir</b>
+        <span className="hello-dots" aria-hidden="true">
+          <i className="on" />
+          <i />
+          <i />
+        </span>
+      </header>
+      <div className="hello-plan-move">
+        <span className="hello-proj-label">from</span>
+        <code className="old">{plan.from}</code>
+        <span className="hello-proj-label">to</span>
+        <code className="new">{plan.to}</code>
+      </div>
+      <ol className="hello-progress">
+        {steps.map(([name, what], i) => (
+          <li
+            key={name}
+            className={i < at ? "past" : i === at ? "now" : ""}
+            aria-current={i === at ? "step" : undefined}
+          >
+            <span className="hello-progress-mark">{i < at ? "✓" : i + 1}</span>
+            <b>{name}</b>
+            <span className="muted">{what}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+// the projects dir: type it or pick it → Check (bin/launcher's plan) → Apply (.env rewritten, compose recreated, the
+// launcher restarted) → wait until the restarted stack runs on it, then reload
+function RootEditor({ current }: { current: string }) {
+  const [draft, setDraft] = useState(current);
+  const [browsing, setBrowsing] = useState(false);
+  const [plan, setPlan] = useState<RootPlan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [applying, setApplying] = useState<string | null>(null);
+  const [phase, setPhase] = useState<ReturnType<typeof applyPhase> | null>(null);
+  const [failure, setFailure] = useState<ReturnType<typeof failureParts> | null>(null);
+  const browseRef = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const failureRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (failure) failureRef.current?.focus(); // the Applying panel that held the focus is gone
+  }, [failure]);
+
+  useEffect(() => {
+    if (!applying) return;
+    // one read at a time: the next is scheduled after the answer, so a slow read never overlaps or lands out of order
+    let gone = false;
+    let t = 0;
+    const poll = () => {
+      apiGet<RootStatus>(ROOT_API)
+        .then(
+          (s) => {
+            if (gone) return;
+            const ph = applyPhase(s, applying);
+            setPhase(ph);
+            if (ph === "failed" && s.last) {
+              setFailure(failureParts(s.last));
+              setApplying(null);
+              setPlan(null); // a retry checks the host again (UI policy: the launcher re-compares the plan's digest)
+            }
+            if (ph === "done") window.location.reload();
+          },
+          () => {
+            if (!gone) setPhase("restarting");
+          },
+        )
+        .finally(() => {
+          if (!gone) t = window.setTimeout(poll, POLL_MS);
+        });
+    };
+    t = window.setTimeout(poll, POLL_MS);
+    return () => {
+      gone = true;
+      window.clearTimeout(t);
+    };
+  }, [applying]);
+
+  const target = draft.trim();
+  const check = () => {
+    setBusy(true);
+    setError(null);
+    setFailure(null);
+    setPlan(null);
+    apiPost<{ plan: RootPlan }>(ROOT_API, { step: "plan", path: target })
+      .then(
+        (r) => setPlan(r.plan),
+        (e: unknown) => setError(why(e)),
+      )
+      .finally(() => setBusy(false));
+  };
+  const apply = () => {
+    if (!plan) return;
+    setBusy(true);
+    setError(null);
+    setFailure(null);
+    apiPost(ROOT_API, { step: "apply", path: plan.to, plan_id: plan.plan_id })
+      .then(
+        () => {
+          setPhase("applying");
+          setApplying(plan.to);
+        },
+        (e: unknown) => setError(why(e)),
+      )
+      .finally(() => setBusy(false));
+  };
+  const stale = plan !== null && plan.to !== target;
+  const same = target === current;
+
+  if (applying && plan) return <Applying plan={plan} phase={phase} />;
+
+  return (
+    <div className="hello-root">
+      <div className="hello-subhead">
+        <b>Move it</b>
+        <span className="muted">
+          type a host dir or browse · Check runs the launcher&apos;s checks · nothing changes until Apply
+        </span>
+      </div>
+      <form
+        className="hello-root-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!busy && target !== "" && !same) check();
+        }}
+      >
+        <div className={`hello-path-field${error ? " bad" : ""}`}>
+          <input
+            ref={inputRef}
+            type="text"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoComplete="off"
+            aria-label="projects dir"
+            aria-invalid={!!error}
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setError(null);
+            }}
+          />
+          <button ref={browseRef} type="button" onClick={() => setBrowsing((b) => !b)} aria-expanded={browsing}>
+            Browse…
+          </button>
+        </div>
+        {/* aria-disabled while busy: a disabled button drops the focus the click put on it */}
+        <button
+          type="submit"
+          className="btn primary"
+          aria-disabled={busy || undefined}
+          disabled={target === "" || same}
+        >
+          {busy && !plan ? "Checking…" : "Check"}
+        </button>
+      </form>
+      {same && !plan && <p className="muted hello-root-hint">this is the current dir — pick another to move to</p>}
+      {browsing && (
+        <DirBrowser
+          start={target.startsWith("/") ? target : current}
+          onClose={() => {
+            setBrowsing(false);
+            browseRef.current?.focus();
+          }}
+          onPick={(d) => {
+            setDraft(d);
+            setBrowsing(false);
+            browseRef.current?.focus();
+            setPlan(null);
+            setError(null);
+          }}
+        />
+      )}
+      {error && (
+        <div className="flash bad" role="alert">
+          <i className="dot bad" />
+          <span>✗ {error}</span>
+        </div>
+      )}
+      {failure && (
+        <div ref={failureRef} tabIndex={-1} className="flash bad hello-failure" role="alert">
+          <i className="dot bad" />
+          <span>
+            <b>✗ the move failed · Check again to retry</b>
+            <span>{failure.reason}</span>
+            <span>{failure.env}</span>
+            <span className="muted">
+              log <code>{failure.log}</code>
+            </span>
+          </span>
+        </div>
+      )}
+      {plan && stale && <p className="muted hello-root-hint">the path changed since the check — Check again</p>}
+      {plan && !stale && (
+        <PlanCard
+          plan={plan}
+          busy={busy}
+          onApply={apply}
+          onCancel={() => {
+            setPlan(null);
+            inputRef.current?.focus();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+type Detect = {
+  data: HarnessesData | undefined;
+  error: ApiError | undefined;
+  checking: boolean;
+  recheck: () => void;
+};
 
 const commandWords = (c: Invocation) => [c.command, ...c.args].join(" ") + (c.via_shell ? " (via shell)" : "");
 // an existing launcher's own invocation (one no allowlist entry matches: its row still names what it runs)
@@ -435,7 +887,11 @@ const changeCount = (changes: { under: string | null }[]) => {
 // as an issue on the Summary, never another type's launcher shown in its place)
 const defaultOf = (agents: AgentSettingsData) =>
   agents.doc.agent_types.find((t) => t.key === "lead")?.launchers[0] ?? "";
-type SaveState = { saving: boolean; error: ApiError | Error | null; saved: number | null };
+type SaveState = {
+  saving: boolean;
+  error: ApiError | Error | null;
+  saved: number | null;
+};
 
 function hostCell(r: Row, detect: Detect) {
   if (r.at < 0) return <span className="muted">—</span>;
@@ -646,7 +1102,8 @@ function Agents({
                   {c.under && (
                     <span className="muted">
                       {" "}
-                      · runs {agents.doc.agent_types.find((t) => t.key === c.under)?.label ?? c.under}&apos;s launcher
+                      · runs {agents.doc.agent_types.find((t) => t.key === c.under)?.label ?? c.under}
+                      &apos;s launcher
                     </span>
                   )}
                 </td>
@@ -707,7 +1164,10 @@ function Agents({
 }
 
 // the saved launchers, each with what stops it on this host (null = nothing found wrong)
-export type Summary = { launchers: { key: string; label: string; problem: string | null }[]; def: string };
+export type Summary = {
+  launchers: { key: string; label: string; problem: string | null }[];
+  def: string;
+};
 
 // the Summary's facts: the current skin, projects, harnesses, launchers, checks and daily report — each with its
 // step to edit it (onEdit null: none, e.g. a test render)
@@ -746,7 +1206,7 @@ export function ReadyFacts({
       <dd>
         {data.projects.repos}
         {data.projects.host_root && <code>{data.projects.host_root}</code>}
-        {edit("projects", "View")}
+        {edit("projects")}
       </dd>
       {harnesses !== undefined && (
         <>
@@ -828,7 +1288,11 @@ export function Hello() {
   const hr = useResource<HarnessesData>(HARNESSES);
   const [saved, setSaved] = useState<AgentSettingsData | null>(null);
   const [draft, setDraftState] = useState<(Draft & { rev: number }) | null>(null);
-  const [saveState, setSaveState] = useState<SaveState>({ saving: false, error: null, saved: null });
+  const [saveState, setSaveState] = useState<SaveState>({
+    saving: false,
+    error: null,
+    saved: null,
+  });
   const [flash, setFlash] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState<string | null>(null);
@@ -905,7 +1369,10 @@ export function Hello() {
     setFlash(null);
     try {
       const doc = applyRows(agents.doc, agents.commands, current.rows, current.def);
-      const s = await apiPost<AgentSettingsData>("/api/settings/agents", { base: agents.revision.id, doc });
+      const s = await apiPost<AgentSettingsData>("/api/settings/agents", {
+        base: agents.revision.id,
+        doc,
+      });
       invalidate("/api/settings/agents");
       setSaved(s);
       setDraftState(null);
@@ -914,7 +1381,11 @@ export function Hello() {
       if (firstRun) go("summary");
       else window.setTimeout(() => document.getElementById("hello-saved")?.focus(), 0);
     } catch (e) {
-      setSaveState({ saving: false, error: e instanceof Error ? e : new Error(String(e)), saved: null });
+      setSaveState({
+        saving: false,
+        error: e instanceof Error ? e : new Error(String(e)),
+        saved: null,
+      });
     }
   };
 
@@ -945,8 +1416,18 @@ export function Hello() {
     const missing = usedMissing(base.rows, resolved);
     const used = base.rows.filter((r) => r.use && r.at >= 0).length;
     const host: Check = missing.length
-      ? { key: "host", label: "Launchers on host", ok: false, detail: `not found: ${missing.join(", ")}` }
-      : { key: "host", label: "Launchers on host", ok: true, detail: `${used}/${used} found` };
+      ? {
+          key: "host",
+          label: "Launchers on host",
+          ok: false,
+          detail: `not found: ${missing.join(", ")}`,
+        }
+      : {
+          key: "host",
+          label: "Launchers on host",
+          ok: true,
+          detail: `${used}/${used} found`,
+        };
     return [...data.checks, host];
   }, [data, resolved, base]);
   const usable = summary ? summary.launchers.filter((l) => !l.problem).length : 0;

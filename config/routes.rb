@@ -110,6 +110,9 @@ module Busyyaks
     get "/api/setup", to: "api.setup.show"                      # the first-run hello screen (/hello)
     get "/api/setup/harnesses", to: "api.setup.harnesses"     # the agent CLIs on the host
     post "/api/setup/complete", to: "api.setup.complete"
+    get "/api/setup/browse", to: "api.setup.browse"            # the projects dir picker: a host dir's subdirs (card 532)
+    get "/api/setup/projects-root", to: "api.setup.projects_root"
+    post "/api/setup/projects-root", to: "api.setup.projects_root_change"
     post "/api/dictation", to: "api.dictation.transcribe"     # the card dialog's mic → the speech server
     post "/api/markdown", to: "api.markdown.preview"           # editor Preview: the server's render, never a JS markdown lib
 

@@ -4,7 +4,7 @@ require "test_helper"
 require "busyyaks/setup_api"
 require "busyyaks/github_network"
 
-# the first-run hello screen — real boot checks, the projects dir read-only, the completion row.
+# the first-run hello screen — real boot checks, the projects dir (changed through bin/launcher), the completion row.
 class SetupAPITest < Minitest::Test
   include DBReset
 
@@ -178,5 +178,31 @@ API.harnesses(launcher: failed, commands: COMMANDS)
   def test_show_carries_the_daily_report_state
     assert_equal [false, false], show.last[:daily_report].values_at(:configured, :saved)
     assert_match(/no daily report settings saved/, show.last[:daily_report][:reason])
+  end
+  # the projects dir (card 532): bin/launcher's answers relayed with its status; a launcher down is 503
+  Root = Struct.new(:answer) do
+    def browse(path:) = answer.merge("path" => path)
+    def projects_root(step:, path:, plan_id:) = answer.merge("seen" => [step, path, plan_id])
+  end
+
+  def test_the_projects_dir_relays_the_launchers_answer_and_status
+    assert_equal [200, { "path" => "/srv", "entries" => [] }],
+                 API.browse(path: "/srv", launcher: Root.new({ "ok" => true, "entries" => [] }))
+    assert_equal [200, { "plan" => 1, "seen" => ["plan", "/srv", nil] }],
+                 API.projects_root(step: "plan", path: "/srv", launcher: Root.new({ "ok" => true, "plan" => 1 }))
+    assert_equal [409, { error: "the plan changed" }],
+                 API.projects_root(step: "apply", path: "/srv", plan_id: "x",
+                                   launcher: Root.new({ "ok" => false, "error" => "the plan changed", "status" => 409 }))
+    assert_equal [422, { error: "no" }],
+                 API.browse(path: "/", launcher: Root.new({ "ok" => false, "error" => "no", "status" => 422 }))
+    # a refusal with no status (an older launcher's "unknown op") is never given one
+    assert_equal [503, { error: "launcher protocol error (unknown op): restart it (deploy/install-launcher.sh)" }],
+                 API.browse(path: "/", launcher: Root.new({ "ok" => false, "error" => "unknown op" }))
+  end
+
+  def test_the_projects_dir_with_the_launcher_down_is_503
+    down = Object.new
+    def down.projects_root(**) = raise(Busyyaks::LauncherClient::Unavailable, "launcher socket missing")
+    assert_equal [503, { error: "launcher socket missing" }], API.projects_root(step: "status", launcher: down)
   end
 end

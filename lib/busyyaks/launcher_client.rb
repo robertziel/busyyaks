@@ -23,6 +23,9 @@ module Busyyaks
     # {shell, harnesses: [{key, label, command, kind, launch_args, install_url, found, type, path, version, version_error}],
     #  commands: [{command, found, type, path}]}
     def harnesses = call(op: "harnesses")
+    # the projects dir (card 532): the launcher's answers as is — {ok, ...} or {ok: false, error, status}
+    def browse(path:) = raw(op: "browse", path: path)
+    def projects_root(step:, path: nil, plan_id: nil) = raw(op: "projects_root", step: step, path: path, plan_id: plan_id)
     def create(root:, name:, url:) = call(op: "create", root: root, name: name, url: url)
     def jobs = call(op: "jobs")["jobs"]
     def agents = call(op: "agents")
