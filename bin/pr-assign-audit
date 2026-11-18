@@ -1,0 +1,14 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# A one-off report: the PR URLs each open card names (its handoff pr_url, description, comments and handoffs)
+# that are not assigned to it — for the operator to confirm. Reads only; nothing is assigned from text.
+#
+#   docker compose exec -T web bin/pr-assign-audit
+# stdout is the report: this script logs warnings only (the services' LOG_LEVEL info would print every SQL query)
+ENV["LOG_LEVEL"] = "warn"
+require "bundler/setup"
+require "hanami/prepare"
+require "busyyaks/pr_assign_audit"
+
+puts Busyyaks::PrAssignAudit.text(Busyyaks::Kanban.store.unassigned_pr_mentions)

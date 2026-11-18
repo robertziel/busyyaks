@@ -165,6 +165,7 @@ out.dig("config", "runner"))
     held = k.create(slug: "a", title: "ci first", by: "agent", column: "qa")
     k.move(held, column: "human_check", by: "op")
     db = Hanami.app["db.gateway"].connection
+    db[:projects].where(slug: "a").update(remote: "https://github.com/o/a.git") # its PRs are on its repo
     { id => [7, "success"], held => [8, "pending"] }.each do |card, (n, state)| # the github service's answers
       db[:gh_pr_checks].insert(repo: "o/a", ref: "pr:#{n}", requested_at: t, checked_at: t, number: n, state: state,
                                finished_at: state == "success" ? t : nil, base: "main", draft: false, merge_state: "clean")

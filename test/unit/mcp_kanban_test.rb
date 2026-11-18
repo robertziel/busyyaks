@@ -24,7 +24,8 @@ class McpKanbanTest < Minitest::Test
 
   def setup
     super
-    store.upsert_project(slug: "g/r", path: "/nonexistent/g/r", remote: nil, branch: "main", own: true, last_commit_at: 1,
+    store.upsert_project(slug: "g/r", path: "/nonexistent/g/r", remote: "https://github.com/o/r.git", branch: "main", own: true,
+                         last_commit_at: 1,
                          commits_window: 0, mine_window: 0, dirty: 0, unpushed: nil, scanned_at: 1)
   end
 

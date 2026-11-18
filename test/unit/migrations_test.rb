@@ -23,6 +23,7 @@ class MigrationsTest < Minitest::Test
   BEFORE_PRS = 20_261_202_000_000 # the last migration before the assigned PRs
   BEFORE_SESSION_BOARDS = 20_261_205_000_000 # the last migration before v11 (session boards: boards.archived_at)
   BEFORE_LEAD_FIRST = 20_261_206_000_000 # the last migration before v12 (lead-first boards)
+  BEFORE_PR_LISTS = 20_261_209_492_000 # the last migration before v14 (a card's PRs are a list)
   BEFORE_PR_FLAGS = 20_261_208_467_999 # just before the PR base / merge flags: whatever lands before it stays
   BEFORE_PROGRESS = 20_261_209_491_999 # just before the progress watch (Schema v13 + projects.branch_tips)
 
@@ -77,7 +78,8 @@ class MigrationsTest < Minitest::Test
     host = Busyyaks::AgentSettings.migration_host(Busyyaks::Kanban::CONFIG_PATH)
     AgentsKanban::Store.new(@db, config: host, markdown: Busyyaks::Kanban.markdown,
                                  boards: ->(s) { @db[:projects].where(slug: s).any? },
-                                 ci: Busyyaks::Kanban.ci_port(@db, interval: 60)) # runtime_settings may not exist yet
+                                 ci: Busyyaks::Kanban.ci_port(@db, interval: 60), # runtime_settings may not exist yet
+                                 prs: Busyyaks::Kanban.pr_roles(@db))
   end
 
   def project(slug)
@@ -478,7 +480,7 @@ class MigrationsTest < Minitest::Test
     @db[:gh_pr_states].insert(repo: "o/p", ref: "head:o:pub/card-1", requested_at: 1)
     @db[:gh_pr_states].insert(repo: "o/p", ref: "pr:9", requested_at: 1)
     @db[:gh_pr_checks].insert(repo: "o/p", ref: "branch:card/1-x", requested_at: 1)
-    out, = migrate
+    out, = migrate(BEFORE_PR_LISTS)
     assert_includes out, "cards_assigned_prs: 4 card(s) carried over"
     meta = ->(id) { (m = @db[:cards].where(id: id).get(:metadata)) && JSON.parse(m) }
     assert_equal({ "prs" => { "local" => lpr } }, meta.(local))
@@ -493,6 +495,61 @@ class MigrationsTest < Minitest::Test
     assert_empty @db[:gh_pr_checks].all
     migrate(BEFORE_PRS)
     assert_equal({ "prs" => { "local" => lpr } }, meta.(local), "down keeps the assignments")
+  end
+
+  # v14 turns each card's prs {role => url} into a list (by / at from its own "PR <role>: <url>" line);
+  # the rollback goes back while every card fits {role => url}, and is refused naming the cards that do not
+  def test_v14_prs_become_lists_and_roll_back_while_they_fit
+    migrate(BEFORE_PR_LISTS)
+    project("m/p")
+    project("eng")
+    @db[:projects].where(slug: "m/p").update(local_mode: "own", local_repo: "https://github.com/o/p_local.git",
+                                             public_repo: "https://github.com/o/p.git")
+    @db[:projects].where(slug: "eng").update(local_mode: "own", local_repo: "https://github.com/o/eng_local.git",
+                                             public_repo: "https://github.com/o/eng.git")
+    lpr = "https://github.com/o/p_local/pull/5"
+    one = card("m/p", "doing", "one", metadata: JSON.generate("x" => 1, "prs" => { "local" => lpr }))
+    @db[:card_activity].insert(card_id: one, kind: "update", body: "PR local: #{lpr}", author: "agent-1", created_at: 70)
+    # real-world values: text naming two PRs, and a legacy role key mapped by the PR's repo
+    old = card("m/p", "merged", "old", metadata: JSON.generate("prs" => {
+      "mirror" => "https://github.com/o/p_local/pull/7 (merged → a476b54) + /pull/10 (merged → dcefc04)",
+      "engine" => "https://github.com/o/eng/pull/2",
+    }))
+    # a `local` PR on a project that is not enrolled, in no role of the card →
+    # removed by the migration (logged), never active
+    project("plain")
+    @db[:projects].where(slug: "plain").update(remote: "https://github.com/o/fleet.git")
+    gone_card = card("plain", "todo", "gone",
+                     metadata: JSON.generate("prs" => {
+                                               "local" => "https://github.com/o/fleet_local/pull/4",
+                                             }))
+    migrate
+    meta = ->(id) { JSON.parse(@db[:cards].where(id: id).get(:metadata)) }
+    assert_equal({ "x" => 1, "prs" => [{ "url" => lpr, "repo" => "o/p_local", "number" => 5, "role" => "local",
+                                          "by" => "agent-1", "at" => 70, }], }, meta.(one))
+    assert_equal [["local", "https://github.com/o/p_local/pull/7"], ["local", "https://github.com/o/p_local/pull/10"],
+                  ["public", "https://github.com/o/eng/pull/2"],], meta.(old)["prs"].map { |e| e.values_at("role", "url") }
+    @db[:cards].where(id: old).delete
+    gone = meta.(gone_card)
+    why = "v14: o/fleet_local is in no role this project reads (project not enrolled)"
+    assert_equal [[], "migration", why],
+                 [gone["prs"], gone["prs_removed"][0]["removed_by"], gone["prs_removed"][0]["reason"]]
+    assert_equal "PR local removed by the v14 migration: https://github.com/o/fleet_local/pull/4 — " \
+                 "v14: o/fleet_local is in no role this project reads (project not enrolled)",
+                 @db[:card_activity].where(card_id: gone_card, author: "migration").get(:body)
+    @db[:cards].where(id: gone_card).delete
+    two = card("m/p", "doing", "two", metadata: JSON.generate("prs" => [
+      { "url" => "https://github.com/o/p_local/pull/6", "role" => "local" },
+      { "url" => "https://github.com/o/eng_local/pull/7", "role" => "local" },
+    ]))
+    e = assert_raises(StandardError) { migrate(BEFORE_PR_LISTS) }
+    assert_match(/cards #{two} hold several PRs of one role or unassigned PRs/, e.message)
+    assert_equal "local", meta.(one)["prs"].first["role"], "a refused rollback writes nothing"
+    @db[:cards].where(id: two).delete
+    migrate(BEFORE_PR_LISTS)
+    assert_equal({ "x" => 1, "prs" => { "local" => lpr } }, meta.(one))
+    migrate
+    assert_equal "agent-1", meta.(one)["prs"].first["by"]
   end
 
   # the PR base / draft / mergeable columns, and the CI poller's cached pages (read before it kept those

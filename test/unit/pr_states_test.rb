@@ -82,8 +82,8 @@ class PrStatesTest < Minitest::Test
     assert_equal ["/repos/o/m/pulls/43"], @http.requests.map { |u| u.delete_prefix("https://api.github.com") },
                  "the reason is read once per close"
     link = links_for({ slug: "g/m", local_mode: nil }, [],
-                     metadata: { "prs" => { "pr" => "https://github.com/o/m/pull/43" } }).first
-    assert_equal ["#43 [closed: base deleted]"], shown([link])
+                     metadata: prs_meta("pr", "https://github.com/o/m/pull/43")).first
+    assert_equal ["#43 m [closed: base deleted]"], shown([link])
     assert_equal "base deleted", detail(link)["Why closed"]
     assert_equal "closed without merging", detail(link)["State"]
   end
@@ -169,8 +169,8 @@ class PrStatesTest < Minitest::Test
     assert_equal "closed", st[:state]
     assert_equal "unknown: o/m#5 is closed but its issue events have no closed event", st[:reason]
     link = links_for({ slug: "g/m", local_mode: nil }, [],
-                     metadata: { "prs" => { "pr" => "https://github.com/o/m/pull/5" } }).first
-    assert_equal ["#5 [closed: why unknown]"], shown([link])
+                     metadata: prs_meta("pr", "https://github.com/o/m/pull/5")).first
+    assert_equal ["#5 m [closed: why unknown]"], shown([link])
     @http.requests.clear
     @now += 60
     @poller.run
@@ -226,7 +226,7 @@ class PrStatesTest < Minitest::Test
     @gate = Busyyaks::GithubPollers.new(db: @db, clock: -> { @now })
     @poller = PS::Poller.new(db: @db, client: client, gate: @gate, wanted_for: 600, clock: -> { @now })
     @reader = PS::Reader.new(db: @db, stale_after: 180, wanted_for: 600, clock: -> { @now })
-    @flags = PS::Flags.new(@reader)
+    @flags = PS::Flags.new(@reader, enrolled: -> { @db[:projects].exclude(local_mode: nil).all }, clock: -> { @now })
   end
 
   def test_states_open_draft_merged_closed_and_a_merged_pr_is_polled_once
@@ -433,18 +433,25 @@ class PrStatesTest < Minitest::Test
   def shown(links) = links.map { |l| l[:tags] ? "#{l[:label]} [#{l[:tags].map { |t| t[:text] }.join(' ')}]" : l[:label] }
   def detail(link) = link[:detail].to_h { |r| [r[:label], r[:value]] }
 
-  PUB12 = { "prs" => { "public" => "https://github.com/o/widgets/pull/12" } }.freeze
+  # metadata prs as kanban_pr_assign writes it (a list): prs_meta("local", url, "public", url, …)
+  def self.prs_meta(*pairs)
+    { "prs" => pairs.each_slice(2).map { |role, url| { "url" => url, "role" => role, "by" => "agent-1", "at" => 1 } } }
+  end
+  def prs_meta(...) = self.class.prs_meta(...)
+
+  PUB12 = prs_meta("public", "https://github.com/o/widgets/pull/12").freeze
 
   def links_for(project, links, id: 158, metadata: nil)
     @flags.apply(links, { id: id, metadata: metadata }, project)
   end
 
-  # the PRs assigned to the card (metadata prs.local / prs.public) are its PR rows, flagged with role + state
+  # the PRs assigned to the card (metadata prs) are its PR rows, flagged with role + state, grouped by role
   def test_enrolled_project_flags_local_and_public_prs_with_their_state
     links = [{ kind: "repo", label: "g/widgets", url: "https://github.com/o/widgets_local" }]
-    both = { "prs" => PUB12["prs"].merge("local" => "https://github.com/o/widgets_local/pull/5") }
+    both = prs_meta("public", "https://github.com/o/widgets/pull/12", "local", "https://github.com/o/widgets_local/pull/5")
     first = links_for(ENROLLED, links, metadata: both)
-    assert_equal ["g/widgets", "#5 [local checking]", "#12 [public checking]"], shown(first)
+    assert_equal ["g/widgets", "#5 widgets_local [local checking]", "#12 widgets [public checking]"], shown(first),
+                 "role order: local first"
     assert_equal "waiting for the github service", detail(first[1])["Read"]
     assert_equal [%w[o/widgets pr:12], %w[o/widgets_local pr:5]],
                  @db[:gh_pr_states].order(:repo).select_map(%i[repo ref]), "by number, never by a branch name"
@@ -452,9 +459,10 @@ class PrStatesTest < Minitest::Test
                    pr(12, "o/widgets", head: "o:fix/scanner-skips-worktrees"),]
     @poller.run
     out = links_for(ENROLLED, links, metadata: both)
-    assert_equal ["#5 [local merged]", "#12 [public open]"], shown(out.drop(1))
+    assert_equal ["#5 widgets_local [local merged]", "#12 widgets [public open]"], shown(out.drop(1))
     assert_equal [%w[local info], %w[merged done]], out[1][:tags].map { |t| t.values_at(:text, :tone) }
     assert_equal({ "Repo" => "o/widgets_local", "Role" => "private local repo", "State" => "merged", "Base" => "local",
+                   "Assigned" => "agent-1 · #{Time.at(1).strftime('%Y-%m-%d %H:%M:%S %Z')}",
                    "Read" => "#{Time.at(@now).strftime('%Y-%m-%d %H:%M:%S %Z')} (GitHub)", },
                  detail(out[1]))
     @now += 30
@@ -462,50 +470,90 @@ class PrStatesTest < Minitest::Test
                  "no clock in the JSON: the card rev changes only with a new GitHub read"
     assert_equal "public repo", detail(out[2])["Role"]
     assert_equal "https://github.com/o/widgets/pull/12", out.last[:url]
-    assert_equal %w[repo pr pr], out.map { |l| l[:kind] }
+    assert_equal [[nil, "repo"], %w[local pr], %w[public pr]], out.map { |l| [l[:group], l[:kind]] }
+  end
+
+  # every PR is a row — several per role, several repos (busyyaks + the engine it vendors)
+  def test_every_assigned_pr_is_a_row
+    meta = prs_meta("local", "https://github.com/o/widgets_local/pull/5", "public", "https://github.com/o/widgets/pull/12",
+                    "local", "https://github.com/o/engine_local/pull/91", "local", "https://github.com/o/widgets_local/pull/6")
+    out = links_for(ENROLLED, [], metadata: meta)
+    assert_equal ["#5 widgets_local [local checking]", "#91 engine_local [local checking]",
+                  "#6 widgets_local [local checking]", "#12 widgets [public checking]",], shown(out)
+    assert_equal 4, @db[:gh_pr_states].count
+    assert(out.all? { |l| l[:unassign] }, "every assigned PR row offers the operator's unassign")
+    why = "v14: o/cf_local is in no role this project reads (project not enrolled)"
+    gone = meta.merge("prs_removed" => [{ "url" => "https://github.com/o/cf_local/pull/4", "role" => "local",
+                                          "removed_by" => "migration", "removed_at" => 2, "reason" => why, }])
+    last = links_for(ENROLLED, [], metadata: gone).last
+    # the chip = the day in the server's zone; its year left out while it is the clock's (any zone: 1970 or 1969)
+    day = Time.at(2).strftime(Time.at(2).year == Time.at(@now).year ? "%m-%d" : "%Y-%m-%d")
+    assert_equal ["#4 cf_local", "removed", [[day, "muted"]], nil, true],
+                 [last[:label], last[:group], last[:tags].map { |t| t.values_at(:text, :tone) }, last[:unassign],
+                  last[:struck],]
+    assert_equal ["migration · #{Time.at(2).strftime('%Y-%m-%d %H:%M:%S %Z')}", why],
+                 detail(last).values_at("Removed", "Why")
+    # another year than the clock's: the year is said (server zone, as the hover's time)
+    later = @now + (400 * 86_400)
+    other_year = gone.merge("prs_removed" => [gone["prs_removed"].first.merge("removed_at" => later)])
+    assert_equal [Time.at(later).strftime("%Y-%m-%d")],
+                 links_for(ENROLLED, [], metadata: other_year).last[:tags].map { |t| t[:text] }
+    bare = meta.merge("prs_removed" => [{ "url" => "https://github.com/o/cf_local/pull/4" }])
+    assert_equal [%w[removed muted]], links_for(ENROLLED, [], metadata: bare).last[:tags].map { |t| t.values_at(:text, :tone) }
+    refute(out.any? { |l| l.key?(:struck) }, "an assigned PR is not struck")
+    assert_equal 4, @db[:gh_pr_states].count, "a removed PR is never polled"
+    refute links_for(ENROLLED.merge(local_error: "x"), [], metadata: meta).last.key?(:unassign), "the config row does not"
+    old = { "prs" => [{ "url" => "https://github.com/o/widgets_local/pull/5", "role" => "local" }] } # migrated: no by/at
+    assert_equal "not recorded", detail(links_for(ENROLLED, [], metadata: old)[0])["Assigned"]
   end
 
   # no PR assigned → no row and nothing asked (a placeholder is not a pull request, a branch name is not guessed); the
   # same PR pasted as a URL stays a plain link beside its row
   def test_no_public_pr_recorded_shows_no_row_and_a_pasted_url_stays_a_link
     assert_equal [], links_for(ENROLLED, [])
-    assert_equal [], links_for(ENROLLED, [], metadata: { "prs" => {} })
+    assert_equal [], links_for(ENROLLED, [], metadata: { "prs" => [] })
     assert_equal [], @db[:gh_pr_states].select_map(:ref)
     @http.pulls = [pr(12, "o/widgets")]
     listed = [{ kind: "url", label: "github.com/o/widgets/pull/12", url: "https://github.com/o/widgets/pull/12" }]
     links_for(ENROLLED, listed, metadata: PUB12)
     @poller.run
     out = links_for(ENROLLED, listed, metadata: PUB12)
-    assert_equal ["github.com/o/widgets/pull/12", "#12 [public open]"], shown(out)
+    assert_equal ["github.com/o/widgets/pull/12", "#12 widgets [public open]"], shown(out)
     assert_equal %w[url pr], out.map { |l| l[:kind] }
     assert_equal ["github.com/o/widgets/pull/12"], shown(links_for(ENROLLED, listed)), "a pasted URL is not a PR row"
   end
 
   # review round 1: a raw `cards` row carries metadata as JSON text (the engine's watch pass, waiting counts)
   def test_assigned_reads_a_raw_rows_json_metadata
-    assert_equal ["o/widgets", 12], PS.assigned({ id: 158, metadata: JSON.generate(PUB12) }, "public", "o/widgets")
-    assert_nil PS.assigned({ id: 158, metadata: nil }, "public", "o/widgets")
-    assert_nil PS.assigned({ id: 158, metadata: PUB12 }, "local", "o/widgets"), "by role"
-    mixed = { "prs" => { "public" => "https://github.com/O/Widgets/pull/12" } }
-    assert_equal ["o/widgets", 12], PS.assigned({ id: 158, metadata: mixed }, "public", "o/widgets"), "owner/name in any case"
-    e = assert_raises(PS::Invalid) { PS.assigned({ id: 158, metadata: "{nope" }, "public", "o/widgets") }
+    want = [{ url: "https://github.com/o/widgets/pull/12", repo: "o/widgets", number: 12, role: "public", by: "agent-1",
+              at: 1, }]
+    assert_equal want, PS.assigned({ id: 158, metadata: JSON.generate(PUB12) }, "public")
+    assert_equal want, PS.assigned({ id: 158, metadata: PUB12 })
+    assert_empty PS.assigned({ id: 158, metadata: nil }, "public")
+    assert_empty PS.assigned({ id: 158, metadata: PUB12 }, "local"), "by role"
+    e = assert_raises(PS::Invalid) { PS.assigned({ id: 158, metadata: "{nope" }, "public") }
     assert_match(/\Acard #158 metadata is not JSON: /, e.message)
+    e = assert_raises(PS::Invalid) { PS.assigned({ id: 158, metadata: { "prs" => { "public" => "x" } } }) }
+    assert_match(/\Acard #158 metadata prs is not a list of PRs: /, e.message, "the pre-list shape is never read as none")
+    e = assert_raises(PS::Invalid) { PS.assigned({ id: 158, metadata: { "prs" => [{ "url" => "#12", "role" => "pr" }] } }) }
+    assert_match(/metadata prs has an entry that is no PR URL: /, e.message)
   end
 
-  # a prs.public that is no PR of the public repo is said on the card, never followed
-  def test_a_public_pr_on_another_repo_is_said
-    out = links_for(ENROLLED, [], metadata: { "prs" => { "public" => "https://github.com/o/widgets_local/pull/5" } })
-    assert_equal ["public [public unknown]"], shown(out)
-    assert_match(/card #158 metadata prs.public is not a PR on o\/widgets: /, detail(out[0])["Why"])
+  # a list that is not one of PRs is said on the card, never followed
+  def test_a_broken_list_is_said
+    out = links_for(ENROLLED, [], metadata: { "prs" => [{ "url" => "nope", "role" => "public" }] })
+    assert_equal ["PRs [unknown]"], shown(out)
+    assert_match(/card #158 metadata prs has an entry that is no PR URL: /, detail(out[0])["Why"])
+    assert_equal "/projects/g/widgets", out[0][:url]
     assert_equal [], @db[:gh_pr_states].select_map(:ref)
   end
 
-  # upstream mode with no readable public repo — roles still known, the public PR said unknown with the reason
-  def test_an_unreadable_public_repo_keeps_the_roles_and_says_why
+  # upstream mode with no readable public repo — the local PRs still rows, the enrolment's reason said beside them
+  def test_an_unreadable_public_repo_keeps_the_rows_and_says_why
     up = ENROLLED.merge(local_mode: "upstream", public_repo: nil, public_head: nil,
                         local_error: 'guard.upstream names remote "upstream", which has no URL')
-    out = links_for(up, [], id: 9, metadata: { "prs" => { "local" => "https://github.com/o/widgets_local/pull/3" } })
-    assert_equal ["#3 [local checking]", "public [public unknown]"], shown(out)
+    out = links_for(up, [], id: 9, metadata: prs_meta("local", "https://github.com/o/widgets_local/pull/3"))
+    assert_equal ["#3 widgets_local [local checking]", "config [local unknown]"], shown(out)
     assert_equal 'guard.upstream names remote "upstream", which has no URL', detail(out.last)["Why"]
     assert_equal "warn", out.last[:tags].last[:tone]
     assert_equal "/projects/g/widgets", out.last[:url]
@@ -517,18 +565,19 @@ class PrStatesTest < Minitest::Test
     named = [{ kind: "url", label: "github.com/o/widgets/pull/4", url: "https://github.com/o/widgets/pull/4" }]
     links_for(ENROLLED, named, metadata: PUB12)
     @poller.run
-    assert_equal ["github.com/o/widgets/pull/4", "#12 [public open]"], shown(links_for(ENROLLED, named, metadata: PUB12))
+    assert_equal ["github.com/o/widgets/pull/4", "#12 widgets [public open]"],
+                 shown(links_for(ENROLLED, named, metadata: PUB12))
     assert_equal [%w[o/widgets pr:12]], @db[:gh_pr_states].select_map(%i[repo ref]), "the pasted PR is not read"
   end
 
   # a PR number in the text names no repo (it was resolved against the card's own repo, so a PR of another repo showed
   # as an unrelated [local] row); neither it nor the handoff pr_url is ever a row: the rows are the assigned PRs
   def test_text_pr_refs_and_the_handoff_pr_are_never_rows
-    meta = { "prs" => { "local" => "https://github.com/o/widgets_local/pull/139" } }
+    meta = prs_meta("local", "https://github.com/o/widgets_local/pull/139")
     text = [{ kind: "pr", label: "#139", url: "https://github.com/o/widgets_local/pull/139" }, # the handoff pr_url
             { kind: "pr", label: "#63", url: "https://github.com/o/widgets_local/pull/63" },   # "engine PR #63"
             { kind: "pr", label: "#13", url: "https://github.com/o/widgets_local/pull/13" },]  # "public PR #13"
-    assert_equal ["#139 [local checking]"], shown(links_for(ENROLLED, text, metadata: meta))
+    assert_equal ["#139 widgets_local [local checking]"], shown(links_for(ENROLLED, text, metadata: meta))
     assert_equal [%w[o/widgets_local pr:139]], @db[:gh_pr_states].select_map(%i[repo ref]), "#63 / #13 are not read"
     assert_equal [], links_for(ENROLLED, text), "nothing assigned → no PR row at all"
     plain = { slug: "g/r", remote: "https://github.com/o/r.git", local_mode: nil, local_error: nil }
@@ -539,48 +588,45 @@ class PrStatesTest < Minitest::Test
   def test_upstream_mode_reads_the_public_pr_on_the_upstream_repo
     up = ENROLLED.merge(local_mode: "upstream", public_repo: "https://github.com/ruby/ruby.git",
                         public_head: "https://github.com/me/ruby.git")
-    links_for(up, [], id: 9, metadata: { "prs" => { "public" => "https://github.com/ruby/ruby/pull/77" } })
+    links_for(up, [], id: 9, metadata: prs_meta("public", "https://github.com/ruby/ruby/pull/77"))
     assert_equal [%w[ruby/ruby pr:77]], @db[:gh_pr_states].select_map(%i[repo ref])
   end
 
   # the local PR assigned to the card is listed with no text naming it; a branch is never looked up
   def test_the_assigned_local_pr_is_listed_without_text
-    meta = { "prs" => { "local" => "https://github.com/o/widgets_local/pull/45" } }
-    assert_equal ["#45 [local checking]"], shown(links_for(ENROLLED, [], metadata: meta))
+    meta = prs_meta("local", "https://github.com/o/widgets_local/pull/45")
+    assert_equal ["#45 widgets_local [local checking]"], shown(links_for(ENROLLED, [], metadata: meta))
     @http.pulls = [pr(45, "o/widgets_local")]
     @poller.run
     branch = { kind: "branch", label: "card/158-a", url: "https://github.com/o/widgets_local/tree/card/158-a" }
     out = links_for(ENROLLED, [branch], metadata: meta)
-    assert_equal ["card/158-a", "#45 [local open]"], shown(out)
+    assert_equal ["card/158-a", "#45 widgets_local [local open]"], shown(out)
     assert_equal [%w[o/widgets_local pr:45]], @db[:gh_pr_states].select_map(%i[repo ref]), "the branch is not looked up"
-    bad = links_for(ENROLLED, [], metadata: { "prs" => { "local" => "https://github.com/o/widgets/pull/12" } })
-    assert_equal ["local [local unknown]"], shown(bad)
-    assert_match(/metadata prs.local is not a PR on o\/widgets_local: /, detail(bad[0])["Why"])
   end
 
-  # a plain project's card: its `pr` PR on the repo its URL names, no role tag
+  # a plain project's card: its `pr` PR, no role tag, no group
   def test_a_plain_projects_assigned_pr_has_no_role
     plain = { slug: "g/r", path: "/repos/r", remote: "https://github.com/o/r.git", pr_remote: "https://github.com/o/r.git",
               local_mode: nil, local_error: nil, }
-    meta = { "prs" => { "pr" => "https://github.com/o/r/pull/7" } }
+    meta = prs_meta("pr", "https://github.com/o/r/pull/7")
     links_for(plain, [], metadata: meta)
     @http.pulls = [pr(7, "o/r")]
     @poller.run
-    assert_equal ["#7 [open]"], shown(links_for(plain, [], metadata: meta))
+    assert_equal ["#7 r [open]"], shown(links_for(plain, [], metadata: meta))
+    refute links_for(plain, [], metadata: meta).first.key?(:group)
     assert_equal [], links_for(plain, [])
-    assert_equal ["#7 [open]"], shown(links_for(plain.merge(pr_remote: nil), [], metadata: meta)), "any repo"
-    bad = links_for(plain, [], metadata: { "prs" => { "pr" => "#7" } })
-    assert_equal ["pr [unknown]"], shown(bad)
-    assert_match(/metadata prs.pr is not a PR on github.com: /, detail(bad[0])["Why"])
+    bad = links_for(plain, [], metadata: { "prs" => [{ "url" => "#7", "role" => "pr" }] })
+    assert_equal ["PRs [unknown]"], shown(bad)
+    assert_match(/metadata prs has an entry that is no PR URL: /, detail(bad[0])["Why"])
   end
 
   def test_not_enrolled_flags_state_only_and_local_error_is_shown
     plain = { slug: "g/r", remote: "https://github.com/o/r.git", local_mode: nil, local_error: nil }
     @http.pulls = [pr(7, "o/r", draft: true)]
-    meta = { "prs" => { "pr" => "https://github.com/o/r/pull/7" } }
+    meta = prs_meta("pr", "https://github.com/o/r/pull/7")
     links_for(plain, [], metadata: meta)
     @poller.run
-    assert_equal ["#7 [draft]"], shown(links_for(plain, [], metadata: meta))
+    assert_equal ["#7 r [draft]"], shown(links_for(plain, [], metadata: meta))
     broken = plain.merge(local_error: "guard.publicRemote names remote \"fork\", which has no URL")
     cfg = links_for(broken, [])
     assert_equal ["config [local unknown]"], shown(cfg)
@@ -594,12 +640,12 @@ class PrStatesTest < Minitest::Test
   def test_a_bad_guard_mode_keeps_the_assigned_pr_row
     bad = { slug: "g/r", remote: "https://github.com/o/r.git", local_mode: nil,
             local_error: 'guard.mode is "mirror", not own or upstream', }
-    meta = { "prs" => { "pr" => "https://github.com/o/r/pull/7" } }
+    meta = prs_meta("pr", "https://github.com/o/r/pull/7")
     links_for(bad, [], metadata: meta)
     @http.pulls = [pr(7, "o/r")]
     @poller.run
     rows = links_for(bad, [], metadata: meta)
-    assert_equal ["#7 [open]", "config [local unknown]"], shown(rows)
+    assert_equal ["#7 r [open]", "config [local unknown]"], shown(rows)
     assert_equal 'guard.mode is "mirror", not own or upstream', detail(rows[1])["Why"]
   end
 
@@ -607,26 +653,58 @@ class PrStatesTest < Minitest::Test
   # expected base is its side's (local → guard.localBranch, public → guard.publicBase's branch); an enrolment that
   # names no base says so on every read PR
   def test_a_pr_not_on_its_base_branch_is_flagged_and_gated
-    meta = { "prs" => { "local" => "https://github.com/o/widgets_local/pull/5" }.merge(PUB12["prs"]) }
+    meta = prs_meta("local", "https://github.com/o/widgets_local/pull/5", "public", "https://github.com/o/widgets/pull/12")
     links_for(ENROLLED, [], metadata: meta)
     @http.pulls = [pr(5, "o/widgets_local"), pr(12, "o/widgets", base: { "ref" => "feature/live-agent-status" })]
     @poller.run
     out = links_for(ENROLLED, [], metadata: meta)
-    assert_equal ["#5 [local open]", "#12 [public open base: feature/live-agent-status]"], shown(out)
+    assert_equal ["#5 widgets_local [local open]", "#12 widgets [public open base: feature/live-agent-status]"], shown(out)
     assert_equal "warn", out[1][:tags].last[:tone]
     assert_equal ["feature/live-agent-status", "main"], detail(out[1]).values_at("Base", "Expected base")
     assert_equal ["local", nil], detail(out[0]).values_at("Base", "Expected base")
     unknown = ENROLLED.merge(public_base: nil, local_error: "guard.publicBase is not set")
     out = links_for(unknown, [], metadata: meta)
-    assert_equal "#12 [public open base: feature/live-agent-status]", shown(out)[1]
+    assert_equal "#12 widgets [public open base: feature/live-agent-status]", shown(out)[1]
     assert_equal "unknown: guard.publicBase is not set", detail(out[1])["Expected base"]
     plain = { slug: "g/r", remote: "https://github.com/o/r.git", local_mode: nil, local_error: nil }
     @http.pulls = [pr(7, "o/r", base: { "ref" => "anything" })]
-    links_for(plain, [], metadata: { "prs" => { "pr" => "https://github.com/o/r/pull/7" } })
+    links_for(plain, [], metadata: prs_meta("pr", "https://github.com/o/r/pull/7"))
     @poller.run
-    plain_out = links_for(plain, [], metadata: { "prs" => { "pr" => "https://github.com/o/r/pull/7" } })
-    assert_equal ["#7 [open]"], shown(plain_out), "a plain project's PR: any base"
+    plain_out = links_for(plain, [], metadata: prs_meta("pr", "https://github.com/o/r/pull/7"))
+    assert_equal ["#7 r [open]"], shown(plain_out), "a plain project's PR: any base"
     assert_equal "anything", detail(plain_out[0])["Base"]
+  end
+
+  # a PR on another enrolled project's repo is checked against THAT project's base, not the card's;
+  # a repo no enrolment names (or two naming different bases) is an unknown expected base, said why
+  def test_a_pr_on_another_projects_repo_is_flagged_against_that_projects_base
+    @db[:projects].insert(slug: "g/eng", path: "/repos/eng", remote: "https://github.com/o/eng_local.git", own: true,
+                          commits_window: 0, mine_window: 0, dirty: 0, scanned_at: 0, local_mode: "own",
+                          local_repo: "https://github.com/o/eng_local.git", public_repo: "https://github.com/o/eng.git",
+                          local_base: "main", public_base: "main")
+    meta = prs_meta("local", "https://github.com/o/widgets_local/pull/5", "local", "https://github.com/o/eng_local/pull/7")
+    links_for(ENROLLED, [], metadata: meta)
+    @http.pulls = [pr(5, "o/widgets_local"), pr(7, "o/eng_local", base: { "ref" => "main" })]
+    @poller.run
+    out = links_for(ENROLLED, [], metadata: meta)
+    assert_equal ["#5 widgets_local [local open]", "#7 eng_local [local open]"], shown(out),
+                 "the engine PR on main: its own project's base, no warning"
+    @http.pulls = [pr(5, "o/widgets_local"), pr(7, "o/eng_local")]
+    @now += 60
+    @poller.run
+    out = links_for(ENROLLED, [], metadata: meta)
+    assert_equal "#7 eng_local [local open base: local]", shown(out)[1]
+    assert_equal %w[local main], detail(out[1]).values_at("Base", "Expected base")
+    @db[:projects].where(slug: "g/eng").update(local_base: "develop", slug: "g/eng2")
+    @db[:projects].insert(slug: "g/eng", path: "/repos/eng-b", remote: "https://github.com/o/eng_local.git", own: true,
+                          commits_window: 0, mine_window: 0, dirty: 0, scanned_at: 0, local_mode: "own",
+                          local_repo: "https://github.com/o/eng_local.git", local_base: "main")
+    out = links_for(ENROLLED, [], metadata: meta)
+    assert_equal "unknown: the enrolments of o/eng_local name different local bases: g/eng → main, g/eng2 → develop",
+                 detail(out[1])["Expected base"]
+    @db[:projects].where(slug: %w[g/eng g/eng2]).delete
+    out = links_for(ENROLLED, [], metadata: meta)
+    assert_equal "unknown: o/eng_local is the local repo of no enrolled project", detail(out[1])["Expected base"]
   end
 
   # GitHub's mergeable: false / dirty → conflicts, null (still computing) → "mergeable: computing" — never guessed clean
@@ -647,7 +725,7 @@ class PrStatesTest < Minitest::Test
     @http.pulls = cases.map { |n, (f, _, _)| pr(n, "o/widgets_local", **f) } +
                   [pr(10, "o/widgets_local", state: "closed", merged: "2026-11-08T11:00:00Z", mergeable: nil)]
     rows = lambda do
-      (1..10).map { |n| links_for(ENROLLED, [], metadata: { "prs" => { "local" => "https://github.com/o/widgets_local/pull/#{n}" } }).first }
+      (1..10).map { |n| links_for(ENROLLED, [], metadata: prs_meta("local", "https://github.com/o/widgets_local/pull/#{n}")).first }
     end
     rows.call
     @poller.run
@@ -657,7 +735,7 @@ class PrStatesTest < Minitest::Test
       assert_equal [want].compact, tags, "PR #{n}"
       assert_equal mergeable, detail(out[n - 1])["Mergeable"], "PR #{n}"
     end
-    assert_equal "#10 [local merged]", shown([out[9]]).first, "merged: no mergeable tag"
+    assert_equal "#10 widgets_local [local merged]", shown([out[9]]).first, "merged: no mergeable tag"
     assert_nil detail(out[9])["Mergeable"]
   end
 
@@ -674,16 +752,16 @@ class PrStatesTest < Minitest::Test
 
   # auto-merge on: GitHub merges once the checks pass, whatever the board says — a warning on the row
   def test_auto_merge_is_tagged
-    meta = { "prs" => { "local" => "https://github.com/o/widgets_local/pull/5" } }
+    meta = prs_meta("local", "https://github.com/o/widgets_local/pull/5")
     @http.pulls = [pr(5, "o/widgets_local", auto_merge: { "merge_method" => "squash", "enabled_by" => { "login" => "x" } })]
     links_for(ENROLLED, [], metadata: meta)
     @poller.run
     out = links_for(ENROLLED, [], metadata: meta)
-    assert_equal ["#5 [local open auto-merge]"], shown(out)
+    assert_equal ["#5 widgets_local [local open auto-merge]"], shown(out)
     assert_equal "warn", out[0][:tags].last[:tone]
     assert_match(/without the board's approval/, detail(out[0])["Auto-merge"])
     @http.pulls = [pr(5, "o/widgets_local")]
     @poller.run
-    assert_equal ["#5 [local open]"], shown(links_for(ENROLLED, [], metadata: meta)), "turned off: no tag"
+    assert_equal ["#5 widgets_local [local open]"], shown(links_for(ENROLLED, [], metadata: meta)), "turned off: no tag"
   end
 end

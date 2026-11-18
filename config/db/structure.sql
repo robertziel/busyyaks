@@ -536,4 +536,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261208472000_gh_hook_dirty.rb'),
 ('20261208497000_pr_checks_base_sha.rb'),
 ('20261209492000_progress_watch.rb'),
+('20261210469000_agents_kanban_pr_lists.rb'),
 ('20261217523000_runtime_settings.rb');

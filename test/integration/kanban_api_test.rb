@@ -18,7 +18,8 @@ class KanbanApiTest < Minitest::Test
   def setup
     super
     @dir = Dir.mktmpdir
-    store.upsert_project(slug: "g/r", path: @dir, remote: nil, branch: "main", own: true, last_commit_at: 1,
+    store.upsert_project(slug: "g/r", path: @dir, remote: "https://github.com/o/r.git", branch: "main", own: true,
+                         last_commit_at: 1,
                          commits_window: 0, mine_window: 0, dirty: 0, unpushed: nil, scanned_at: 1)
     assert_equal 200, sign_in
     get "/" # the SPA shell carries the CSRF token every mutation sends back as X-CSRF-Token
@@ -114,11 +115,32 @@ class KanbanApiTest < Minitest::Test
     end
     assert_equal [], shown.call, "the handoff pr_url is not a row: nothing assigned, no PR row"
     kb.assign_pr(id, url: "https://github.com/o/r_local/pull/5", role: "local", by: "agent")
-    assert_equal [["#5", %w[local checking]]], shown.call, "no public PR assigned to the card: no row"
+    assert_equal [["#5 r_local", %w[local checking]]], shown.call, "no public PR assigned to the card: no row"
     kb.assign_pr(id, url: "https://github.com/o/r/pull/7", role: "public", by: "agent")
-    assert_equal [["#5", %w[local checking]], ["#7", %w[public checking]]], shown.call, "the assigned public PR"
+    assert_equal [["#5 r_local", %w[local checking]], ["#7 r", %w[public checking]]], shown.call, "the assigned public PR"
     assert_equal [%w[o/r pr:7], ["o/r_local", "pr:5"]],
                  Hanami.app["db.gateway"].connection[:gh_pr_states].order(:repo).select_map(%i[repo ref])
+    kb.assign_pr(id, url: "https://github.com/o/r_local/pull/6", role: "local", by: "agent")
+    assert_equal ["#5 r_local", "#6 r_local", "#7 r"], shown.call.map(&:first), "every PR, grouped by role"
+    assert_equal %w[local local public], api(:get, "/api/cards/#{id}")["links"].select { |l| l["kind"] == "pr" }
+                                                                                .map { |l| l["group"] }
+  end
+
+  # the operator takes one PR off a card (POST /api/cards/:id/pr-unassign {pr_url, reason}), logged
+  def test_the_operator_unassigns_a_pr
+    store.upsert_project(slug: "g/r", remote: "https://github.com/o/r.git", pr_remote: "https://github.com/o/r.git")
+    id = kb.create(slug: "g/r", title: "T", by: "op")
+    kb.assign_pr(id, url: "https://github.com/o/r/pull/3", role: "pr", by: "agent")
+    j = api(:post, "/api/cards/#{id}/pr-unassign",
+{ "pr_url" => "https://github.com/o/r/pull/3", "reason" => "not this card's" })
+    assert_equal 200, last_response.status
+    assert_empty j["card"]["metadata"]["prs"]
+    assert_equal "not this card's", j["card"]["metadata"]["prs_removed"].first["reason"]
+    assert_equal "PR pr unassigned: https://github.com/o/r/pull/3 — not this card's",
+                 kb.activity(id).reverse.find { |e| e[:kind] == "update" }[:body]
+    j = api(:post, "/api/cards/#{id}/pr-unassign", { "pr_url" => "https://github.com/o/r/pull/3", "reason" => "again" })
+    assert_equal [422, "https://github.com/o/r/pull/3 is not assigned to card ##{id} (its PRs: none)"],
+                 [last_response.status, j["error"]]
   end
 
   # the checkout's links come from the scanner's last read (no git in the web process): branches it stored link; a repo
@@ -159,7 +181,7 @@ class KanbanApiTest < Minitest::Test
     assert_equal "no-store", last_response.headers["Cache-Control"]
     assert_equal({ "waiting_columns" => %w[human_check ready], "total" => 0, "projects" => [], "held" => [], "external" => [],
                    "approved" => [], "launch_failures" => [], "lead_ends" => [], }, api(:get, "/api/waiting"))
-    # card #273: a session whose start failed (claude never came up) is in the list the layout's alert modal reads
+    # a session whose start failed (claude never came up) is in the list the layout's alert modal reads
     kb.register_session(session: "g_r_teamlead", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
     kb.end_session("g_r_teamlead", reason: "start failed: Temp directory is owned by uid 0", by: "op")
     f = api(:get, "/api/waiting")["launch_failures"]

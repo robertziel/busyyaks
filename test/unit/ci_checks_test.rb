@@ -113,17 +113,18 @@ class CiChecksTest < Minitest::Test
 
   def finish_at(t) = Time.at(t).utc.iso8601
 
-  # config ci (card #470): jenkins/ci gates on both test repos, a check pending over 60 min is stuck
+  # config ci: jenkins/ci gates on both test repos, a check pending over 60 min is stuck
   def ci_settings = Busyyaks::CiSettings.parse!("max_pending_minutes" => 60,
-                                                "required" => { "o/r" => ["jenkins/ci"], "o/r_local" => ["jenkins/ci"] })
+                                                "required" => { "o/r" => ["jenkins/ci"], "o/r_local" => ["jenkins/ci"],
+                                                                "o/eng_local" => ["jenkins/ci"], })
 
-  # a card's PRs are the ones assigned to it (kanban_pr_assign → metadata prs.<role>), nothing else
+  # a card's PRs are the ones assigned to it (kanban_pr_assign → metadata prs, a list), nothing else
   def assign!(role, url) = @kb.assign_pr(@id, url: url, role: role, by: "lead")
 
   # no PR assigned → nothing asked: neither the owner's branch nor the pr_url is read as the card's PR
   def test_no_assigned_pr_is_nothing_and_asks_nothing
-    @kb.update(@id, { "metadata" => nil }, by: "lead")
-    @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r/pull/112")
+    # metadata prs is kanban_pr_assign's alone: the assignment is cleared in the row
+    @conn[:cards].where(id: @id).update(metadata: nil, pr_url: "https://github.com/o/r/pull/112")
     assert_nil @port.pr_checks(@kb.card(@id))
     assert_equal 0, @conn[:gh_pr_checks].count
     assign!("pr", "https://github.com/o/r/pull/112")
@@ -133,16 +134,16 @@ class CiChecksTest < Minitest::Test
 
   # a plain project's card PR is read on the repo its URL names; an assignment that is no PR URL is said
   def test_the_assigned_pr_is_read_on_its_own_repo
-    assign!("pr", "https://github.com/o/r_local/pull/112")
     @port.pr_checks(@kb.card(@id))
     @poller.run
-    assert_includes @http.requests.first, "/repos/o/r_local/pulls/112"
-    @conn[:cards].where(id: @id).update(metadata: JSON.generate("prs" => { "pr" => "#112" }))
+    assert_includes @http.requests.first, "/repos/o/r/pulls/112"
+    @conn[:cards].where(id: @id).update(metadata: JSON.generate("prs" => [{ "url" => "#112", "role" => "pr" }]))
     e = assert_raises(CK::Unavailable) { @port.pr_checks(@kb.card(@id)) }
-    assert_equal "card ##{@id} metadata prs.pr is not a PR on github.com: \"#112\"", e.message
+    assert_equal "card ##{@id} metadata prs has an entry that is no PR URL: " \
+                 "#{{ 'url' => '#112', 'role' => 'pr' }.to_s.inspect}", e.message
   end
 
-  # review round 1: on an enrolled project the idle watch follows the card's `local` PR (never its `pr` / `public`);
+  # on an enrolled project the idle watch follows the card's `local` PR (never its `pr` / `public`);
   # an unreadable local repo is said
   def test_the_idle_watch_follows_the_local_pr_on_an_enrolled_project
     enrol!
@@ -152,9 +153,6 @@ class CiChecksTest < Minitest::Test
     assign!("local", "https://github.com/o/r_local/pull/112")
     @port.pr_checks(@kb.card(@id))
     assert_equal [%w[o/r_local pr:112]], @conn[:gh_pr_checks].select_map(%i[repo ref])
-    @conn[:projects].where(slug: "o-r").update(local_repo: nil, local_error: "no local remote")
-    e = assert_raises(CK::Unavailable) { @port.pr_checks(@kb.card(@id)) }
-    assert_equal "the local PR of card ##{@id} cannot be found: no local remote", e.message
   end
 
   # a ref the pollers no longer ask (the old branch lookup) is an error on its row, never a request
@@ -226,6 +224,21 @@ class CiChecksTest < Minitest::Test
     assert_equal "GitHub check status for o/r pr:112 is 200s old (github service stopped?)", e.message
   end
 
+  # a card with several PRs follows each one — the kinds name the PR, so one PR's push is never read
+  # as another's
+  def test_progress_follows_every_assigned_pr
+    @conn[:projects].where(slug: "o-r").update(branch_tips: "{}", remote_heads: "[]")
+    assign!("pr", "https://github.com/o/r/pull/7")
+    @http.pulls = [PR, PR.merge("number" => 7, "head" => { "sha" => "def" })]
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now - 50) }]
+    @port.progress(@kb.card(@id))
+    @poller.run
+    got = @port.progress(@kb.card(@id))
+    assert_equal [["pr head o/r#112", "abc", "PR o/r#112 head abc"], ["ci o/r#112", "CI success on abc (o/r#112)"],
+                  ["pr head o/r#7", "def", "PR o/r#7 head def"], ["ci o/r#7", "CI success on def (o/r#7)"],],
+                 got.map { |e| e[:kind].start_with?("ci") ? e.values_at(:kind, :text) : e.values_at(:kind, :key, :text) }
+  end
+
   # the wiring: the notifier's watch pass runs the engine's progress watch on this Port — a quiet card pings its owner
   # naming the PR head, then gets the busyyaks comment, then counts as waiting
   def test_the_notifier_escalates_a_quiet_card_with_the_ports_evidence
@@ -269,7 +282,7 @@ class CiChecksTest < Minitest::Test
 
     enrol!
     e = assert_raises(CK::Unavailable) { @port.approval_checks(card, local_step) }
-    assert_equal "card ##{@id} has no local PR assigned (kanban_pr_assign role local, a PR on o/r_local)", e.message,
+    assert_equal "card ##{@id} has no local PR assigned (kanban_pr_assign role local)", e.message,
                  "enrolled: the `pr` PR is not the local one"
     assign!("local", "https://github.com/o/r_local/pull/112")
     card = @kb.card(@id)
@@ -278,17 +291,14 @@ class CiChecksTest < Minitest::Test
     @poller.run
     blocked = @port.approval_checks(card, public_step)
     assert_equal "blocked", blocked[:state]
-    assert_match(/the local PR #112 is still open, not merged into the local repo/, blocked[:reason])
+    assert_match(/the local PR o\/r_local#112 is still open, not merged into the local repo/, blocked[:reason])
     refute_includes @conn[:gh_pr_checks].select_map(%i[repo ref]), %w[o/r pr:5],
                     "the public PR is not asked before the local PR is merged"
     @http.pulls = [PUB, PR.merge("state" => "closed", "merged_at" => "2026-11-09T10:00:00Z")]
     @poller.run
     e = assert_raises(CK::Unavailable) { @port.approval_checks(card, public_step) }
-    assert_equal "card ##{@id} has no public PR assigned (kanban_pr_assign role public, a PR on o/r)", e.message,
+    assert_equal "card ##{@id} has no public PR assigned (kanban_pr_assign role public)", e.message,
                  "merged, no public PR assigned: refused, no branch name guessed"
-    assign!("public", "https://github.com/o/r_local/pull/5")
-    e = assert_raises(CK::Unavailable) { @port.approval_checks(@kb.card(@id), public_step) }
-    assert_match(/card ##{@id} metadata prs.public is not a PR on o\/r: /, e.message)
     assign!("public", "https://github.com/o/r/pull/5")
     card = @kb.card(@id)
     assert_equal "unpolled", @port.approval_checks(card, public_step)[:state], "merged: now the public PR is asked"
@@ -299,12 +309,9 @@ class CiChecksTest < Minitest::Test
     assert_equal({ number: 5, state: "success", finished_at: @now - 5, head: "abc", base: "main", draft: false,
                    merge_state: "clean", auto_merge: false, builds: [CI_URL], detail: "passed: jenkins/ci", },
                  @port.approval_checks(card, public_step))
-    assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, local_step)[:reason],
+    assert_equal "the local PR o/r_local#112 was merged before its approval", @port.approval_checks(card, local_step)[:reason],
                  "the first gate needs the local PR open: merged ahead of the operator is refused"
 
-    @conn[:projects].where(slug: "o-r").update(public_repo: nil, public_head: nil, local_error: "no fork remote yet")
-    e = assert_raises(CK::Unavailable) { @port.approval_checks(card, public_step) }
-    assert_match(/public PR of card ##{@id} cannot be found: no fork remote yet/, e.message)
   end
 
   LOCAL_STEP = { from: "human_check", to: "local_merged_pr", then: "deploy_check", name: "Approve", final: false }.freeze
@@ -341,7 +348,7 @@ class CiChecksTest < Minitest::Test
 
     @conn[:projects].where(slug: "o-r").update(public_base: nil, local_error: "guard.publicBase is not set")
     e = assert_raises(CK::Unavailable) { @port.approval_checks(@kb.card(@id), PUBLIC_STEP) }
-    assert_equal "card ##{@id}: the public PR's base branch is not known: guard.publicBase is not set", e.message
+    assert_equal "card ##{@id}: the public PR o/r's base branch is not known: guard.publicBase is not set", e.message
   end
 
   # the CI poll read a draft's checks like any PR's: a green draft could be approved
@@ -349,9 +356,10 @@ class CiChecksTest < Minitest::Test
     row = local_gate(PR.merge("draft" => true))
     assert_equal "blocked", row[:state]
     assert_equal "the local PR #112 is a draft", row[:reason]
-    # a plain project's PR too (any base)
+    # a plain project's PR too (any base): its `pr` PR (o/r#112, assigned in setup)
     @conn[:projects].where(slug: "o-r").update(local_mode: nil)
-    assign!("pr", "https://github.com/o/r_local/pull/112")
+    @port.approval_checks(@kb.card(@id), LOCAL_STEP)
+    @poller.run
     assert_equal "the PR #112 is a draft", @port.approval_checks(@kb.card(@id), LOCAL_STEP)[:reason]
     assert_equal "success", @port.pr_checks(@kb.card(@id))[:state], "the idle watch still reads its checks"
   end
@@ -424,12 +432,12 @@ class CiChecksTest < Minitest::Test
     @http.pulls = [PR]
     @poller.run
     assert_equal "success", @port.approval_checks(@kb.card(@id), LOCAL_STEP)[:state]
-    # a plain project's PR names its own repo
+    # a plain project's PR names its own repo: its `pr` PR (o/r#112, assigned in setup)
     @http.pulls = [PR.merge("auto_merge" => {})]
-    @poller.run
     @conn[:projects].where(slug: "o-r").update(local_mode: nil)
-    assign!("pr", "https://github.com/o/r_local/pull/112")
-    assert_match(/turn it off \(gh pr merge --disable-auto 112 -R o\/r_local\)\z/,
+    @port.approval_checks(@kb.card(@id), LOCAL_STEP)
+    @poller.run
+    assert_match(/turn it off \(gh pr merge --disable-auto 112 -R o\/r\)\z/,
                  @port.approval_checks(@kb.card(@id), LOCAL_STEP)[:reason])
   end
 
@@ -455,10 +463,11 @@ class CiChecksTest < Minitest::Test
     assert_match(/card ##{@id} has no local PR assigned/, e.message)
     assign!("local", "https://github.com/o/r_local/pull/112")
     card = @kb.card(@id)
-    assert_match(/local PR #112 is not read yet/, @port.approval_checks(card, step)[:reason])
+    assert_match(/local PR o\/r_local#112 is not read yet/, @port.approval_checks(card, step)[:reason])
     @http.pulls = [PR.merge("state" => "closed", "merged_at" => nil)]
     @poller.run
-    assert_equal "the local PR #112 closed without merging (why not read yet)", @port.approval_checks(card, step)[:reason]
+    assert_equal "the local PR o/r_local#112 closed without merging (why not read yet)",
+                 @port.approval_checks(card, step)[:reason]
   end
 
   # the local board: its first approval (Local: Human review) = the open local PR's checks; Local: Deploy check →
@@ -484,19 +493,146 @@ class CiChecksTest < Minitest::Test
     @port.approval_checks(card, first)
     @poller.run
     assert_equal "success", @port.approval_checks(card, first)[:state], "first gate: the open local PR is green"
-    assert_match(/the local PR #112 is still open/, @port.approval_checks(card, deploy)[:reason])
+    assert_match(/the local PR o\/r_local#112 is still open/, @port.approval_checks(card, deploy)[:reason])
     @http.pulls = [MERGED]
     @poller.run
     assert_equal "unpolled", @port.approval_checks(card, deploy)[:state], "merged: the merge commit's CI is asked"
     @http.statuses_by_sha["m1" * 20] = [{ "state" => "pending", "updated_at" => finish_at(@now) }]
     @poller.run
-    assert_equal "jenkins/ci for the local PR #112 merge is pending: merge commit m1m1m1m: running: jenkins/ci",
+    assert_equal "jenkins/ci for the local PR o/r_local#112 merge is pending: merge commit m1m1m1m: running: jenkins/ci",
                  @port.approval_checks(card, deploy)[:reason]
     assert(@http.requests.any? { |u| u.include?("/repos/o/r_local/commits/#{'m1' * 20}/status?") }, "the merge commit")
     @http.statuses_by_sha["m1" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
     @poller.run
     assert_equal [112, "success"], @port.approval_checks(card, deploy).values_at(:number, :state)
-    assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason]
+    assert_equal "the local PR o/r_local#112 was merged before its approval", @port.approval_checks(card, first)[:reason]
+  end
+
+  # a closed-unmerged or unknown PR among several is never dropped — the final step's public PRs and a
+  # plain project's `pr` PRs: only a merged one is left out; every head is said in full form (7 chars each)
+  def test_a_closed_pr_among_several_blocks_the_step
+    card, = local_steps
+    public_step = CK.steps(@kb.board_of("o-r")).last
+    assign!("public", "https://github.com/o/r/pull/5")
+    assign!("public", "https://github.com/o/r/pull/6")
+    card = @kb.card(@id)
+    @http.pulls = [MERGED, PUB.merge("head" => { "sha" => "a" * 40 }),
+                   PR.merge("number" => 6, "state" => "closed", "merged_at" => nil),]
+    @http.statuses_by_sha["a" * 40] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    2.times do
+      @port.approval_checks(card, public_step)
+      @poller.run
+    end
+    assert_equal ["blocked", "the PR o/r#6 closed without merging (why not read yet)"],
+                 @port.approval_checks(card, public_step).values_at(:state, :reason), "one green, one closed → refused"
+    @http.pulls = [MERGED, PUB.merge("head" => { "sha" => "a" * 40 }),
+                   PR.merge("number" => 6, "state" => "closed", "merged_at" => "2026-11-10T10:00:00Z"),]
+    @poller.run
+    assert_equal "success", @port.approval_checks(card, public_step)[:state], "a merged public PR is done: left out"
+    @http.pulls = [MERGED, PUB.merge("head" => { "sha" => "a" * 40 })]
+    @poller.run
+    assert_equal "the PR o/r#6 was not found", @port.approval_checks(card, public_step)[:reason]
+  end
+
+  def test_a_plain_projects_pr_prs_block_on_a_closed_one_and_say_every_head
+    step = { from: "human_check", to: "ready", then: "merged", name: "Approve", final: false }
+    assign!("pr", "https://github.com/o/r/pull/7")
+    card = @kb.card(@id)
+    @http.pulls = [PR.merge("head" => { "sha" => "a" * 40 }), PR.merge("number" => 7, "head" => { "sha" => "b" * 40 })]
+    @http.statuses_by_sha["a" * 40] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @http.statuses_by_sha["b" * 40] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @port.approval_checks(card, step)
+    @poller.run
+    green = @port.approval_checks(card, step)
+    assert_equal ["success", "#{'a' * 40}+#{'b' * 40}"], green.values_at(:state, :head)
+    assert_match(/ci_url https:\/\/x\/ is not the build of aaaaaaa\+bbbbbbb /,
+                 @port.approval_checks(card.merge(handoff_ci_url: "https://x/"), step)[:reason], "every head, shortened")
+    @http.pulls = [PR.merge("head" => { "sha" => "a" * 40 }), PR.merge("number" => 7, "state" => "closed", "merged_at" => nil)]
+    @poller.run
+    assert_equal ["blocked", "the PR o/r#7 closed without merging (why not read yet)"],
+                 @port.approval_checks(card, step).values_at(:state, :reason)
+    assert_equal "PR o/r#7 closed without merging (why not read yet)", @port.pr_checks(@kb.card(@id))[:reason],
+                 "the idle watch says a closed PR too, naming its repo"
+  end
+
+  # a card that changes two repos (busyyaks + the engine it vendors) holds a local PR on each; every one
+  # must be green — the first that is not is said with its repo; all green → one answer with both heads and builds
+  def test_every_local_pr_of_the_step_must_be_green
+    card, first, deploy = local_steps
+    @conn[:projects].insert(slug: "o-eng", path: "/projects/eng", remote: "git@github.com:o/eng_local.git",
+                            pr_remote: "git@github.com:o/eng_local.git", own: true, commits_window: 0, mine_window: 0,
+                            dirty: 0, scanned_at: 0, local_mode: "own", local_repo: "git@github.com:o/eng_local.git",
+                            public_repo: "git@github.com:o/eng.git", public_head: "git@github.com:o/eng.git",
+                            local_base: "local", public_base: "main")
+    assign!("local", "https://github.com/o/eng_local/pull/91")
+    card = @kb.card(@id)
+    engine = PR.merge("number" => 91, "head" => { "sha" => "def" })
+    eng_ci = "https://ci.example.com/job/eng/7/"
+    @http.pulls = [PR, engine]
+    @http.statuses_by_sha["abc"] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @http.statuses_by_sha["def"] = [{ "state" => "pending", "updated_at" => finish_at(@now) }]
+    @port.approval_checks(card, first)
+    @poller.run
+    assert_equal ["pending", "o/eng_local PR #91: CI is still running"],
+                 @port.approval_checks(card, first).values_at(:state, :reason)
+    @http.statuses_by_sha["def"] = [{ "state" => "success", "updated_at" => finish_at(@now), "target_url" => eng_ci }]
+    @poller.run
+    green = @port.approval_checks(card, first)
+    assert_equal ["success", "abc+def", [CI_URL, eng_ci]], green.values_at(:state, :head, :builds)
+    assert_equal "success", @port.approval_checks(card.merge(handoff_ci_url: eng_ci), first)[:state],
+                 "a handoff's ci_url may be the build of any of the PRs' heads"
+    assert_match(/ci_url https:\/\/ci.example.com\/x\/ is not the build of abc\+def/,
+                 @port.approval_checks(card.merge(handoff_ci_url: "https://ci.example.com/x/"), first)[:reason])
+    @http.pulls = [MERGED, engine]
+    @http.statuses_by_sha["m1" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    2.times do # the merges are read, then the merge commit's CI is asked
+      @port.approval_checks(card, deploy)
+      @poller.run
+    end
+    assert_equal "the local PR o/eng_local#91 is still open, not merged into the local repo",
+                 @port.approval_checks(card, deploy)[:reason], "the deploy step needs every local PR merged"
+    assert_equal "the local PR o/r_local#112 was merged before its approval", @port.approval_checks(card, first)[:reason]
+    # both merged, both merge commits green → the deploy step passes
+    @http.pulls = [MERGED, engine.merge("state" => "closed", "merged_at" => "2026-11-09T11:00:00Z",
+                                        "merge_commit_sha" => "m2" * 20, "base" => { "ref" => "local" }),]
+    @http.statuses_by_sha["m2" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    2.times do
+      @port.approval_checks(card, deploy)
+      @poller.run
+    end
+    assert_equal "success", @port.approval_checks(card, deploy)[:state], "every local PR merged, every merge CI green"
+  end
+
+  # a local PR on another enrolled project's repo (the engine the card vendors) is based on THAT
+  # project's working branch, never the card's own project's; a repo no enrolment names refuses, never any base
+  def test_a_local_pr_on_another_projects_repo_is_based_on_that_projects_branch
+    card, first, = local_steps
+    @conn[:projects].insert(slug: "o-eng", path: "/projects/eng", remote: "git@github.com:o/eng_local.git",
+                            pr_remote: "git@github.com:o/eng_local.git", own: true, commits_window: 0, mine_window: 0,
+                            dirty: 0, scanned_at: 0, local_mode: "own", local_repo: "git@github.com:o/eng_local.git",
+                            public_repo: "git@github.com:o/eng.git", public_head: "git@github.com:o/eng.git",
+                            local_base: "main", public_base: "main")
+    assign!("local", "https://github.com/o/eng_local/pull/91")
+    card = @kb.card(@id)
+    @http.pulls = [PR, PR.merge("number" => 91, "head" => { "sha" => "def" }, "base" => { "ref" => "local" })]
+    @http.statuses_by_sha["abc"] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @http.statuses_by_sha["def"] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @port.approval_checks(card, first)
+    @poller.run
+    assert_equal ["blocked", "o/eng_local the local PR #91 is based on local, not main"],
+                 @port.approval_checks(card, first).values_at(:state, :reason),
+                 "the engine PR on the card's own project's base is refused: its own project works on main"
+    @http.pulls = [PR, PR.merge("number" => 91, "head" => { "sha" => "def" }, "base" => { "ref" => "main" })]
+    @poller.run
+    assert_equal ["success", "abc+def"], @port.approval_checks(card, first).values_at(:state, :head)
+    @conn[:projects].where(slug: "o-eng").update(local_base: nil, local_error: "guard.localBranch is not set")
+    e = assert_raises(CK::Unavailable) { @port.approval_checks(card, first) }
+    assert_equal "card ##{@id}: the local PR o/eng_local's base branch is not known: guard.localBranch is not set",
+                 e.message
+    @conn[:projects].where(slug: "o-eng").delete
+    e = assert_raises(CK::Unavailable) { @port.approval_checks(card, first) }
+    assert_equal "card ##{@id}: the local PR o/eng_local's base branch is not known: o/eng_local is the local repo " \
+                 "of no enrolled project", e.message
   end
 
   # a card approved with needs rebase whose PR then MERGED (the agent merged before a watch
@@ -505,7 +641,7 @@ class CiChecksTest < Minitest::Test
   def test_a_marked_card_whose_pr_merged_is_answered_by_its_merge_commit
     enrol!
     @conn[:projects].where(slug: "o-r").update(local_mode: nil)
-    assign!("pr", "https://github.com/o/r_local/pull/112")
+    assign!("pr", "https://github.com/o/r/pull/112") # a plain project's PR is on its own repo
     @http.pulls = [MERGED]
     @http.statuses_by_sha["m1" * 20] = [{ "state" => "pending", "updated_at" => finish_at(@now) }]
     card = @kb.card(@id)
@@ -516,7 +652,7 @@ class CiChecksTest < Minitest::Test
     assert_equal "unpolled", @port.approval_checks(marked, LOCAL_STEP)[:state], "marked: its merge commit's CI is asked"
     @poller.run
     assert_equal "pending", @port.approval_checks(marked, LOCAL_STEP)[:state]
-    assert_match(/\ACI for the PR #112 merge is pending: merge commit m1m1m1m/,
+    assert_match(%r{\ACI for the PR o/r#112 merge is pending: merge commit m1m1m1m},
                  @port.approval_checks(marked, LOCAL_STEP)[:reason])
     @http.statuses_by_sha["m1" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
     @poller.run
@@ -541,7 +677,7 @@ class CiChecksTest < Minitest::Test
     assert_nil @port.approval_checks(card, PUBLIC_STEP), "unmarked: a merged public PR is no open PR, as before"
     red = @port.approval_checks(marked, PUBLIC_STEP)
     assert_equal ["failure", 5], red.values_at(:state, :number)
-    assert_match(/\ACI for the public PR #5 merge is failure: merge commit p5p5p5p/, red[:reason])
+    assert_match(%r{\ACI for the public PR o/r#5 merge is failure: merge commit p5p5p5p}, red[:reason])
     assert(@http.requests.any? { |u| u.include?("/repos/o/r/commits/#{'p5' * 20}/status?") }, "on the public repo")
     @http.statuses_by_sha["p5" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
     @poller.run
@@ -561,7 +697,7 @@ class CiChecksTest < Minitest::Test
       @port.approval_checks(card, deploy)
       @poller.run
     end
-    assert_equal "jenkins/ci for the local PR #112 merge is nochecks: merge commit m1m1m1m has no checks and local " \
+    assert_equal "jenkins/ci for the local PR o/r_local#112 merge is nochecks: merge commit m1m1m1m has no checks and local " \
                  "head h2h2h2h does not contain it (compare: diverged)", @port.approval_checks(card, deploy)[:reason]
     @http.compare = "ahead"
     @poller.run
@@ -574,7 +710,7 @@ class CiChecksTest < Minitest::Test
     @poller.run
     red = @port.approval_checks(card, deploy)
     assert_match(/merge is failure: merge commit m1m1m1m has no checks of its own; read local head h2h2h2h/, red[:reason])
-    assert_equal "failure", red[:state], "red stays red (card #248: the gate watch pings the owner on state failure)"
+    assert_equal "failure", red[:state], "red stays red (the gate watch pings the owner on state failure)"
     @http.heads["local"] = "m1" * 20 # the merge commit is the head and has no checks yet
     @poller.run
     assert_match(/merge is nochecks: merge commit m1m1m1m \(the head of local\) has no checks/,
@@ -590,13 +726,13 @@ class CiChecksTest < Minitest::Test
     @http.statuses_by_sha["m1" * 20] = [{ "state" => "success", "updated_at" => finish_at(@now) }]
     @port.approval_checks(card, first)
     @poller.run
-    assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason],
+    assert_equal "the local PR o/r_local#112 was merged before its approval", @port.approval_checks(card, first)[:reason],
                  "no handoff, no approval: refused"
     handoff = ->(n) { "handed to Local: Human review: PR https://github.com/o/r_local/pull/#{n} · CI https://ci.example.com/1" }
     log = ->(kind, body) { @conn[:card_activity].insert(card_id: @id, kind: kind, author: "x", created_at: @now, body: body) }
     log.call("approve", "approved Local: Human review → Local: Merged")
     log.call("handoff", handoff.call(112))
-    assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason],
+    assert_equal "the local PR o/r_local#112 was merged before its approval", @port.approval_checks(card, first)[:reason],
                  "an approve older than the handoff of this PR approved nothing of it"
     log.call("approve", "approved Local: Human review → Local: Merged")
     log.call("handoff", "handed to Local: Deploy check: PR https://github.com/o/r_local/pull/112") # the deploy receipt
@@ -608,10 +744,10 @@ class CiChecksTest < Minitest::Test
     assert_equal [112, "success"], @port.approval_checks(card, first).values_at(:number, :state),
                  "a later handoff into another gate does not hide the first step's approval"
     log.call("handoff", handoff.call(112))
-    assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason],
+    assert_equal "the local PR o/r_local#112 was merged before its approval", @port.approval_checks(card, first)[:reason],
                  "a new handoff into the first gate asks for a new approval"
     log.call("approve", "approved Local: Deploy check → Public: Create PR")
-    assert_equal "the local PR #112 was merged before its approval", @port.approval_checks(card, first)[:reason],
+    assert_equal "the local PR o/r_local#112 was merged before its approval", @port.approval_checks(card, first)[:reason],
                  "only an approve of the first step counts"
   end
 
@@ -620,10 +756,12 @@ class CiChecksTest < Minitest::Test
     @http.pulls = [PR.merge("state" => "closed", "merged_at" => nil)]
     @port.approval_checks(card, first)
     @poller.run
-    assert_equal "the local PR #112 closed without merging (why not read yet)", @port.approval_checks(card, first)[:reason]
+    assert_equal "the local PR o/r_local#112 closed without merging (why not read yet)",
+                 @port.approval_checks(card, first)[:reason]
     @http.events = [{ "event" => "head_ref_deleted" }, { "event" => "closed", "actor" => { "login" => "robertziel" } }]
     @states.run
-    assert_equal "the local PR #112 closed without merging (head deleted)", @port.approval_checks(card, first)[:reason]
+    assert_equal "the local PR o/r_local#112 closed without merging (head deleted)",
+                 @port.approval_checks(card, first)[:reason]
   end
 
   # the local PR is the assigned one — never a PR in pr_url or in a handoff's text
@@ -634,7 +772,7 @@ class CiChecksTest < Minitest::Test
                                  body: "handed to Local: Human review: PR https://github.com/o/r_local/pull/112 · CI https://ci.example.com/1")
     @conn[:cards].where(id: @id).update(pr_url: "https://github.com/o/r_local/pull/112")
     e = assert_raises(CK::Unavailable) { @port.approval_checks(@kb.card(@id), step) }
-    assert_equal "card ##{@id} has no local PR assigned (kanban_pr_assign role local, a PR on o/r_local)", e.message
+    assert_equal "card ##{@id} has no local PR assigned (kanban_pr_assign role local)", e.message
     assert_equal 0, @conn[:gh_pr_checks].count
   end
 
@@ -739,20 +877,20 @@ class CiChecksTest < Minitest::Test
       assert_match(pattern, e.message)
       assert_equal ["public_human_review", nil], @kb.card(@id).values_at(:column, :approved_at)
     end
-    unread = "the local PR #112 is not read yet (asked now — try again in a minute)" # an approval or a handoff
+    unread = "the local PR o/r_local#112 is not read yet (asked now — try again in a minute)" # an approval or a handoff
     drag_way = "A drag into Awaiting merge approves without asking CI"
     refuse.call(/Public: Human review → Awaiting merge\): card ##{@id} — #{Regexp.escape("#{unread}. #{drag_way}")}\z/)
     @http.pulls = [PR]
     @poller.run
-    refuse.call(/the local PR #112 is still open/, drag: true)
+    refuse.call(/the local PR o\/r_local#112 is still open/, drag: true)
     @http.pulls = [PUB, PR.merge("state" => "closed", "merged_at" => "2026-11-09T10:00:00Z")]
     @http.statuses = [{ "state" => "pending", "updated_at" => finish_at(@now) }]
     @poller.run
-    none = "card ##{@id} has no public PR assigned (kanban_pr_assign role public, a PR on o/r)"
+    none = "card ##{@id} has no public PR assigned (kanban_pr_assign role public)"
     refuse.call(/CI state of card ##{@id} is unknown — #{Regexp.escape("#{none}. #{drag_way}")}\z/)
     assign!("public", "https://github.com/o/r/pull/5")
     refuse.call(/its PR of card ##{@id} — CI not read yet/)
-    # review round 1: the watch pass and the waiting counts hand the port RAW rows (metadata = its JSON text)
+    # the watch pass and the waiting counts hand the port RAW rows (metadata = its JSON text)
     _, state, = @kb.approval_prefetch_pass.find { |id, *| id == @id }
     assert_equal "unpolled", state, "the raw row's prs.public is read, not \"no public PR assigned\""
     @poller.run
@@ -790,7 +928,7 @@ class CiChecksTest < Minitest::Test
     assert_equal [step.to, "operator"], @kb.card(@id).values_at(:column, :approved_by)
   end
 
-  # card #247: the notifier's watch pass keeps every gated card's approval checks asked (the engine's approval
+  # the notifier's watch pass keeps every gated card's approval checks asked (the engine's approval
   # prefetch), so the github service always holds a fresh answer — a card handed off 30 min ago, far past the poll
   # window, is approved on the FIRST click; red or pending is still refused with its state; a card that left the gate
   # drops out of the poll.
@@ -1030,10 +1168,10 @@ class CiChecksTest < Minitest::Test
     n.watch
     n.deliver
     assert_equal 1, @launcher.sent.size, log.string
-    assert_match(/PR #112 \(pr\) closed without merging \(base deleted\) while card ##{@id} "ship" is in In progress/,
+    assert_match(/PR o\/r#112 \(pr\) closed without merging \(base deleted\) while card ##{@id} "ship" is in In progress/,
                  @launcher.sent.first[1])
     said = @kb.activity(@id).select { |a| a[:kind] == "comment" }.map { |a| a[:body] }
-    assert_equal ["PR #112 (pr) closed without merging (base deleted) — pinged shop."], said
+    assert_equal ["PR o/r#112 (pr) closed without merging (base deleted) — pinged shop."], said
     3.times do
       @now += 60
       @states.run
@@ -1065,7 +1203,7 @@ class CiChecksTest < Minitest::Test
       n.deliver
     end
     assert_equal 1, @launcher.sent.size, log.string
-    assert_match(/PR #112 \(pr\) closed without merging \(head deleted\)/, @launcher.sent.first[1])
+    assert_match(/PR o\/r#112 \(pr\) closed without merging \(head deleted\)/, @launcher.sent.first[1])
     assert_equal 1, @kb.activity(@id).count { |a| a[:kind] == "comment" }
   end
 
@@ -1094,7 +1232,7 @@ class CiChecksTest < Minitest::Test
     @states.run
     assert_equal [], @kb.pr_watch_pass
     said = @kb.activity(@id).select { |a| a[:kind] == "comment" }.map { |a| a[:body] }
-    assert_equal ["PR #112 (pr) closed without merging (by ann) — pinged shop."], said
+    assert_equal ["PR o/r#112 (pr) closed without merging (by ann) — pinged shop."], said
   end
 
   def test_a_card_in_a_terminal_column_is_not_watched
@@ -1108,6 +1246,7 @@ class CiChecksTest < Minitest::Test
   end
 
   def test_the_pr_watch_reads_both_sides_of_an_enrolled_card_and_says_a_failed_read
+    @conn[:cards].where(id: @id).update(metadata: nil) # the setup's `pr` PR is no enrolled card's
     enrol!
     assign!("local", "https://github.com/o/r_local/pull/112")
     assign!("public", "https://github.com/o/r/pull/43")
@@ -1136,13 +1275,11 @@ class CiChecksTest < Minitest::Test
   end
 
   def test_a_bad_assignment_is_said_by_the_pr_watch
-    @kb.update(@id, { "metadata" => { "prs" => { "pr" => "https://example.com/x" } } }, by: "lead")
-    assert_match(/\Aunavailable: card ##{@id} metadata prs.pr is not a PR on github.com/,
+    # metadata prs is written only by kanban_pr_assign: a bad entry can only come from a raw write
+    @conn[:cards].where(id: @id).update(metadata: JSON.generate("prs" => [{ "url" => "https://example.com/x",
+"role" => "pr", }]))
+    assert_match(/\Aunavailable: card ##{@id} metadata prs has an entry that is no PR URL/,
                  @kb.pr_watch_pass.first[1])
-    enrol!
-    @conn[:projects].where(slug: "o-r").update(public_repo: nil, local_error: "guard.upstreamRemote has no URL")
-    @kb.update(@id, { "metadata" => { "prs" => { "public" => "https://github.com/o/r/pull/5" } } }, by: "lead")
-    assert_equal [[@id, "unavailable: public PR: guard.upstreamRemote has no URL"]], @kb.pr_watch_pass
   end
 
   # a gate card whose PR closed is told what happened — never the generic "no PR whose checks could be read" — and its
@@ -1165,12 +1302,12 @@ class CiChecksTest < Minitest::Test
     end
     n.watch
     n.deliver
-    hold = "PR #43 closed without merging (base deleted)"
+    hold = "the PR o/r#43 closed without merging (base deleted)"
     assert_equal hold, @kb.card(@id)[:gate_hold]
     e = assert_raises(AgentsKanban::Invalid) { @kb.approve(@id, by: "operator") }
     assert_match(/card ##{@id} — #{Regexp.escape(hold)}/, e.message)
     assert_equal 1, @launcher.sent.size, log.string
-    assert_match(/PR #43 \(public\) closed without merging \(base deleted\)/, @launcher.sent.first[1])
+    assert_match(/PR o\/r#43 \(public\) closed without merging \(base deleted\)/, @launcher.sent.first[1])
   end
 
   def test_the_board_config_is_wired
@@ -1394,7 +1531,7 @@ class CiChecksTest < Minitest::Test
 
   # One card per approval gate of the local_v4 board, each with green CI as its step reads it: Local: Human review (the
   # open local PR), Local: Deploy check (the local PR merged + its merge commit's CI), Public: Human review and
-  # Awaiting merge — the operator dragged that card there, unapproved: Approve approves it in place (card #499) — (the
+  # Awaiting merge — the operator dragged that card there, unapproved: Approve approves it in place — (the
   # local PR merged + the open public PR). → {gate => card id}
   def gated_cards
     enrol!
@@ -1426,7 +1563,7 @@ class CiChecksTest < Minitest::Test
     wait_in_the_gates(n, 2 * 600) # twice wanted_for
     assert_empty CK.stale_gates(@kb, @port), "the guard: every gated card's reads are inside the window"
     gates.each do |gate, id|
-      @kb.approve(id, by: "operator") # card #499: "not read yet (asked now — try again in a minute)"
+      @kb.approve(id, by: "operator") # "not read yet (asked now — try again in a minute)"
       assert @kb.card(id)[:approved_at], "#{gate}: approved on the first click"
     end
   end
@@ -1453,7 +1590,7 @@ class CiChecksTest < Minitest::Test
     log = StringIO.new
     guard = CK::GateGuard.new(log: log, window: 600)
     guard.check(CK.stale_gates(@kb, @port))
-    @now += 30 # review round 1: the ages grow every pass — not a change, nothing said again
+    @now += 30 # the ages grow every pass — not a change, nothing said again
     guard.check(CK.stale_gates(@kb, @port))
     n.watch
     guard.check(CK.stale_gates(@kb, @port))
@@ -1465,7 +1602,7 @@ class CiChecksTest < Minitest::Test
     assert_includes lines, "gate guard: card #{final} reads fresh again"
   end
 
-  # review round 1: a row the github service failed to read refuses the Approve (Unavailable) — the guard names it
+  # a row the github service failed to read refuses the Approve (Unavailable) — the guard names it
   # with the poll's error, said again only when the error changes
   def test_the_gate_guard_names_a_failed_poll
     gates = gated_cards
@@ -1489,7 +1626,7 @@ class CiChecksTest < Minitest::Test
                  log.string.lines.map(&:chomp)
   end
 
-  # public review round 1: inside the window, a row the github service stopped answering refuses the Approve
+  # public inside the window, a row the github service stopped answering refuses the Approve
   # (Unavailable) — the guard names it: requested and never polled, or an answer older than stale_after
   def test_the_gate_guard_names_a_stalled_github_service
     gates = gated_cards

@@ -51,6 +51,8 @@ export function busyyaksKanbanApi(): KanbanApi {
     setOwner: (id, session) => apiPost<CardData>(`/api/cards/${id}/owner`, { session }),
     approve: (id, approved, force) =>
       apiPost<CardData>(`/api/cards/${id}/approve`, force ? { approved, force } : { approved }),
+    // the operator takes an assigned PR off the card, with the reason (the rail row's ×)
+    prUnassign: (id, prUrl, reason) => apiPost<CardData>(`/api/cards/${id}/pr-unassign`, { pr_url: prUrl, reason }),
     dialogAnswer: (id, key) => apiPost<CardData>(`/api/cards/${id}/dialog-answer`, { key }),
     comment: (id, body) => apiPost<CardData>(`/api/cards/${id}/comment`, { body }),
     commentUpdate: (id, body) => apiPost<CardData>(`/api/comments/${id}`, { body }),

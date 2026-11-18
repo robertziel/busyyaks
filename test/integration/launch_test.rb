@@ -266,7 +266,9 @@ mtime: Busyyaks::Clock.now.to_f, }],
                                                              number: 5, state: "success", finished_at: now,
                                                              base: "main", draft: false, merge_state: "clean",
                                                              builds: '["https://ci/1"]') # the build handed off (card #470)
-    kb.assign_pr(id, url: "https://github.com/o/r/pull/5", role: "pr", by: "elsewhere") # the PR its agent opened
+    # the PR its agent opened, on the project's repo
+    Hanami.app["db.gateway"].connection[:projects].where(slug: "group/repo").update(remote: "https://github.com/o/r.git")
+    kb.assign_pr(id, url: "https://github.com/o/r/pull/5", role: "pr", by: "elsewhere")
     kb.handoff(id, qa: "Open the board, check the card ships what it says, then the PR diff and its CI build.",
                    pr_url: "https://github.com/o/r/pull/5", ci_url: "https://ci/1", ui_change: false, by: "elsewhere")
     j = api(:get, "/api/agents")
