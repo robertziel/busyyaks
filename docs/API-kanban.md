@@ -211,7 +211,7 @@ see `.env.example`; an unknown entry fails the boot).
 | route | body | → |
 |---|---|---|
 | `POST /api/cards/:id/attachments` | multipart: `file`, `comment_id?` (a comment of this card). CSRF header required | `201 {attachment}` · `413` over the cap · `422` refused (reason) |
-| `GET /api/attachments/:id` | — `png/jpeg/gif/webp`: inline. Anything else (SVG, HTML included): `Content-Disposition: attachment`, served as `application/octet-stream` for SVG/HTML | the bytes |
+| `GET /api/attachments/:id` | — `png/jpeg/gif/webp` and `mp4/webm` (JSON `video: true`, played in the card dialog's lightbox): inline. `Accept-Ranges: bytes`; one `Range: bytes=a-b / a- / -n` → 206 + `Content-Range`, any other Range → 416 `bytes */size` (several ranges too: no client of this route asks for them, and the whole file in their place would be a substitute; a matching `If-None-Match` → 304 first). Anything else (SVG, HTML included): `Content-Disposition: attachment`, served as `application/octet-stream` for SVG/HTML | the bytes |
 | `GET /api/attachments/:id/download` | — always `Content-Disposition: attachment` | the bytes |
 | `DELETE /api/attachments/:id` | — soft delete (row kept, file no longer served), logged as `attachment`. Web = the operator: any; MCP agents: their own | `{card, activity}` |
 

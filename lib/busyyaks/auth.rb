@@ -30,7 +30,9 @@ module Busyyaks
                  # + GitHub's avatar CDN (the /github feed, tl:github); report/card markdown never loads a remote image
                  img_src: %w['self' data: https://avatars.githubusercontent.com],
                  # the web app manifest (/manifest.webmanifest): default-src is 'none'
-                 manifest_src: %w['self'], }.freeze
+                 manifest_src: %w['self'],
+                 # video attachments (/api/attachments/:id) play in a <video>: default-src is 'none'
+                 media_src: %w['self'], }.freeze
 
     # What the core asks of a provider. Override what differs; the defaults are a provider with no page assets.
     class Provider
