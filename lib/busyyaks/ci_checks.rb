@@ -23,7 +23,6 @@ module Busyyaks
   module CiChecks
     FINISHED = %w[success failure].freeze
     CHECKED = %w[success failure pending nochecks].freeze # an open PR's pr:<N> answer (its checks read)
-    NO_CLOSED_AT = 0 # the PR watch's key for a close GitHub gave no closed_at (never shown as a time)
     BAD_RUN = %w[failure timed_out cancelled action_required startup_failure stale].freeze
 
     Unavailable = AgentsKanban::Delivery::Unavailable
@@ -67,7 +66,7 @@ module Busyyaks
       end
 
       # A change = another column, another set of rows, a row never asked turning asked, or another poll error — never
-      # an age growing by one watch pass (review round 1: the line carries the age, so it was said every pass).
+      # an age growing by one watch pass (the line carries the age, so it was said every pass).
       def check(stale)
         now = stale.to_h { |g| [g[:card], key(g)] }
         stale.each { |g| @log.puts(line(g)) unless @said[g[:card]] == now[g[:card]] }
@@ -111,37 +110,54 @@ module Busyyaks
 
       # The engine's PR watch (Store#pr_watch_pass, every notifier watch pass, every card outside a terminal column):
       # every PR assigned to the card is asked (gh_pr_states, so the github service keeps them read) → the ones closed
-      # WITHOUT merging, {role:, number:, closed_at:, why:}, and one {error:} per PR (or assignment) that cannot be read
+      # WITHOUT merging, {role:, number:, repo:, closed_at:, why:}, and one {error:} per PR (or list) that cannot be read
       # — beside the closes, so a closed PR never hides another one's failure. A PR not read yet is not closed yet; nor
       # is a closed row whose reason was never read (polled before the reason existed): told once the poller re-reads it.
+      # Every PR of the card's list (any role, any repo) is watched; each close names its repo (the engine
+      # keys the watch per PR).
       def closed_prs(card)
         errors = []
         closed = assigned_prs(card, errors).filter_map { |role, repo, number| closed_pr(role, repo, number) }
         closed + errors.map { |e| { error: e } }
       end
 
+      # → [[role, owner/name, number], …] every PR assigned to the card (PrStates.assigned: the list); a list
+      # that cannot be read is added to `errors`.
+      def assigned_prs(card, errors)
+        PrStates.assigned(card).map { |p| [p[:role], p[:repo], p[:number]] }
+      rescue PrStates::Invalid => e
+        errors << e.message
+        []
+      end
+
+      # The idle watch: every PR the card's agents assigned under its watched role (enrolled: `local`, any other: `pr`),
+      # one answer for all of them (combine) — nil when none is assigned or none is open.
       def pr_checks(card)
-        repo, ref = target(card)
-        repo ? read(repo, ref) : nil
+        answers = targets(card).filter_map { |repo, number| tagged(read(repo, "pr:#{number}"), repo) }
+        answers.empty? ? nil : combine(answers)
       end
 
       # The engine's approval gate (config/kanban.yml approval.requires_green_ci): what each approval step checks.
-      # Every PR is the one the card's agents ASSIGNED (kanban_pr_assign → metadata prs.<role>; PrStates.assigned).
-      # A project that is not enrolled: the card's `pr` PR. An enrolled one works on its `local` PR:
-      #   - the board's FIRST approval step (Local: Human review) = the local PR OPEN with green checks (merged ahead
-      #     of the approval → refused);
-      #   - a later non-final step (Local: Deploy check → Open public PR) = the local PR MERGED and the CI of its merge
-      #     commit on the working branch green (`merge:<N>` — jenkins/ci on `local`);
-      #   - the final step (the public merge) = the `public` PR, and only once the local PR is MERGED.
-      # None assigned, one that is no PR of its repo, or an enrolment the scanner could not read → Unavailable with the
-      # reason. An open PR a step reads must also be mergeable as it stands (#mergeable): not a draft, on its
-      # side's base branch, no GitHub auto-merge, its mergeability computed (behind: warned, not refused). A conflict
-      # with its base does not refuse: the green answer carries rebase: and the engine accepts the approval marked
-      # needs rebase — the owner rebases, re-runs CI and merges on green.
+      # The PRs are the ones the card's agents ASSIGNED (kanban_pr_assign → metadata prs, a list; PrStates.assigned),
+      # EVERY one of the step's role — a card may change several repos (busyyaks + the engine it vendors): all must be
+      # green. A project that is not enrolled: its `pr` PRs. An enrolled one works on its `local` PRs:
+      #   - the board's FIRST approval step (Local: Human review) = every local PR OPEN with green checks (one merged
+      #     ahead of the approval → refused);
+      #   - a later non-final step (Local: Deploy check → Open public PR) = every local PR MERGED and the CI of each one's
+      #     merge commit on its working branch green (`merge:<N>` — jenkins/ci on `local`);
+      #   - the final step (the public merge) = every `public` PR green, and only once every local PR is MERGED.
+      # None of the role assigned, or one that is no PR → Unavailable with the reason. Several PRs → one answer
+      # (combine): the first that is not green, said with its repo; all green → success, `head` = every PR's head
+      # joined by "+", `builds` = every PR's required builds.
+      # An open PR a step reads must also be mergeable as it stands (#mergeable): not a draft, on its side's
+      # base branch, no GitHub auto-merge, its mergeability computed (behind: warned, not refused) — every one of the
+      # step's PRs. A conflict with its base does not refuse: the green answer carries rebase: and the
+      # engine accepts the approval marked needs rebase — the owner rebases, re-runs CI and merges on green.
       # Asked for a HANDOFF (the engine passes handoff_ci_url = its ci_url, a key only a handoff carries), a green
-      # answer is also checked against that ci_url: it must be the build of a required context on the commit the answer
-      # read (`builds`) — never an older build, nor a URL naming no build. An Approve or a watch pass asks only whether
-      # the head's required checks are green: a rebuild of the same head after the handoff never parks the card.
+      # answer is also checked against that ci_url: it must be the build of a required context on a commit the answer
+      # read (`builds`, any of the PRs' heads) — never an older build, nor a URL naming no build. An Approve or a watch
+      # pass asks only whether the heads' required checks are green: a rebuild of the same head after the handoff never
+      # parks the card.
       def approval_checks(card, step)
         built!(card, step_checks(card, step))
       end
@@ -201,17 +217,20 @@ module Busyyaks
 
       private
 
+      # Every PR the card's agents assigned (a list — the idle watch's targets), each its head + that head's
+      # CI; with several PRs each kind names its PR ("pr head o/r#5"), one PR keeps the plain kinds.
       def pr_progress(card)
-        repo, ref = target(card)
-        return [] unless repo
+        prs = targets(card)
+        prs.flat_map do |repo, number|
+          row = answer(repo, "pr:#{number}")
+          head = row[:head] or next []
 
-        row = answer(repo, ref)
-        head = row[:head] or return []
-
-        sha = head[0, 7]
-        [{ kind: "pr head", key: head, text: "PR #{repo}##{row[:number]} head #{sha}" },
-         { kind: "ci", key: [head, row[:state], row[:finished_at], *row[:builds]].compact.join(" "),
-           text: "CI #{row[:state]} on #{sha}", },]
+          sha = head[0, 7]
+          of = prs.size > 1 ? " #{repo}##{number}" : ""
+          [{ kind: "pr head#{of}", key: head, text: "PR #{repo}##{number} head #{sha}" },
+           { kind: "ci#{of}", key: [head, row[:state], row[:finished_at], *row[:builds]].compact.join(" "),
+             text: "CI #{row[:state]} on #{sha}#{of.empty? ? '' : " (#{repo}##{number})"}", },]
+        end
       end
 
       def branch_progress(card)
@@ -240,78 +259,61 @@ module Busyyaks
         return answer if answer[:builds]&.include?(url)
 
         builds = answer[:builds].to_a.empty? ? "no required check names a build" : answer[:builds].join(", ")
-        head = answer[:head] ? answer[:head][0, 7] : "the commit read"
+        # several PRs: every head, each shortened (abc1234+def5678), as the engine's short_heads says them
+        head = answer[:head] ? answer[:head].split("+").map { |h| h[0, 7] }.join("+") : "the commit read"
         blocked(answer[:number], "ci_url #{url} is not the build of #{head} (#{builds}) — hand off with the head's build")
       end
 
       def step_checks(card, step)
         project = @projects.call(card[:project_slug])
-        unless project && project[:local_mode]
-          repo, ref = target(card)
-          row = repo ? read(repo, ref) : nil # pr_checks
-          merged = row.nil? && repo && merged_since_mark(card, repo, Integer(ref.delete_prefix("pr:")), nil)
-          return merged if merged
+        return gate_checks(card, targets(card), nil, nil) unless project && project[:local_mode]
 
-          return mergeable(row, repo, row&.dig(:number), nil, nil)
-        end
-
-        repo, number = local_pr(card, project)
+        locals = prs!(card, PrStates::ROLES[:local])
         unless step[:final]
-          state = answer(repo, "pr:#{number}")[:state]
           if first_step?(card, step)
-            case state
-            when "merged"
-              # approved once already (an approve after the newest handoff), merged, then the card was moved
-              # back into the gate: nothing is left to approve, the merge commit's CI answers
-              return merge_ci(repo, number) if approved_after_handoff?(card)
-
-              return blocked(number, "the local PR ##{number} was merged before its approval")
-            when "closed" then return blocked(number, "the local #{closed(repo, number)}")
-            when "none" then return blocked(number, "the local PR ##{number} was not found on #{repo}")
-            end
-
-            return mergeable(read(repo, "pr:#{number}"), repo, number, "local", -> { base_of(card, project, :local_base) })
+            local_base = ->(repo) { base_of(card, project, repo, "local") }
+            return combine(locals.map { |repo, number| tagged(first_step_pr(card, repo, number, local_base), repo) })
           end
 
-          unmerged = local_unmerged(repo, number)
-          return unmerged if unmerged
-
-          return merge_ci(repo, number) # the merge commit's CI on the working branch
+          # the merge commit's CI on the working branch, for each local PR once it is merged
+          return combine(locals.map { |repo, number| tagged(local_unmerged(repo, number) || merge_ci(repo, number), repo) })
         end
 
-        unmerged = local_unmerged(repo, number)
-        return unmerged if unmerged
+        unmerged = locals.filter_map { |repo, number| tagged(local_unmerged(repo, number), repo) }
+        return combine(unmerged) unless unmerged.empty?
 
-        repo = PrStates.slug(project[:public_repo])
-        unless repo
-          raise Unavailable, "the public PR of card ##{card[:id]} cannot be found: " \
-                             "#{project[:local_error] || 'the public repo is not on github.com'}"
-        end
-
-        _, number = PrStates.assigned(card, PrStates::ROLES[:public], repo)
-        raise Unavailable, unassigned(card, PrStates::ROLES[:public], repo) unless number
-
-        merged_since_mark(card, repo, number, "public") ||
-          mergeable(read(repo, "pr:#{number}"), repo, number, "public", -> { base_of(card, project, :public_base) })
+        gate_checks(card, prs!(card, PrStates::ROLES[:public]), "public", ->(repo) { base_of(card, project, repo, "public") })
       rescue PrStates::Invalid => e
         raise Unavailable, e.message
       end
 
+      # An approval over several PRs of one role (the final step's public PRs, a plain project's `pr` PRs): only a
+      # MERGED one is done and left out; one closed without merging or not found is never dropped — it blocks, named
+      # repo#N (two public PRs, one closed, the other green, must not approve the merge). Every PR
+      # merged → nil (the engine: no PR whose checks could be read). Each open one must be mergeable: role
+      # and want_base as `mergeable` takes them. A card marked needs rebase whose PR merged since: that
+      # merge commit's CI answers (merged_since_mark), never "nothing to read".
+      def gate_checks(card, prs, role, want_base)
+        answers = prs.filter_map { |repo, number| tagged(gate_read(card, repo, number, role, want_base), repo) }
+        answers.empty? ? nil : combine(answers)
+      end
+
       # An open PR the approval would let through only when it can merge as it stands — refused (state
       # "blocked" + the reason) when it is a draft, is based on another branch than its side's (want_base; nil = a
-      # plain project's PR, any base; a Proc: asked only for a read PR), has GitHub's auto-merge on (GitHub would merge
-      # it on green, without the board's approval), or GitHub is still computing whether it merges (mergeable null:
-      # never guessed). `behind` is NOT refused: the working branch moves on every other card's merge, and a conflict
-      # never parks a card — the rail warns, the merge itself is where it counts. Conflicts with its base are not
-      # refused either: the row gains rebase: {state: "conflicts", base:, base_sha:} — the engine accepts the approval
-      # (its CI still decides: a red or pending one refuses first), marks the card needs rebase and holds its onward
-      # move until an answer comes back green without it. A conflicting row whose base commit was not read yet is
-      # refused as not read, never guessed.
+      # plain project's PR, any base; a Proc of the PR's repo: asked only for a read PR), has GitHub's auto-merge on
+      # (GitHub would merge it on green, without the board's approval), or GitHub is still computing whether it merges
+      # (mergeable null: never guessed). `behind` is NOT refused: the working branch moves on every other card's merge,
+      # and a conflict never parks a card — the rail warns, the merge itself is where it counts. Conflicts with its base
+      # are not refused either: the
+      # row gains rebase: {state: "conflicts", base:, base_sha:} — the engine accepts the approval (its CI still
+      # decides: a red or pending one refuses first), marks the card needs rebase and holds its onward move until an
+      # answer comes back green without it. A conflicting row whose base commit was not read yet is refused as not
+      # read, never guessed.
       # Not read yet (unpolled) or no open PR → the row as it is.
       def mergeable(row, repo, number, role, want_base)
         return row unless row && CHECKED.include?(row[:state])
 
-        want_base = want_base&.call
+        want_base = want_base&.call(repo)
 
         pr = "the #{[role, 'PR'].compact.join(' ')} ##{number}"
         why = if !row.key?(:draft) # a row the github service answered before it read these fields
@@ -336,43 +338,14 @@ module Busyyaks
         row.merge(rebase: { state: "conflicts", base: row[:base], base_sha: row[:base_sha] })
       end
 
-      # The branch the card's `side` PR must be based on (the scanner's local_base / public_base); not known → the
-      # approval is refused with the enrolment's reason, never let through on any base.
-      def base_of(card, project, side)
-        project[side] || raise(Unavailable, "card ##{card[:id]}: the #{side.to_s.delete_suffix('_base')} PR's base " \
-                                            "branch is not known: #{project[:local_error] || 'the scanner has not ' \
-                                                                                            'read the enrolment yet'}")
-      end
-
-      # → [[role, owner/name, number], …] every PR assigned to the card: `local` + `public` on an enrolled project, `pr`
-      # on any other (PrStates.assigned); an assignment or enrolment that cannot be read is added to `errors`.
-      def assigned_prs(card, errors)
-        project = @projects.call(card[:project_slug])
-        # not enrolled: the `pr` PR on whichever repo its URL names (repo nil = any)
-        return pr_of(card, PrStates::ROLES[:pr], nil, errors) unless project && project[:local_mode]
-
-        [[PrStates::ROLES[:local], project[:local_repo]], [PrStates::ROLES[:public], project[:public_repo]]]
-          .flat_map do |role, remote|
-          repo = PrStates.slug(remote)
-          next pr_of(card, role, repo, errors) if repo
-
-          # a PR assigned on a side whose repo cannot be named is an error; an unassigned side is nothing
-          if PrStates.assigned(card, role, nil)
-            errors << "#{role} PR: #{project[:local_error] || "the #{role} repo is not on github.com"}"
-          end
-          []
-        rescue PrStates::Invalid => e
-          errors << e.message
-          []
-        end
-      end
-
-      def pr_of(card, role, repo, errors)
-        r, number = PrStates.assigned(card, role, repo)
-        number ? [[role, r, number]] : []
-      rescue PrStates::Invalid => e
-        errors << e.message
-        []
+      # The branch the card's `side` PR on `repo` must be based on: the scanner's local_base / public_base of the
+      # enrolled project whose `side` repo that is (PrStates.side_base — the PR may be on another project's
+      # repo; the card's own project counts as enrolled); not known → the approval is refused with the reason, never
+      # let through on any base.
+      def base_of(card, project, repo, side)
+        rows = [project] + @db[:projects].exclude(local_mode: nil).order(:slug).all
+        base, why = PrStates.side_base(rows, repo, side)
+        base || raise(Unavailable, "card ##{card[:id]}: the #{side} PR #{repo}'s base branch is not known: #{why}")
       end
 
       # one assigned PR for the PR watch: its close, its error, or nil (open, merged, not read yet)
@@ -384,7 +357,7 @@ module Busyyaks
           return { error: "#{role} PR ##{number} on #{repo}: closed, #{st[:reason].delete_prefix(PrStates::UNKNOWN)}" }
         end
 
-        { role: role, number: number, closed_at: st[:closed_at], why: said(st[:reason]) }
+        { role: role, number: number, repo: repo, closed_at: st[:closed_at], why: said(st[:reason]) }
       end
 
       def said(reason) = reason.start_with?(PrStates::UNKNOWN) ? "reason #{reason}" : reason
@@ -397,22 +370,74 @@ module Busyyaks
         st[:error] ? "why unknown: #{st[:error]}" : "why not read yet"
       end
 
-      def closed(repo, number) = "PR ##{number} closed without merging (#{closed_why(repo, number)})"
+      # a card holds PRs of several repos: the PR is named with its repo
+      def closed(repo, number) = "PR #{repo}##{number} closed without merging (#{closed_why(repo, number)})"
 
-      # → [owner/name, number] of the card's `local` PR on the project's local repo. None → Unavailable.
-      def local_pr(card, project)
-        repo = PrStates.slug(project[:local_repo])
-        unless repo
-          raise Unavailable, "the local PR of card ##{card[:id]} cannot be found: " \
-                             "#{project[:local_error] || 'the local repo is not on github.com'}"
+      def gate_read(card, repo, number, role, want_base)
+        case answer(repo, "pr:#{number}")[:state]
+        when "merged" then merged_since_mark(card, repo, number, role)
+        when "closed" then blocked(number, "the #{closed(repo, number)}")
+        when "none" then blocked(number, "the PR #{repo}##{number} was not found")
+        else mergeable(read(repo, "pr:#{number}"), repo, number, role, want_base)
         end
-
-        pr = PrStates.assigned(card, PrStates::ROLES[:local], repo)
-        pr || raise(Unavailable, unassigned(card, PrStates::ROLES[:local], repo))
       end
 
-      def unassigned(card, role, repo)
-        "card ##{card[:id]} has no #{role} PR assigned (kanban_pr_assign role #{role}, a PR on #{repo})"
+      # The first step for one local PR: open and green; merged ahead of the approval / closed / not found → blocked.
+      def first_step_pr(card, repo, number, want_base)
+        case answer(repo, "pr:#{number}")[:state]
+        when "merged"
+          # approved once already (an approve after the newest handoff), merged, then the card was moved back into the
+          # gate: nothing is left to approve, the merge commit's CI answers
+          return merge_ci(repo, number) if approved_after_handoff?(card)
+
+          blocked(number, "the local PR #{repo}##{number} was merged before its approval")
+        when "closed" then blocked(number, "the local #{closed(repo, number)}")
+        when "none" then blocked(number, "the local PR #{repo}##{number} was not found")
+        else
+          mergeable(read(repo, "pr:#{number}"), repo, number, "local", want_base) ||
+            blocked(number, "the local PR #{repo}##{number} cannot be read")
+        end
+      end
+
+      # → [[owner/name, number], …] of the card's PRs under `role`, as assigned. None → Unavailable.
+      def prs!(card, role)
+        prs = PrStates.assigned(card, role).map { |p| [p[:repo], p[:number]] }
+        return prs unless prs.empty?
+
+        raise Unavailable, "card ##{card[:id]} has no #{role} PR assigned (kanban_pr_assign role #{role})"
+      end
+
+      # the repo an answer is about, kept beside it until combine says it (numbers overlap between repos)
+      def tagged(answer, repo) = answer && answer.merge(repo: repo)
+
+      WORDS = { "failure" => "CI failed", "stuck" => "CI is stuck", "pending" => "CI is still running",
+                "unpolled" => "CI not read yet (asked now)", "nochecks" => "no CI checks ran", }.freeze
+
+      # Several PRs' answers → one, as the engine reads a single PR's: the first red one (failure · stuck · blocked),
+      # else the first that is not green — its reason naming its repo; every one green → success with every head
+      # ("+"-joined, in assignment order) and every build. One answer is that answer as it was.
+      def combine(answers)
+        answers = answers.compact
+        return answers.first.except(:repo) if answers.size == 1
+
+        bad = answers.find { |a| %w[failure stuck blocked].include?(a[:state]) } ||
+              answers.find { |a| a[:state] != "success" }
+        if bad
+          why = bad[:reason] || "PR ##{bad[:number]}: #{WORDS.fetch(bad[:state], "CI state #{bad[:state]}")}"
+          return bad.except(:repo).merge(reason: why.include?(bad[:repo]) ? why : "#{bad[:repo]} #{why}")
+        end
+
+        # a PR that conflicts with its base: its rebase: and number go with the green answer — the engine
+        # marks the card needs rebase on that PR
+        conflicting = answers.find { |a| a[:rebase] }
+        out = { number: (conflicting || answers.first)[:number], state: "success",
+                finished_at: answers.filter_map { |a| a[:finished_at] }.max, }
+        out[:rebase] = conflicting[:rebase] if conflicting
+        heads = answers.map { |a| a[:head] }
+        out[:head] = heads.join("+") if heads.all?
+        builds = answers.flat_map { |a| a[:builds].to_a }
+        out[:builds] = builds unless builds.empty?
+        out
       end
 
       # The merge:<N> answer; anything but green carries what was read (the shas) as the refusal's reason.
@@ -423,8 +448,8 @@ module Busyyaks
         # the CI's own state is kept (a red merge CI is "failure": the engine's gate watch pings the owner), the words
         # name what was read
         { number: number, state: row[:state], finished_at: row[:finished_at],
-          reason: "#{role == 'local' ? 'jenkins/ci' : 'CI'} for the #{[role, 'PR'].compact.join(' ')} ##{number} merge " \
-                  "is #{row[:state]}: #{row[:detail]}", }
+          reason: "#{role == 'local' ? 'jenkins/ci' : 'CI'} for the #{[role, 'PR'].compact.join(' ')} #{repo}##{number} " \
+                  "merge is #{row[:state]}: #{row[:detail]}", }
       end
 
       # A card the engine marked needs rebase (it carries `needs_rebase`) whose step PR has since MERGED —
@@ -468,7 +493,7 @@ module Busyyaks
                when "none" then "not found"
                else "still open, not merged into the local repo"
                end
-        { number: row[:number], state: "blocked", finished_at: nil, reason: "the local PR ##{number} is #{what}" }
+        { number: row[:number], state: "blocked", finished_at: nil, reason: "the local PR #{repo}##{number} is #{what}" }
       end
 
       # The polled answer for repo + ref, registering the request ("I want this") — never a guess. No PR, or a merged
@@ -557,22 +582,13 @@ module Busyyaks
       # an answer the github service read within stale_after, without an error
       def fresh?(row, now) = !row[:error] && row[:checked_at] && now - row[:checked_at] <= @stale_after
 
-      # → [owner/name, "pr:N"] of the PR the idle watch follows | nil when none is assigned: on an enrolled project the
-      # card's `local` PR (on the local repo), on any other its `pr` PR (its URL names the repo). An assignment that is
-      # no PR of its repo, or an enrolment whose local repo cannot be read → Unavailable (the watch says why).
-      def target(card)
+      # → [[owner/name, number], …] of the PRs the idle watch follows ([] when none is assigned): on an enrolled
+      # project the card's `local` PRs, on any other its `pr` PRs. A list that is not one of PRs → Unavailable (the
+      # watch says why).
+      def targets(card)
         project = @projects.call(card[:project_slug])
-        if project && project[:local_mode]
-          repo = PrStates.slug(project[:local_repo])
-          unless repo
-            raise Unavailable, "the local PR of card ##{card[:id]} cannot be found: " \
-                               "#{project[:local_error] || 'the local repo is not on github.com'}"
-          end
-          _, number = PrStates.assigned(card, PrStates::ROLES[:local], repo)
-        else
-          repo, number = PrStates.assigned(card, PrStates::ROLES[:pr], nil)
-        end
-        number ? [repo, "pr:#{number}"] : nil
+        role = project && project[:local_mode] ? PrStates::ROLES[:local] : PrStates::ROLES[:pr]
+        PrStates.assigned(card, role).map { |p| [p[:repo], p[:number]] }
       rescue PrStates::Invalid => e
         raise Unavailable, e.message
       end
@@ -581,7 +597,7 @@ module Busyyaks
     # The github service's side. Every read is conditional (If-None-Match on the ETag GitHub gave for that URL last
     # time, kept in gh_pages under `ci:<fields>:<url>` with the fields the poller reads — KEEP, never the whole response): an
     # unchanged PR or check list answers 304, which GitHub does not count against the token's rate limit — a card
-    # waiting days in a gate, its checks asked every minute (the engine's approval prefetch, card #247), costs nothing
+    # waiting days in a gate, its checks asked every minute (the engine's approval prefetch), costs nothing
     # while its PR stands still. A cached URL nobody read for wanted_for (a pushed-over sha, a card out of the gate)
     # is deleted at the end of each run. While `gate` (GithubPollers) is paused — the token's rate limit used up —
     # nothing is sent and every wanted row says why and until when.

@@ -43,6 +43,8 @@ module Busyyaks
     AVATAR = %r{\Ahttps://avatars\.githubusercontent\.com/[A-Za-z0-9_./?=&%-]+\z}
 
     class Error < StandardError; end
+    class RepoMoved < Error; end
+
     # reset: x-ratelimit-reset (epoch) when the primary limit is used up; retry_after: seconds from a secondary limit's
     # Retry-After. Neither known → both nil (nothing says when it ends).
     class RateLimited < Error
@@ -100,6 +102,7 @@ module Busyyaks
         @calls += 1
         return Page.new(status: 404) if status == 404 && missing_ok
 
+        moved!(url, h["location"]) if status == 301
         fail!(status, h, body, url) unless status == 200
         Page.new(status: 200, body: JSON.parse(body), etag: h["etag"], next_url: next_link(h["link"]))
       rescue JSON::ParserError => e
@@ -107,6 +110,25 @@ module Busyyaks
       end
 
       private
+
+      # A renamed or transferred repo answers 301 with Location = /repositories/<id>/…: never followed. The repo's
+      # new name is read once (GET /repositories/<id>) only to say where it went; the caller re-assigns its URL.
+      def moved!(url, location)
+        path = url.delete_prefix(API)
+        id = location.to_s[%r{\A#{Regexp.escape(API)}/repositories/(\d+)(?:/|\z)}, 1]
+        raise RepoMoved, "GitHub 301 at #{path}: the repo moved (Location #{location.inspect})" unless id && !@moving
+
+        name = begin
+          @moving = true
+          get("/repositories/#{id}").body["full_name"]
+        rescue Error => e
+          raise RepoMoved, "GitHub 301 at #{path}: the repo moved to repository #{id}, whose name could not be " \
+                           "read: #{e.message}"
+        ensure
+          @moving = false
+        end
+        raise RepoMoved, "GitHub 301 at #{path}: repo moved to #{name} — assign the PR again with its #{name} URL"
+      end
 
       def track(h)
         return unless h["x-ratelimit-remaining"]

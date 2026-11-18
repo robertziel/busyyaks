@@ -147,8 +147,17 @@ module Busyyaks
     def store(conn = db, clock: -> { Busyyaks::Clock.epoch })
       boards = ->(slug) { conn[:projects].where(slug: slug.to_s).any? }
       AgentsKanban::Store.new(conn, config: config(conn), markdown: markdown, clock: clock, boards: boards,
-                              ci: ci_port(conn, clock: clock)) # approval.requires_green_ci
+                              ci: ci_port(conn, clock: clock), # approval.requires_green_ci
+                              prs: pr_roles(conn))
     end
+
+    # The engine's prs: port: the PR roles of a card, from its project's enrolment and every enrolled
+    # project's repos (a card may change several: busyyaks and the engine it vendors).
+    def pr_roles(conn = db)
+      PrStates::Roles.new(projects: ->(slug) { conn[:projects].where(slug: slug.to_s).first },
+                          enrolled: -> { conn[:projects].exclude(local_mode: nil).order(:slug).all })
+    end
+
     def default = store
 
     def attachments(st = default) = AgentsKanban::Attachments.new(st, root: ENV.fetch("ATTACHMENTS_DIR"), policy: policy)
@@ -229,7 +238,8 @@ module Busyyaks
     # own PRs are the ones assigned to it (PrStates.assigned).
     def pr_flags(conn = db)
       interval = ci_interval(conn)
-      PrStates::Flags.new(PrStates::Reader.new(db: conn, stale_after: 3 * interval, wanted_for: PrStates.wanted_for(interval)))
+      PrStates::Flags.new(PrStates::Reader.new(db: conn, stale_after: 3 * interval, wanted_for: PrStates.wanted_for(interval)),
+                          enrolled: -> { conn[:projects].exclude(local_mode: nil).order(:slug).all })
     end
 
     # CardLinks' `git:` port (one per process: its files_at answers are kept per scan). No git in this process.

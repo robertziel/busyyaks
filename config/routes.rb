@@ -82,6 +82,7 @@ module Busyyaks
     post "/api/cards/:id/owner", to: "api.cards.owner"
     post "/api/cards/:id/dialog-answer", to: "api.cards.dialog_answer"   # operator only: press a session dialog option
     post "/api/cards/:id/approve", to: "api.cards.approve"
+    post "/api/cards/:id/pr-unassign", to: "api.cards.pr_unassign"   # operator: take one PR off the card
     post "/api/cards/:id/checklists", to: "api.cards.checklist"
     post "/api/cards/:id/attachments", to: "api.cards.attach"   # multipart: file, comment_id?
     get "/api/attachments/:id/download", to: "api.attachments.download"
