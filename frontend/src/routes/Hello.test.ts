@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SetupData } from "../lib/hello";
-import { ReadyFacts, STEPS, Skin } from "./Hello";
+import { PlanCard, ReadyFacts, STEPS, Skin } from "./Hello";
 
 const LABELS: Record<string, string> = { light: "Light", dark: "Dark", auto: "Auto", matrix: "Matrix" };
 function stub(choice: string) {
@@ -56,5 +56,29 @@ describe("Hello", () => {
     );
     expect(html).toContain('<dt>checks</dt><dd>1/2 ok<span class="hello-bad">✗ github</span></dd>');
     expect(html).toContain("✗ not set up");
+  });
+});
+
+// card 532: the shared .btn[aria-disabled] rule dims a button that carries the attribute at all, "false" included
+describe("the Projects plan card's buttons", () => {
+  const plan = {
+    from: "/old",
+    to: "/new",
+    repos: 3,
+    roots: [{ path: "/projects", host: "/new" }],
+    trusted: [],
+    loses_trust: [],
+    services: ["web"],
+    plan_id: "p",
+  };
+  const render = (busy: boolean) =>
+    renderToStaticMarkup(createElement(PlanCard, { plan, busy, onApply: () => {}, onCancel: () => {} }));
+  it("carries no aria-disabled while idle (else they render dimmed)", () => {
+    expect(render(false)).not.toContain("aria-disabled");
+  });
+  it("says aria-disabled=true on Apply and Cancel while busy, and stays focusable (no disabled)", () => {
+    const html = render(true);
+    expect(html.match(/aria-disabled="true"/g)).toHaveLength(2);
+    expect(html).not.toMatch(/ disabled=""/);
   });
 });

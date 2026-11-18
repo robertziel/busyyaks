@@ -9,10 +9,10 @@ require_relative "harnesses"
 
 module Busyyaks
   # The first-run hello screen (/hello): the boot checks, where the projects come from, and the agent
-  # launchers, as [status, body]. Writes only two things: a setup_completions row (complete) — the launchers and the
-  # default go through AgentSettingsAPI.save like Settings → Agents & launchers. The projects dir (.env PROJECTS_ROOT,
-  # a compose mount) and the allowed commands (config/busyyaks.yml launch.commands, a :ro host file) are host-only:
-  # shown here, never written.
+  # launchers, as [status, body]. Writes a setup_completions row (complete) — the launchers and the default go through
+  # AgentSettingsAPI.save like Settings → Agents & launchers. The projects dir (.env PROJECTS_ROOT, every container's
+  # mount source; card 532) is changed by bin/launcher on the host — browse / plan / apply relayed here, the launcher
+  # checks everything again. The allowed commands (config/busyyaks.yml launch.commands, a :ro host file) are host-only.
   #   show            → 200 {completed, checks, projects, agents}
   #   complete(by:)   → 200 the same, completed = the new row
   module SetupAPI
@@ -26,6 +26,27 @@ module Busyyaks
     end
 
     def completed?(db) = !db[TABLE].empty?
+
+    # GET /api/setup/browse?path= → a host dir's subdirs for the picker (bin/launcher `browse`); 422 with its reason
+    def browse(path:, launcher: LauncherClient) = relay { launcher.browse(path: path) }
+
+    # GET /api/setup/projects-root → {current, applying, last} · POST {step: plan|apply, path, plan_id} → the plan /
+    # the started apply. Refusals keep the launcher's status: 422 a check failed, 409 the plan changed or one runs.
+    def projects_root(step:, path: nil, plan_id: nil, launcher: LauncherClient)
+      relay { launcher.projects_root(step: step, path: path, plan_id: plan_id) }
+    end
+
+    def relay
+      res = yield
+      return [200, res.except("ok")] if res["ok"]
+      # a refusal with no status is not one of these ops' answers (an older launcher's "unknown op"): said, not guessed
+      return [503, { error: "launcher protocol error (#{res['error']}): restart it (deploy/install-launcher.sh)" }] \
+        unless res["status"]
+
+      [Integer(res["status"]), { error: res["error"] }]
+    rescue LauncherClient::Unavailable => e
+      [503, { error: e.message }]
+    end
 
     # checks: each {key, label, ok, detail} — read now, in this order; a failed one says why, nothing is assumed
     def show(db:, store:, config:, github:, launcher: LauncherClient, env: ENV)

@@ -2,6 +2,11 @@
 import { describe, expect, it } from "vitest";
 import type { AgentDoc, AgentType, Invocation } from "./agentSettings";
 import {
+  applyPhase,
+  childPath,
+  crumbs,
+  failureParts,
+  parentPath,
   agentPrompt,
   applyRows,
   typeChanges,
@@ -17,12 +22,28 @@ import {
   keepDefault,
   type Harness,
   type HarnessesData,
+  type RootStatus,
   type SetupData,
 } from "./hello";
 
-const claude: Invocation = { kind: "claude_code", command: "claude", args: [], via_shell: false };
-const local: Invocation = { kind: "claude_code", command: "localclaude", args: [], via_shell: true };
-const hermes: Invocation = { kind: "hermes", command: "hermes", args: ["chat"], via_shell: false };
+const claude: Invocation = {
+  kind: "claude_code",
+  command: "claude",
+  args: [],
+  via_shell: false,
+};
+const local: Invocation = {
+  kind: "claude_code",
+  command: "localclaude",
+  args: [],
+  via_shell: true,
+};
+const hermes: Invocation = {
+  kind: "hermes",
+  command: "hermes",
+  args: ["chat"],
+  via_shell: false,
+};
 const commands = [claude, local, hermes];
 
 const type = (key: string, over: Partial<AgentType> = {}): AgentType => ({
@@ -41,10 +62,20 @@ const type = (key: string, over: Partial<AgentType> = {}): AgentType => ({
 const doc = (): AgentDoc => ({
   launchers: [
     { key: "claude", label: "claude", ...claude },
-    { key: "old", label: "old", kind: "claude_code", command: "gone", args: [], via_shell: false },
+    {
+      key: "old",
+      label: "old",
+      kind: "claude_code",
+      command: "gone",
+      args: [],
+      via_shell: false,
+    },
   ],
   agent_types: [
-    type("lead", { launchers: ["claude", "old"], model: { claude: "opus", old: null } }),
+    type("lead", {
+      launchers: ["claude", "old"],
+      model: { claude: "opus", old: null },
+    }),
     type("worker", { under: "lead" }),
   ],
 });
@@ -63,7 +94,13 @@ describe("rowsFrom", () => {
     expect(rowsFrom(doc(), commands)).toEqual([
       { key: "claude", label: "claude", at: 0, use: true, existing: true },
       { key: "old", label: "old", at: -1, use: false, existing: true },
-      { key: "localclaude", label: "localclaude", at: 1, use: false, existing: false },
+      {
+        key: "localclaude",
+        label: "localclaude",
+        at: 1,
+        use: false,
+        existing: false,
+      },
       { key: "hermes", label: "hermes", at: 2, use: false, existing: false },
     ]);
   });
@@ -169,15 +206,34 @@ describe("agentPrompt", () => {
   });
 
   it("carries the harness detection: what is found, what to install, the exact line to add", () => {
-    const p = { host_root: "/srv", mount: "/p", roots: [], search_depth: 2, repos: 0, sample: [] };
+    const p = {
+      host_root: "/srv",
+      mount: "/p",
+      roots: [],
+      search_depth: 2,
+      repos: 0,
+      sample: [],
+    };
     const data: HarnessesData = {
       checked_at: 0,
       elapsed_ms: 1,
       shell: "bash -ic",
       harnesses: [
         h({ key: "claude", command: "claude", version: "2.1.3", allowed: [0] }),
-        h({ key: "hermes", command: "hermes", kind: "hermes", allow_line: "- { kind: hermes, command: hermes }" }),
-        h({ key: "codex", command: "codex", found: false, kind: null, launchable: false, allow_line: null }),
+        h({
+          key: "hermes",
+          command: "hermes",
+          kind: "hermes",
+          allow_line: "- { kind: hermes, command: hermes }",
+        }),
+        h({
+          key: "codex",
+          command: "codex",
+          found: false,
+          kind: null,
+          launchable: false,
+          allow_line: null,
+        }),
       ],
       commands: [],
       allowlist_in_sync: true,
@@ -224,9 +280,21 @@ describe("stepFrom", () => {
 
 describe("harnessState", () => {
   it("every card state, glyph + word", () => {
-    expect(harnessState(h({ allowed: [0] }))).toEqual({ key: "found", badge: "✓ found", tone: "ok" });
+    expect(harnessState(h({ allowed: [0] }))).toEqual({
+      key: "found",
+      badge: "✓ found",
+      tone: "ok",
+    });
     expect(harnessState(h({ allowed: [] })).key).toBe("not_allowed");
-    expect(harnessState(h({ allowed: [0], version: null, version_error: "timed out after 5 s" })).tone).toBe("warn");
+    expect(
+      harnessState(
+        h({
+          allowed: [0],
+          version: null,
+          version_error: "timed out after 5 s",
+        }),
+      ).tone,
+    ).toBe("warn");
     expect(harnessState(h({ allowed: [0], type: "function", path: null })).key).toBe("shell");
     expect(harnessState(h({ found: false })).key).toBe("missing");
     expect(harnessState(h({ found: false, allowed: [1] })).key).toBe("missing_allowed");
@@ -268,9 +336,16 @@ describe("harnessState", () => {
     expect(harnessLine(h({ command: "f", version: null, type: "function", allowed: [0] }))).toBe("f shell function");
     expect(harnessLine(h({ command: "c", found: false }))).toBe("c not found");
     expect(harnessLine(h({ command: "codex", launchable: false }))).toBe("codex 1.0 (not supported yet)");
-    expect(harnessLine(h({ command: "x", version: null, version_error: "timed out after 5 s", allowed: [0] }))).toBe(
-      "x version ✗ (timed out after 5 s)",
-    );
+    expect(
+      harnessLine(
+        h({
+          command: "x",
+          version: null,
+          version_error: "timed out after 5 s",
+          allowed: [0],
+        }),
+      ),
+    ).toBe("x version ✗ (timed out after 5 s)");
     const found = [{ at: 1, found: true, type: "file", path: "/b/w" }];
     expect(harnessLine(h({ command: "hermes", found: false, allowed: [1] }), found)).toBe(
       "hermes not on PATH (allowed command found)",
@@ -341,7 +416,12 @@ describe("typeChanges", () => {
         under: null,
       },
       // worker runs under the lead: listed, marked as following the lead's launcher
-      { type: "worker", label: "worker", launchers: [["claude"], ["hermes", "claude"]], under: "lead" },
+      {
+        type: "worker",
+        label: "worker",
+        launchers: [["claude"], ["hermes", "claude"]],
+        under: "lead",
+      },
     ]);
   });
 
@@ -361,5 +441,88 @@ describe("typeChanges", () => {
     d.launchers = [d.launchers[0]!];
     d.agent_types = [type("lead")];
     expect(typeChanges(d, applyRows(d, commands, rowsFrom(d, commands), "claude"))).toEqual([]);
+  });
+});
+
+describe("projects dir (card 532)", () => {
+  const last = (state: "applying" | "done" | "failed" | "interrupted", to = "/srv") => ({
+    state,
+    from: "/old",
+    to,
+    at: "t",
+    log: "l",
+    env: "new" as const,
+  });
+  const st = (current: string, l: RootStatus["last"]): RootStatus => ({
+    current,
+    applying: false,
+    last: l,
+  });
+
+  it("breaks a host dir into the picker's breadcrumb", () => {
+    expect(crumbs("/")).toEqual([{ name: "/", path: "/" }]);
+    expect(crumbs("/srv/data/projects")).toEqual([
+      { name: "/", path: "/" },
+      { name: "srv", path: "/srv" },
+      { name: "data", path: "/srv/data" },
+      { name: "projects", path: "/srv/data/projects" },
+    ]);
+    expect(crumbs("/srv/")).toEqual([
+      { name: "/", path: "/" },
+      { name: "srv", path: "/srv" },
+    ]);
+  });
+
+  it("goes up even from a dir that could not be listed", () => {
+    expect(parentPath("/srv/code")).toBe("/srv");
+    expect(parentPath("/srv")).toBe("/");
+    expect(parentPath("/")).toBe("/");
+  });
+
+  it("says which .env is in place after a failure, as recorded", () => {
+    const base = {
+      state: "failed" as const,
+      from: "/old",
+      to: "/srv",
+      at: "t",
+      log: "/s/l",
+      error: "compose up exit 1",
+    };
+    expect(failureParts({ ...base, env: "restored", rolled_back: true })).toEqual({
+      reason: "compose up exit 1",
+      env: ".env restored",
+      log: "/s/l",
+    });
+    expect(failureParts({ ...base, env: "restored", rolled_back: false }).env).toBe(
+      ".env restored, rollback compose failed too",
+    );
+    expect(failureParts({ ...base, env: "new" }).env).toBe(".env still holds /srv");
+    const cut = { ...base, state: "interrupted" as const, error: undefined, env: "new" as const, note: "not finished" };
+    expect(failureParts(cut).reason).toBe("not finished");
+    expect(failureParts({ ...cut, env: "unknown" as const }).env).toBe(
+      ".env state not recorded: check PROJECTS_ROOT in .env",
+    );
+  });
+
+  it("never shows the record's state as the reason: none recorded says so", () => {
+    const l = { state: "failed" as const, from: "/old", to: "/srv", at: "t", log: "/s/l", env: "restored" as const };
+    expect(failureParts(l).reason).toBe("reason not recorded");
+  });
+
+  it("joins a picked subdir", () => {
+    expect(childPath("/", "srv")).toBe("/srv");
+    expect(childPath("/srv", "code")).toBe("/srv/code");
+  });
+
+  it("follows an apply until the restarted launcher runs on the new dir", () => {
+    expect(applyPhase(null, "/srv")).toBe("restarting");
+    expect(applyPhase(st("/old", last("applying")), "/srv")).toBe("applying");
+    // compose finished, the launcher not restarted yet: still the old dir
+    expect(applyPhase(st("/old", last("done")), "/srv")).toBe("applying");
+    expect(applyPhase(st("/srv", last("done")), "/srv")).toBe("done");
+    expect(applyPhase(st("/old", last("failed")), "/srv")).toBe("failed");
+    expect(applyPhase(st("/old", last("interrupted")), "/srv")).toBe("failed");
+    // an older change's record never answers for this one
+    expect(applyPhase(st("/old", last("failed", "/elsewhere")), "/srv")).toBe("applying");
   });
 });

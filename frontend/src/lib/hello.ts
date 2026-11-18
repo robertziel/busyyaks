@@ -19,9 +19,75 @@ export type SetupData = {
   agents: AgentSettingsData;
   // Settings → Daily report's current revision as the host runs it (shown on Summary; edited on its own page)
   // saved: a revision exists (false = never set up)
-  daily_report: { configured: boolean; saved: boolean; schedule: string | null; reason: string | null };
+  daily_report: {
+    configured: boolean;
+    saved: boolean;
+    schedule: string | null;
+    reason: string | null;
+  };
   kinds: Record<string, string>; // engine launch kind → its harness label (config/harnesses.yml)
 };
+
+// The projects dir (card 532): .env PROJECTS_ROOT, changed by bin/launcher on the host.
+// GET /api/setup/browse?path= — one host dir's subdirs for the picker (git = the subdir is a repo)
+export type BrowseData = {
+  path: string;
+  parent: string | null;
+  entries: { name: string; git: boolean }[];
+  truncated: boolean;
+  repos: number;
+};
+// POST /api/setup/projects-root {step: "plan"} → every check passed; plan_id must come back with the apply
+export type RootPlan = {
+  from: string;
+  to: string;
+  repos: number;
+  roots: { path: string; host: string }[];
+  trusted: { path: string; from: string; to: string }[];
+  loses_trust: string[]; // repos the launcher's create made under the old dir: their folder trust stays there
+  services: string[];
+  plan_id: string;
+};
+// GET /api/setup/projects-root → the dir the launcher runs on + its last change (null: never changed here)
+export type RootStatus = {
+  current: string;
+  applying: boolean;
+  last: {
+    state: "applying" | "done" | "failed" | "interrupted"; // interrupted: no apply runs and its record never finished
+    note?: string;
+    from: string;
+    to: string;
+    at: string;
+    error?: string;
+    rolled_back?: boolean;
+    env: "new" | "restored" | "unknown"; // which .env is in place now (unknown: the record never said)
+    log: string;
+  } | null;
+};
+// a failed change in parts: the reason, which .env is in place (as recorded, never assumed), the log
+export function failureParts(l: NonNullable<RootStatus["last"]>): { reason: string; env: string; log: string } {
+  const env =
+    l.env === "restored"
+      ? `.env restored${l.rolled_back === false ? ", rollback compose failed too" : ""}`
+      : l.env === "new"
+        ? `.env still holds ${l.to}`
+        : ".env state not recorded: check PROJECTS_ROOT in .env";
+  return { reason: l.error ?? l.note ?? "reason not recorded", env, log: l.log };
+}
+// a host dir as the picker's breadcrumb: "/" then each segment with the dir it opens
+export function crumbs(dir: string): { name: string; path: string }[] {
+  const parts = dir.split("/").filter(Boolean);
+  return [{ name: "/", path: "/" }, ...parts.map((name, i) => ({ name, path: `/${parts.slice(0, i + 1).join("/")}` }))];
+}
+export const parentPath = (dir: string) => dir.replace(/\/[^/]*\/?$/, "") || "/";
+export const childPath = (dir: string, name: string) => (dir === "/" ? `/${name}` : `${dir}/${name}`);
+// where an apply stands, from the status read (null = unreadable: the web is restarting)
+export function applyPhase(s: RootStatus | null, to: string): "restarting" | "done" | "failed" | "applying" {
+  if (!s) return "restarting";
+  if (s.last && s.last.to === to && (s.last.state === "failed" || s.last.state === "interrupted")) return "failed";
+  if (s.current === to && s.last?.state === "done") return "done";
+  return "applying";
+}
 
 // GET /api/setup/harnesses: the agent CLIs the launcher found in the launch shell (bash -ic), joined with
 // the host allowlist. allowed = indexes into agents.commands of the harness's kind; allow_line = the launch.commands
@@ -44,7 +110,12 @@ export type Harness = {
   allow_note: string | null; // why there is no line for a found harness (a shell function of a kind that needs a program)
 };
 // found null = unknown: the launcher did not resolve it (it read launch.commands before an edit)
-export type Resolved = { at: number; found: boolean | null; type: string | null; path: string | null };
+export type Resolved = {
+  at: number;
+  found: boolean | null;
+  type: string | null;
+  path: string | null;
+};
 export type HarnessesData = {
   checked_at: number;
   elapsed_ms: number;
@@ -72,22 +143,47 @@ export function stepFrom(param: string | null, completed: boolean): StepKey {
 }
 
 // One harness card's state: what it says first (badge) and its tone. Glyph + word, colour second.
-export type HarnessState = { key: string; badge: string; tone: "ok" | "warn" | "bad" };
+export type HarnessState = {
+  key: string;
+  badge: string;
+  tone: "ok" | "warn" | "bad";
+};
 
 // resolved: the allowlisted commands as the launch shell resolves them — a harness program missing while an allowlisted
 // command of its kind is found (a wrapper of its own name) is a warning, not "nothing runs"
 export function harnessState(h: Harness, resolved: Resolved[] = []): HarnessState {
   if (!h.found) {
     if (h.allowed.some((i) => resolved.find((r) => r.at === i)?.found))
-      return { key: "missing_runs", badge: "! not on PATH · allowed command found", tone: "warn" };
-    return { key: h.allowed.length ? "missing_allowed" : "missing", badge: "✗ not found", tone: "bad" };
+      return {
+        key: "missing_runs",
+        badge: "! not on PATH · allowed command found",
+        tone: "warn",
+      };
+    return {
+      key: h.allowed.length ? "missing_allowed" : "missing",
+      badge: "✗ not found",
+      tone: "bad",
+    };
   }
-  if (h.allow_note) return { key: "shell_unlaunchable", badge: `! shell ${h.type} · not launchable`, tone: "warn" };
+  if (h.allow_note)
+    return {
+      key: "shell_unlaunchable",
+      badge: `! shell ${h.type} · not launchable`,
+      tone: "warn",
+    };
   if (h.launchable && h.allowed.length === 0) return { key: "not_allowed", badge: "! not allowed", tone: "warn" };
   if (h.allowed.some((i) => resolved.find((r) => r.at === i)?.found === false))
-    return { key: "allowed_missing", badge: "✓ found · allowed command ✗", tone: "warn" };
+    return {
+      key: "allowed_missing",
+      badge: "✓ found · allowed command ✗",
+      tone: "warn",
+    };
   if (h.version_error && h.type === "file") return { key: "version", badge: "✓ found · version ✗", tone: "warn" };
-  return { key: h.type === "file" ? "found" : "shell", badge: "✓ found", tone: "ok" };
+  return {
+    key: h.type === "file" ? "found" : "shell",
+    badge: "✓ found",
+    tone: "ok",
+  };
 }
 
 // the launchers in use whose command the launch shell does not find (a launch would fail): their keys
@@ -134,7 +230,13 @@ export const setupPending = (meta: string | null, done: boolean): boolean => met
 
 // One row of the Agents step: an existing launcher (its key fixed) or an allowlisted command not used yet.
 // at = its index in the host allowlist (-1: the launcher is on none — it cannot run, and is dropped on save).
-export type Row = { key: string; label: string; at: number; use: boolean; existing: boolean };
+export type Row = {
+  key: string;
+  label: string;
+  at: number;
+  use: boolean;
+  existing: boolean;
+};
 
 const slug = (s: string) =>
   s
@@ -255,7 +357,12 @@ export function agentPrompt(
 // What a save changes per agent type: its launcher list (the Launch menu order), before → after. Shown beside Save so
 // no type is rewritten unseen; an unchanged type is not listed.
 // under: the lead type it runs under (its sessions run that lead's launcher, whatever the list says), or null
-export type TypeChange = { type: string; label: string; launchers: [string[], string[]]; under: string | null };
+export type TypeChange = {
+  type: string;
+  label: string;
+  launchers: [string[], string[]];
+  under: string | null;
+};
 
 // Types that run under a lead (worker, sub team) are listed too, with `under`: their sessions run the lead's
 // launcher whatever their list says, so the page shows them as following it and does not count them.
@@ -266,6 +373,13 @@ export function typeChanges(before: AgentDoc, after: AgentDoc): TypeChange[] {
     const ls: [string[], string[]] = [was.launchers, t.launchers];
     return ls[0].join(",") === ls[1].join(",")
       ? []
-      : [{ type: t.key, label: t.label, launchers: ls, under: t.under ?? null }];
+      : [
+          {
+            type: t.key,
+            label: t.label,
+            launchers: ls,
+            under: t.under ?? null,
+          },
+        ];
   });
 }

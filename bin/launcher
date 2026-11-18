@@ -23,6 +23,11 @@
 #   {"op":"answer","session","socket","hash","key"} → press that option key (digit / esc) ONLY while the same dialog shows
 #   {"op":"attach","session","socket"}              → the session's live terminal: {ok,session,cols,rows,screen}, then the
 #                                                    connection stays open, JSON lines both ways (Busyyaks::Terminal)
+#   {"op":"browse","path"}                          → that host dir's subdirs for the hello screen's picker (card 532)
+#   {"op":"projects_root","step":"plan","path"}     → the checked plan to make path PROJECTS_ROOT + its plan_id
+#   {"op":"projects_root","step":"apply","path","plan_id"} → .env rewritten, compose recreated, then this launcher exits
+#                                                    (systemd restarts it on the new .env); {"step":"status"} → the
+#                                                    current root + the last apply's record (state dir projects-root.json)
 # agents · agent_tasks · reap_preview · reap · notify read the agent-session collector (AgentCollector::OPS); with
 # config/busyyaks.yml agents.collector: none each answers {ok:false, unsupported:true, error: AgentCollector::OFF, status: 422}.
 # Only an agent type + launcher key from config/kanban.yml (the board config's `agent_types` / `launchers`, built
@@ -62,6 +67,8 @@ require_relative "../lib/busyyaks/skills"
 require_relative "../lib/busyyaks/terminal"
 # the agent harnesses the hello screen looks for (config/harnesses.yml)
 require_relative "../lib/busyyaks/harnesses"
+# the projects dir chosen from the hello screen (card 532): the checks, the .env rewrite, the apply's record
+require_relative "../lib/busyyaks/projects_root"
 
 $stdout.sync = true
 ROOT = File.expand_path("..", __dir__)
@@ -1273,6 +1280,125 @@ rescue Errno::ENOENT, Errno::ECONNREFUSED, Errno::EACCES => e
   { ok: false, error: "collector read socket unavailable: #{e.class}", status: 503 }
 end
 
+# --- the projects dir (card 532): PROJECTS_ROOT is every container's mount source, so only this host process changes it
+APPLY = { lock: Mutex.new, running: false }
+
+def on_path(program)
+  ENV.fetch("PATH", "").split(":").map { |d| File.join(d, program) }.find { |f| File.file?(f) && File.executable?(f) }
+end
+
+def projects_root_plan(path)
+  trusted = Busyyaks::LaunchTrust.parse!(YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))["launch"])
+  apart = { "LAUNCHER_RUN_DIR" => RUN_DIR, "LAUNCHER_STATE_DIR" => STATE_DIR }
+  apart["the agent collector's dir"] = File.dirname(COLLECTOR.snapshot) if COLLECTOR
+  Busyyaks::ProjectsRoot.plan(path.to_s, current: PROJECTS_ROOT, container_root: CONTAINER_ROOT, roots: roots,
+                                         trusted: trusted, apart: apart, not_inside: { "./data" => File.join(ROOT, "data") },
+                                         created: CREATED.paths, docker: on_path("docker"))
+end
+
+def projects_root_op(req)
+  case req["step"]
+  when "plan" then { ok: true, plan: projects_root_plan(req["path"]) }
+  when "apply" then projects_root_apply(req)
+  when "status"
+    running = APPLY[:lock].synchronize { APPLY[:running] }
+    { ok: true, current: PROJECTS_ROOT, applying: running,
+      last: Busyyaks::ProjectsRoot.settled(Busyyaks::ProjectsRoot.state(STATE_DIR), current: PROJECTS_ROOT,
+                                           running: running), }
+  else { ok: false, error: "step must be plan, apply or status", status: 400 }
+  end
+rescue Busyyaks::ProjectsRoot::Invalid, Busyyaks::LaunchTrust::Invalid => e
+  { ok: false, error: e.message, status: 422 }
+end
+
+# The plan is checked again and must be the one the operator saw (its id); then .env is rewritten and compose recreates
+# the services on a thread (the web answering this request is one of them). Success → recorded, this launcher exits
+# and systemd starts it on the new .env. Failure → the old .env back, compose up again on it, recorded with the reason.
+def projects_root_apply(req)
+  plan = projects_root_plan(req["path"])
+  unless plan[:plan_id] == req["plan_id"]
+    return { ok: false, error: "the plan changed since it was checked: check again", status: 409 }
+  end
+
+  APPLY[:lock].synchronize do
+    return { ok: false, error: "a projects dir change is already running", status: 409 } if APPLY[:running]
+
+    APPLY[:running] = true
+  end
+  env = File.join(ROOT, ".env")
+  backup = nil
+  begin
+    stamp = Busyyaks::Clock.now.utc.strftime("%Y%m%dT%H%M%SZ")
+    backup = Busyyaks::ProjectsRoot.write_env!(env, plan[:to], stamp: stamp, backup_dir: STATE_DIR)
+    rec = { "state" => "applying", "from" => plan[:from], "to" => plan[:to], "at" => Busyyaks::Clock.now.iso8601,
+            "backup" => backup, "env" => "new", "log" => File.join(STATE_DIR, "projects-root-#{stamp}.log"), }
+    Busyyaks::ProjectsRoot.record!(STATE_DIR, rec)
+  rescue StandardError
+    # nothing started: a .env already rewritten goes back before the refusal
+    Busyyaks::ProjectsRoot.restore_env!(env, backup) if backup
+    APPLY[:lock].synchronize { APPLY[:running] = false }
+    raise
+  end
+  puts "#{Busyyaks::Clock.now.iso8601} projects dir #{plan[:from]} → #{plan[:to]}: .env rewritten (backup #{backup}), compose up"
+  Thread.new { projects_root_compose(rec, env, backup) }
+  { ok: true, state: rec }
+end
+
+# rec["env"] says which .env is in place at every record: "new" until a failed compose puts the old one back
+# ("restored") — the page says what it reads, never assumes the rollback ran.
+def projects_root_compose(rec, env, backup)
+  out, st = Open3.capture2e(*Busyyaks::ProjectsRoot.compose_argv(ROOT), chdir: ROOT, in: File::NULL)
+  projects_root_log(rec, out)
+  return projects_root_done(rec) if st.success?
+
+  Busyyaks::ProjectsRoot.restore_env!(env, backup)
+  rec = rec.merge("env" => "restored")
+  back, back_st = Open3.capture2e(*Busyyaks::ProjectsRoot.compose_argv(ROOT), chdir: ROOT, in: File::NULL)
+  projects_root_log(rec, "#{out}\n--- rollback: .env restored, compose up ---\n#{back}")
+  why = "compose up exit #{st.exitstatus}: #{out.lines.last(3).join.strip}"
+  projects_root_failed(rec, why, "rolled_back" => back_st.success?)
+  puts "#{Busyyaks::Clock.now.iso8601} projects dir #{rec['to']} FAILED (#{why}); .env restored, rollback compose " \
+       "#{back_st.success? ? 'ok' : "exit #{back_st.exitstatus}"}"
+rescue StandardError => e
+  projects_root_failed(rec, "#{e.class}: #{e.message}")
+  puts "#{Busyyaks::Clock.now.iso8601} projects dir #{rec['to']} FAILED: #{e.class}: #{e.message} (.env: #{rec['env']})"
+ensure
+  APPLY[:lock].synchronize { APPLY[:running] = false }
+end
+
+# the compose output, best-effort: a log that cannot be written never decides what happens next (a compose that
+# succeeded still restarts the launcher; one that failed still rolls back)
+def projects_root_log(rec, text)
+  File.write(rec["log"], text, perm: 0o600)
+rescue StandardError => e
+  puts "#{Busyyaks::Clock.now.iso8601} projects dir #{rec['to']}: log #{rec['log']} NOT written (#{e.class}: #{e.message})"
+end
+
+# compose ran on the new .env: the launcher restarts on it whether or not the record could be written (the services
+# already run on the new dir; a launcher left on the old one would map every path wrong)
+def projects_root_done(rec)
+  begin
+    Busyyaks::ProjectsRoot.record!(STATE_DIR, rec.merge("state" => "done", "done_at" => Busyyaks::Clock.now.iso8601))
+  rescue StandardError => e
+    puts "#{Busyyaks::Clock.now.iso8601} projects dir #{rec['to']}: compose ok, record NOT written (#{e.class}: #{e.message})"
+  end
+  puts "#{Busyyaks::Clock.now.iso8601} projects dir now #{rec['to']}: restarting the launcher on the new .env"
+  Process.kill("TERM", Process.pid)
+end
+
+def projects_root_failed(rec, why, extra = {})
+  Busyyaks::ProjectsRoot.record!(STATE_DIR, rec.merge("state" => "failed", "error" => why,
+                                                      "done_at" => Busyyaks::Clock.now.iso8601).merge(extra))
+rescue StandardError => e
+  puts "#{Busyyaks::Clock.now.iso8601} projects dir #{rec['to']}: failure record NOT written (#{e.class}: #{e.message})"
+end
+
+def browse_op(req)
+  { ok: true, **Busyyaks::ProjectsRoot.browse(req["path"].to_s) }
+rescue Busyyaks::ProjectsRoot::Invalid => e
+  { ok: false, error: e.message, status: 422 }
+end
+
 def handle(line)
   req = JSON.parse(line)
   # an op that reads the collector, on a box configured without one (AgentCollector::OPS): OFF, nothing else runs
@@ -1298,6 +1424,8 @@ def handle(line)
   when "dialog" then dialog_op(req)
   when "git" then git_op(req)
   when "answer" then answer_op(req)
+  when "browse" then browse_op(req)
+  when "projects_root" then projects_root_op(req)
   else { ok: false, error: "unknown op" }
   end
 rescue ArgumentError, KeyError, JSON::ParserError => e
