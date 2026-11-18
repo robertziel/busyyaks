@@ -78,7 +78,7 @@ class AuthTest < Minitest::Test
 
   def test_csp_is_the_cores_plus_the_providers
     assert_equal({ connect_src: "'self'", script_src: "'self'", img_src: "'self' data: https://avatars.githubusercontent.com",
-                   manifest_src: "'self'", },
+                   manifest_src: "'self'", media_src: "'self'", },
                  A.csp_sources({}))
     got = A.csp_sources({ connect_src: ["https://id.test"], img_src: ["https://id.test"] })
     assert_equal "'self' https://id.test", got[:connect_src]
