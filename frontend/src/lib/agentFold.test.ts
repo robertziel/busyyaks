@@ -22,25 +22,25 @@ const visible = (f: ReturnType<typeof fold>) => f.rows.filter((r) => r.visible).
 
 describe("agents fold", () => {
   it("active = not idle/unknown, or subagents, or opened", () => {
-    expect(g.sessions.map((x) => active(x, none))).toEqual([true, true, false, false, true]);
+    expect(g.sessions.map((x) => active(x, none))).toEqual([true, false, false, false, true]);
     expect(active(s("idle1", "idle"), new Set(["default/idle1"]))).toBe(true);
   });
   it("folded: only active rows; the idle count is what unfolding adds", () => {
     const f = fold(g, "all", none, false);
-    expect(visible(f)).toEqual(["work", "unread", "lead"]);
-    expect([f.shown, f.activeCount, f.idleCount]).toEqual([true, 3, 2]);
+    expect(visible(f)).toEqual(["work", "lead"]);
+    expect([f.shown, f.activeCount, f.idleCount]).toEqual([true, 2, 3]);
   });
   it("unfolded: every row", () => {
     expect(visible(fold(g, "all", none, true))).toEqual(["work", "unread", "idle1", "unk", "lead"]);
   });
   it("an open idle row stays visible while folded", () => {
-    expect(visible(fold(g, "all", new Set(["default/unk"]), false))).toEqual(["work", "unread", "unk", "lead"]);
+    expect(visible(fold(g, "all", new Set(["default/unk"]), false))).toEqual(["work", "unk", "lead"]);
   });
   it("only idle rows: shown with 0 active so the unfold button is reachable", () => {
     const f = fold({ ...g, sessions: [s("a", "idle"), s("b", "unknown")] }, "all", none, false);
     expect([f.shown, f.activeCount, f.idleCount, visible(f).length]).toEqual([true, 0, 2, 0]);
   });
-  it("needs you = blocked, review or unread — finished alone is not", () => {
+  it("needs you = blocked or review — unread or finished alone is not", () => {
     const h = {
       ...g,
       sessions: [
@@ -51,7 +51,7 @@ describe("agents fold", () => {
         s("i", "idle"),
       ],
     };
-    expect(visible(fold(h, "you", none, true))).toEqual(["b", "r", "u"]);
+    expect(visible(fold(h, "you", none, true))).toEqual(["b", "r"]);
     expect(active(s("f", "finished"), none)).toBe(true);
   });
   it("filters still apply; a project nothing matches is hidden", () => {

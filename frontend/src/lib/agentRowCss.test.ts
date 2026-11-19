@@ -77,18 +77,13 @@ describe.each(["light", "dark"])("contrast, %s skin", (name) => {
     ["plain row hovered / open", over(s("mat-fill-2"), rail)],
     ["blocked row", over(tint(".ag-s.st-blocked"), rail)],
     ["review row", over(tint(".ag-s.st-review"), rail)],
-    ["unread row", over(tint(".ag-s.ag-unread:not(.st-blocked):not(.st-review)"), rail)],
     ["open body of a tinted row", ink("panel")],
   ];
 
   it("the unread tag is a mix this test can read", () => expect(newTag).not.toBeNull());
 
   it("a hovered or open row draws ONE layer: no second tint under its text", () => {
-    for (const sel of [
-      ".ag-s[open] > summary:hover",
-      ".ag-s.st-blocked > summary:hover",
-      ".ag-s.ag-unread > summary:hover",
-    ])
+    for (const sel of [".ag-s[open] > summary:hover", ".ag-s.st-blocked > summary:hover"])
       expect(decl(sel, "background"), sel).toBe("transparent");
     expect(decl(".ag-s.st-review > summary:hover", "background")).toBe("transparent");
     // no rule deepens a tinted row when it opens
@@ -96,8 +91,13 @@ describe.each(["light", "dark"])("contrast, %s skin", (name) => {
     expect(css).not.toMatch(/\.ag-s\.ag-unread[^{,]*\[open\]/);
   });
 
+  it("an unread row is not tinted, railed or bolded: it does not wait for the operator", () => {
+    expect(css).not.toMatch(/\.ag-unread[^{]*\{[^}]*(background|inset|font-weight)/);
+    expect(decl(".ag-unread > summary .ag-dot", "box-shadow")).toMatch(/vivid-teal/);
+  });
+
   it("an open tinted row's body sits on the panel", () => {
-    for (const sel of [".ag-s.st-blocked > .ag-body", ".ag-s.st-review > .ag-body", ".ag-s.ag-unread > .ag-body"])
+    for (const sel of [".ag-s.st-blocked > .ag-body", ".ag-s.st-review > .ag-body"])
       expect(decl(sel, "background"), sel).toBe("var(--panel)");
   });
 
@@ -117,7 +117,7 @@ describe.each(["light", "dark"])("contrast, %s skin", (name) => {
   });
 
   // the open body's layers: a plain row's open fill, a tinted row's panel block
-  const bodies = [layers[1]!, layers[5]!];
+  const bodies = layers.filter(([name]) => name === "plain row hovered / open" || name === "open body of a tinted row");
   it.each(bodies)("%s: the copy chip (tmux attach …) is ≥ 4.5:1 on its fill", (_, bg) => {
     expect(ratio(ink("ink-faint"), over(s("mat-fill"), bg))).toBeGreaterThanOrEqual(4.5);
   });

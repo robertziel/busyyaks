@@ -187,11 +187,8 @@
 .ag-unread > summary .ag-dot {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--vivid-teal) 45%, transparent);
 }
-.ag-unread .ag-name {
-  font-weight: 700;
-}
 /* rows that wait for you are highlighted whole. needs input = the job is STOPPED: strong red card, pulsing ring ·
-   PR review = calm amber card · unread = teal card */
+   PR review = calm amber card. An unread row does not wait for you: only its dot's teal ring marks it */
 .ag-s.st-blocked {
   background: rgba(var(--bad-rgb), 0.16);
   box-shadow:
@@ -264,24 +261,15 @@
   font-weight: 600;
   white-space: nowrap;
 }
-.ag-s.ag-unread:not(.st-blocked):not(.st-review) {
-  background: color-mix(in srgb, var(--vivid-teal) 12%, transparent);
-  box-shadow:
-    inset 3px 0 0 var(--vivid-teal),
-    0 0 0 1px color-mix(in srgb, var(--vivid-teal) 35%, transparent);
-  margin: 3px 0;
-}
 /* a tinted row — and an open one — keeps its one tint hovered and open (a second layer took its text under 4.5:1):
    the hover shows on the name */
 .ag-s[open] > summary:hover,
 .ag-s.st-blocked > summary:hover,
-.ag-s.st-review > summary:hover,
-.ag-s.ag-unread > summary:hover {
+.ag-s.st-review > summary:hover {
   background: transparent;
 }
 .ag-s.st-blocked > summary:hover .ag-name,
-.ag-s.st-review > summary:hover .ag-name,
-.ag-s.ag-unread > summary:hover .ag-name {
+.ag-s.st-review > summary:hover .ag-name {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -563,8 +551,7 @@
 }
 /* a tinted row's open body sits on the plain panel: its chips, links and faint text were under 4.5:1 on the tint */
 .ag-s.st-blocked > .ag-body,
-.ag-s.st-review > .ag-body,
-.ag-s.ag-unread > .ag-body {
+.ag-s.st-review > .ag-body {
   margin: 0 4px 4px 8px;
   padding: 8px;
   border-radius: var(--radius-ctl);
@@ -767,6 +754,20 @@
 /* Clear idle (components/Reap.tsx) */
 .ag-filter .spacer {
   flex: 1;
+}
+.ag-empty {
+  font-size: 12.5px;
+  margin: 4px 0 8px;
+}
+.ag-empty .ag-link {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .ag-filter .ag-nfin {
   color: var(--ink-dim);

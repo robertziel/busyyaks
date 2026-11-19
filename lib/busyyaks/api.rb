@@ -101,7 +101,8 @@ module Busyyaks
         totals: { sessions: sessions.size, busy: sessions.count(&:busy?), subagents: sessions.sum(&:subagents),
                   blocked: sessions.count(&:blocked?), review: sessions.count { |s| s.state == "review" },
                   finished: sessions.count { |s| s.state == "finished" }, unread: sessions.count(&:unread?),
-                  you: sessions.count { |s| s.blocked? || s.state == "review" || s.unread? }, },
+                  # Needs you = blocked or review; unread only says its turn ended
+                  you: sessions.count { |s| s.blocked? || s.state == "review" }, },
         groups: groups.map do |label, slug, ss|
           { label: label, slug: slug, icon: slug && icons[slug],
             state: ss.map(&:state).min_by { |st| Agents::STATES.index(st) }, sessions: ss.map { |s| agent_session(s) }, }
