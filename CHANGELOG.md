@@ -5,6 +5,8 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.3] - 2026-11-19
+
 ### Added
 
 - A board card whose agent is working (thinking, running a tool, writing, waiting on its subagents) glows blue, read from the same screen evidence as the live agent line; no glow when idle, without evidence or when the agents read failed (the board says why); a card that needs you stays red. `GET /api/projects/*slug/board/live` answers the whole board from one shared agents snapshot. Colour: skin token `--working` (`--ak-working` in `config/kanban.yml` theme).
@@ -15,6 +17,21 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - A card's PRs show their base, draft, mergeability and auto-merge: a tag `base: <ref>` when a PR is not on its side's branch, `draft`, `conflicts` · `behind` · `mergeable: computing`, `auto-merge`, with the details on hover. The approval gate refuses a PR on the wrong base, a draft, one with conflicts, one GitHub is still computing, one whose mergeable state busyyaks does not know, and one with auto-merge on; `behind` is only a warning.
 - An agent session's live terminal in the dashboard: **Open terminal** in the Agents sidebar and a **Terminals** section on a card (one tab per agent session working on it). Read-only until **Take control**; every open, take and release is logged on the session's cards. See `docs/DEPLOY.md` § Terminals.
 - An agent-session collector, `bin/collector` (Claude Code and Hermes panes in this user's tmux): installed with `deploy/install-collector.sh`, checked by `yaks doctor`; the Agents sidebar, dialog detection and typed card comments work without a separate program. The shipped example config uses it.
+- Live agent status on a card: above the newest comment, what its agent is doing now (thinking, writing, running a tool and which, waiting for its subagents, idle), with the turn's time and tokens, read from the agent's screen; `working` when nothing on screen says more.
+- Board: a card face shows its newest picture attachment.
+- Attachments: mp4 and webm videos play in the card dialog and can be scrubbed; add `video/webm` to `.env` `ATTACHMENT_TYPES` to accept webm.
+- Card dialog: a **Force** button beside every Approve approves without the CI check.
+- Progress watch: a working or review card with no progress (no agent comment or move, no new PR head, CI result or branch tip) for `progress_watch.stale_minutes` pings its owner with the last evidence, then comments on the card, then counts as waiting for you.
+- Workflow per project in `<repo>/.busyyaks/workflow.yml` (git-ignored): the board's columns and transitions are read from and written to that file by the new `writer` service; a file the board refuses is named in the board header. See `docs/DEPLOY.md` § The writer service and `.busyyaks/workflow.yml`.
+- GitHub webhooks wake the PR and CI polls: `POST /api/github/hook` (HMAC-checked) makes the github service read the PRs a delivery names within seconds. See `docs/DEPLOY.md` § GitHub webhook.
+- Settings → Runtime: the services' timing (scan, writer sync, GitHub and CI polls, notifier, watchdog grace) edited in the dashboard, applied without a restart. See `docs/DEPLOY.md` § Runtime settings.
+- Settings → Updates and `yaks update [--main] [--check]`: check this checkout for a newer release tag or branch head and apply it (fast-forward, image build, database backup, services restarted); the settings cog shows a dot when one is available. See `docs/DEPLOY.md` § Updates.
+- Setup wizard: a Skin step; the agent CLIs found on the host (Claude Code, Hermes, Codex) with their install link or the allowlist line to add; reopened from the settings cog it edits the current values.
+- Skills: each session busyyaks launches gets the board workflow as skills for that launch only (busyyaks's, this deployment's and the repo's own `.busyyaks/skills/`), never installed user-wide. See README § Skills.
+- Remote servers over ssh: `yaks remote add / connect / attach` reaches a busyyaks server on another machine; the desktop app opens a server chooser (`yaks desktop open`); the dashboard shows the connection's state and dims when it is down. See README § Remote.
+- `yaks ci required OWNER/NAME` prints a repo's required CI checks from `ci.required`.
+- Agents sidebar: a **Hide finished** toggle.
+- A GitHub link label fixed at the bottom left of every page.
 
 ### Changed
 
@@ -28,13 +45,39 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - CI runs `ruby`, `ruby-pg`, `frontend` and the new `flake` stage on the public runner's CPU count (`scripts/ci/runner.env`) as a Docker CPU quota. `flake` runs each test file a change touches `CI_FLAKE_REPEATS` times, in batches of `CI_RUNNER_CPUS` runs: a changed test file, and the tests that name a changed `lib/`, `bin/` or `cli/` file. Any other changed path (e.g. `CHANGELOG.md`, docs, config) or a deleted one repeats the whole suite; an integration test that reaches a lib file only through the app is repeated only then.
 - Code reads the time only through `Busyyaks::Clock`; a test stubs it, and never sleeps or waits with a timeout itself (`test/support/wait.rb`, `test/unit/no_real_clock_test.rb`).
 - CI audits `main` daily; a red run opens the issue "Daily CI red on main".
-- **Breaking:** `.env` requires `TEST_WORKERS` (every `docker compose` command reads it); `scripts/ci/test.sh audit` requires `CI_GITHUB_CACHE_DIR`.
+- **Breaking:** `.env` requires `TEST_WORKERS` (every `docker compose` command reads it); `scripts/ci/test.sh audit` requires `CI_GITHUB_READ_TOKEN` and `CI_GITHUB_CACHE_DIR`.
 - **Breaking:** `scripts/ci/test.sh flake` (and so `all`) requires `CI_BASE_REF`; `ruby`, `ruby-pg`, `frontend` and `flake` require a Docker host with at least `CI_RUNNER_CPUS` (4) CPUs whose daemon applies `--cpus` (a rootless dockerd needs the cpu controller delegated); see `CONTRIBUTING.md` § Tests.
 - GitHub PR-state reads are conditional (an unchanged PR answers 304 and costs no rate limit); when the token's rate limit is used up, the CI-check and PR-state polling pauses until GitHub's reset, each waiting card says so, and `/github` shows each tick's calls, 304s, the limit left and the pause.
+- **Lead-first boards:** a board starts with its lead (the Launch button, never automatic) and only the lead starts its workers and sub team; busyyaks starts no session on its own and never relaunches a dead lead — the board says "no lead: press Launch" and an alert names the lead's end. Each session runs in its own systemd user scope. See `docs/DEPLOY.md` § Lead-first boards: upgrading a deployment.
+- A card's PRs are a list, any number per role and repo: `kanban_pr_assign` adds, `kanban_pr_unassign` (or the × on the card's PR row) removes with a reason, kept as a struck row; a PR of a repo its role does not take, or one already on another card, is refused at assign.
+- Approve on a PR that conflicts with its base records the approval and asks the owner to rebase, re-run CI and merge, instead of refusing.
+- Workflow editor: a top-to-bottom flowchart — a card per column with its type's icon, right-angle connectors with the transition name on the line.
+- Board header: one control height; the Workflow button shows a miniature of the workflow beside its label.
+- Attachments: one row of miniatures, newest first, each linked to its comment.
+- Project page: the tmux sessions as status lanes (needs you · working · quiet) with live agent status, and a compact launch bar.
+- Agents sidebar: compact rows — the name gets the width, the state is one word, card tags are never cut.
+- Today page: compact blocks, today's changes and pending work first.
+- Waiting widget: counters per kind (to answer, to review, external).
+- Card dialog: the actions that move a card stick to the bottom of the dialog.
+- Install and first start: `bin/setup` writes the secrets and lists what is left, `bin/setup check` validates `.env`, every service has a healthcheck; README Quickstart rewritten.
+- **Breaking:** the services' timing moved from `.env` to Settings → Runtime: remove `SCAN_INTERVAL_SECONDS`, `WRITER_SYNC_SECONDS`, `GITHUB_INTERVAL_SECONDS`, `GITHUB_CI_INTERVAL_SECONDS`, `NOTIFIER_INTERVAL_SECONDS`, `NOTIFIER_WATCH_SECONDS`, `WATCHDOG_GRACE_SECONDS` (`bin/setup check` refuses them; `bin/runtime-settings import-env < .env` carries their values over).
+- **Breaking:** required `config/busyyaks.yml` `launch.scopes` (`{lead_oomd: avoid | none, session_memory_max: <n>K|M|G | null}`, or `null` without a systemd user manager).
+- **Breaking:** required `config/busyyaks.yml` `skills` (`{max_bytes, max_start_bytes, project: allow | deny, local_dir}`); see `docs/DEPLOY.md` § Skills.
+- **Breaking:** required `config/busyyaks.yml` `github_hook` (`none`, or `{max_body_bytes, wake_seconds}`) and `.env` `GITHUB_WEBHOOK_SECRET` (empty with `none`, at least 32 characters when on).
+- **Breaking:** required `config/busyyaks.yml` `updates` (`{remote, branch, tags, channel: tags | branch, check_minutes}`); see `docs/DEPLOY.md` § Updates.
+- **Breaking:** required `config/kanban.yml` `progress_watch` (`{stale_minutes}`, or `null` = off).
+- **Breaking:** a new compose service `writer`: start it with the others (`docker compose up -d web mcp scanner github notifier writer`).
 
 ### Fixed
 
 - A handoff or approval right after GitHub's CI was read green no longer gets refused "CI not read yet" because its request had just aged out of the poll window: a read made within the last 3 poll intervals is used as it is.
+- Setup wizard: the projects dir step changes the dir — picked in a host dir browser, checked, then applied (the services restart on it).
+- Approve is never refused "not read yet" for a card waiting in a gate: its PR checks are kept read; `/github` names a gated card whose reads went stale.
+
+### Security
+
+- Picomatch 4.0.7 plus the ReDoS fix of an open upstream PR (GHSA-fc5q-39xc-vjpf; no release fixes it), vendored as `4.0.8-busyyaks.0`.
+- Puma 8.1.1 (bundle-audit advisories on 8.0.2).
 
 ## [1.0.0-beta.2] - 2026-11-15
 
@@ -123,6 +166,7 @@ First public release (SemVer pre-release: config keys, JSON API and MCP tools ma
 - Launcher socket private (umask); git `safe.directory` scoped to the mounted repos.
 - Credentials stripped from stored remote URLs; Markdown rendered with raw HTML dropped.
 
-[Unreleased]: https://github.com/robertziel/busyyaks/compare/v1.0.0-beta.2...main
+[Unreleased]: https://github.com/robertziel/busyyaks/compare/v1.0.0-beta.3...main
+[1.0.0-beta.3]: https://github.com/robertziel/busyyaks/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [1.0.0-beta.2]: https://github.com/robertziel/busyyaks/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [1.0.0-beta.1]: https://github.com/robertziel/busyyaks/releases/tag/v1.0.0-beta.1
