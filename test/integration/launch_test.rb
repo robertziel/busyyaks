@@ -179,9 +179,9 @@ mtime: Busyyaks::Clock.now.to_f, }],
     refute agent(api(:get, "/api/agents"), "elsewhere")["unread"], "first sighting = seen"
     store.agent_seen!("default/elsewhere", now: 50.0) # last seen before its turn ended (status_at 100)
     j = api(:get, "/api/agents")
-    assert_equal ["idle", true, 1, 2],
+    assert_equal ["idle", true, 1, 1],
                  [agent(j, "elsewhere")["state"], agent(j, "elsewhere")["unread"], j["totals"]["unread"], j["totals"]["you"]],
-                 "you = the blocked asker + the unread one"
+                 "you = the blocked asker only: unread does not need the operator"
     assert_equal({ "key" => "default/elsewhere", "seen" => true }, api(:post, "/api/agents/seen", { key: "default/elsewhere" }))
     refute agent(api(:get, "/api/agents"), "elsewhere")["unread"]
     api(:post, "/api/agents/seen", { key: "" })

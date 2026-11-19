@@ -2,7 +2,8 @@
 // (subagents · workflows · tasks) on every poll. herdr's states: blocked (needs input: the job is stopped on a
 // dialog / permission prompt — answered here —, a card question, the collector's waiting_for) · review (its card waits in
 // Human Check: a PR to review) · done (finished since you last opened it) · working · idle · unknown. The rows that wait
-// for you are highlighted whole. Filters All / Needs you / Working / Teams, remembered.
+// for you are highlighted whole. Filters Needs you (the default on every load: blocked or review — unread is not) / All /
+// Working / Teams.
 // "done" said nothing about the work — it is now `unread` (a dot: the turn ended since you last opened it;
 // opening the row marks it seen) and `finished` is a state the CARDS decide: every card it owns sits in a done column.
 // Each row lists its open cards by column label (`#3 In progress`), `+N done`, or `no cards`.
@@ -38,8 +39,8 @@ import * as store from "../lib/store";
 import type { AgentDialog, AgentSession, AgentsData, TeamData } from "../types";
 
 const FILTERS: [Filter, string][] = [
-  ["all", "All"],
   ["you", "Needs you"],
+  ["all", "All"],
   ["busy", "Working"],
   ["team", "Teams"],
 ];
@@ -47,10 +48,8 @@ export type AgentTotals = { busy: number; blocked: number; review: number; unrea
 
 export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void }) {
   const { data, error, loading } = useResource<AgentsData>("/api/agents", { every: 10_000 });
-  const [filter, setFilterState] = useState<Filter>(() => {
-    const f = store.get("busyyaks.agfilter");
-    return f === "you" || f === "busy" || f === "team" ? f : "all";
-  });
+  // every load opens on Needs you; a click switches for this page only
+  const [filter, setFilter] = useState<Filter>("you");
   const [hideFinished, setHideFinished] = useState(hideFinishedStored);
   const toggleHideFinished = () => {
     storeHideFinished(!hideFinished);
@@ -92,10 +91,6 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
     [data, onTotals],
   );
 
-  const setFilter = (f: Filter) => {
-    setFilterState(f);
-    store.set("busyyaks.agfilter", f);
-  };
   const toggle = (s: AgentSession) => (e: SyntheticEvent<HTMLDetailsElement>) => {
     const isOpen = e.currentTarget.open;
     if (isOpen && s.unread)
@@ -135,6 +130,7 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
   const t = data.totals;
   const norm = engineNorm(data.groups);
   const nFinished = finishedHideable(data.groups, open);
+  const nothingShown = data.groups.every((g) => !fold(g, filter, open, true, hideFinished).shown);
   return (
     <>
       <div className="ag-head">
@@ -319,6 +315,29 @@ export function Agents({ onTotals }: { onTotals: (t: AgentTotals | null) => void
           );
         })}
       </div>
+      {nothingShown && (
+        <p className="ag-empty muted">
+          {filter === "you" ? "Nothing needs you" : "No session matches"} · <b>{t.busy}</b> working
+          {filter !== "all" ? (
+            <>
+              {" · "}
+              <button type="button" className="ag-link" onClick={() => setFilter("all")}>
+                All {t.sessions}
+              </button>
+            </>
+          ) : (
+            hideFinished &&
+            nFinished > 0 && (
+              <>
+                {" · "}
+                <button type="button" className="ag-link" onClick={toggleHideFinished}>
+                  Show {nFinished} finished
+                </button>
+              </>
+            )
+          )}
+        </p>
+      )}
       <p className="ag-foot muted">agent_engines · snapshot {Math.round(data.age_s)}s</p>
     </>
   );
