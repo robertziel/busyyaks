@@ -14,7 +14,8 @@ class YaksTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
   FILES = ["bin/yaks", "cli/yaks.rb", *Dir.glob("cli/yaks/*.rb", base: ROOT),
            "lib/busyyaks/ci_settings.rb", "lib/busyyaks/clock.rb", "lib/busyyaks/env_file.rb",
-           "lib/busyyaks/dashboard_url.rb", "lib/busyyaks/deploy_template.rb", "lib/busyyaks/agent_collector.rb",].freeze
+           "lib/busyyaks/dashboard_url.rb", "lib/busyyaks/deploy_template.rb", "lib/busyyaks/agent_collector.rb",
+           "lib/busyyaks/updates.rb",].freeze
 
   def setup
     @root = File.realpath(Dir.mktmpdir("yaks"))

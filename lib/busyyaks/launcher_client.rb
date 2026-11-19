@@ -26,6 +26,8 @@ module Busyyaks
     # the projects dir (card 532): the launcher's answers as is — {ok, ...} or {ok: false, error, status}
     def browse(path:) = raw(op: "browse", path: path)
     def projects_root(step:, path: nil, plan_id: nil) = raw(op: "projects_root", step: step, path: path, plan_id: plan_id)
+    # updating this checkout (card 536): status | check | apply {mode, sha} — the launcher's answer as is
+    def update(step:, mode: nil, sha: nil) = raw(op: "update", step: step, mode: mode, sha: sha)
     def create(root:, name:, url:) = call(op: "create", root: root, name: name, url: url)
     def jobs = call(op: "jobs")["jobs"]
     def agents = call(op: "agents")

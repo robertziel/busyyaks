@@ -15,6 +15,8 @@ LAUNCH_CLAUDE = {
 TERMINAL_DENY = { "public_host" => "deny", "max_open" => 4 }.freeze
 # config/busyyaks.yml `ci` for a test Config (card #470): o/r's jenkins/ci gates, pending over 60 min = stuck
 SKILLS_SETTINGS = { "max_bytes" => 65_536, "max_start_bytes" => 32_768, "project" => "allow", "local_dir" => nil }.freeze
+UPDATES_SETTINGS = { "remote" => "origin", "branch" => "main", "tags" => "v*", "channel" => "tags",
+                     "check_minutes" => 60, }.freeze
 CI_SETTINGS = { "max_pending_minutes" => 60, "required" => { "o/r" => ["jenkins/ci"] } }.freeze
 
 # The agent settings the suite runs on (test/fixtures/agents.yml: two launchers) as the newest revision — written once

@@ -1,0 +1,176 @@
+/* Settings → Updates (routes/UpdateSettings.tsx, card 536) + the settings cog's update dot. Skin tokens only
+   (lib/updatesCss.test.ts): Light, Dark and any skin file hold. One column of cards; the targets table scrolls inside
+   its card, so a 390 px phone never scrolls sideways. */
+.up {
+  max-width: 860px;
+  min-width: 0;
+}
+.up > * {
+  min-width: 0;
+}
+.up-meta {
+  margin: -8px 0 14px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.up .card h2 {
+  margin: 0;
+}
+.up .flash {
+  align-items: baseline;
+}
+.up .flash .dot {
+  flex: none;
+}
+.up-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+}
+.up-facts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+.up-facts > div {
+  display: grid;
+  grid-template-columns: minmax(0, 7rem) minmax(0, 1fr);
+  gap: 12px;
+}
+.up-facts dt {
+  color: var(--ink-faint);
+}
+.up-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.up .mono {
+  font-family: var(--mono);
+}
+.up-scroll {
+  overflow-x: auto;
+}
+.up-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.up-table th,
+.up-table td {
+  padding: 8px 10px 8px 0;
+  text-align: left;
+  border-bottom: 0.5px solid var(--row-rule);
+  white-space: nowrap;
+}
+.up-table th {
+  color: var(--ink-dim);
+  font-weight: 500;
+}
+.up-act {
+  text-align: right;
+}
+.up-why {
+  display: block;
+  margin-top: 4px;
+  color: var(--warn);
+  font-size: 12px;
+  white-space: normal;
+}
+.up-state.available {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+.up-state.current {
+  color: var(--ok);
+  background: rgba(var(--ok-rgb), 0.12);
+}
+.up-state.diverged {
+  color: var(--bad);
+  background: rgba(var(--bad-rgb), 0.12);
+}
+/* a phone: each target is a block — label + state on one line, name, then its Update button the full width — so the
+   button is never behind a sideways scroll */
+@media (max-width: 640px) {
+  .up-table,
+  .up-table tbody {
+    display: block;
+  }
+  .up-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 10px;
+    padding: 10px 0;
+    border-bottom: 0.5px solid var(--row-rule);
+  }
+  .up-table th,
+  .up-table td {
+    padding: 0;
+    border-bottom: 0;
+    white-space: normal;
+  }
+  .up-act {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+}
+/* the steps of the running / last update: done · now · failed · to do */
+.up-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.up-steps li {
+  counter-increment: step;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--mat-fill-2);
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+.up-steps li::before {
+  content: counter(step) " ";
+  font-family: var(--mono);
+}
+.up-steps li.ok {
+  color: var(--ok);
+  background: rgba(var(--ok-rgb), 0.12);
+}
+.up-steps li.now {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+}
+.up-steps li.bad {
+  color: var(--bad);
+  background: rgba(var(--bad-rgb), 0.14);
+}
+.up-error {
+  overflow-wrap: anywhere;
+}
+
+/* the cog's dot: an update is available (lib/updates notice) */
+.top .settings-toggle {
+  position: relative;
+}
+.settings-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.settings-update {
+  margin-left: 8px;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+  font-weight: 500;
+}

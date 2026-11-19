@@ -220,6 +220,11 @@ class LauncherRulesTest < Minitest::Test
     assert_includes src, "Process.spawn(Busyyaks::LaunchTrust.clone_env(home, template), " \
                          "*Busyyaks::LaunchTrust.clone_argv(url, dir),"
     refute_includes src, "Open3.capture3(env, *git,"
+    # the one other git on the host it starts: `bin/yaks update` (card 536) — git on busyyaks's OWN checkout, every
+    # call with Updates::GIT_ENV and the preflight (updates_test); bin/yaks is spawned only as `update`
+    yaks = src.scan(/File\.join\(ROOT, "bin", "yaks"\), ("\w+")/).flatten
+    assert_equal ['"update"'], yaks.uniq
+    refute_match(/"bin\/yaks"/, src)
   end
 
   # launch.scopes: each session in its own systemd user scope — the lead with the oomd preference, every

@@ -10,6 +10,7 @@ class ConfigTest < Minitest::Test
          "author_emails" => ["Me@x.io"], "window_days" => 7, "reap_protect" => [], "auth" => { "provider" => "none" },
          "agents" => { "collector" => "none" }, "dictation" => "none",
          "terminal" => TERMINAL_DENY, "github_hook" => "none", "ci" => CI_SETTINGS, "skills" => SKILLS_SETTINGS,
+         "updates" => UPDATES_SETTINGS,
          "launch" => LAUNCH_CLAUDE, }.freeze
 
   def test_valid = assert_equal ["me@x.io"], Busyyaks::Config.new(OK).author_emails

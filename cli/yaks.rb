@@ -27,7 +27,7 @@ module Busyyaks
     SERVICES = %w[web mcp scanner github notifier writer].freeze
 
     # the commands that run the stack (Host.stack!: Linux only); desktop and help run on any Unix with a desktop
-    STACK_COMMANDS = %w[server panel env doctor].freeze
+    STACK_COMMANDS = %w[server panel env doctor update].freeze
 
     class Refused < StandardError; end
     class Usage < StandardError; end
@@ -72,6 +72,8 @@ module Busyyaks
       ["remote connect TARGET [--mcp]", "forward its dashboard (and MCP) to this machine over ssh, until ssh ends"],
       ["remote attach TARGET SESSION", "an agent's terminal on that server, here, over ssh"],
       ["remote --stdio", "server side of attach: ssh's stdin/stdout ↔ the launcher socket"],
+      ["update [--main]", "this checkout onto its newest release tag (--main: updates.branch's head), then the stack on it"],
+      ["update --check", "what is newer on config/busyyaks.yml updates.remote; changes nothing"],
       ["doctor", "every host tool the stack needs, per feature, and the first start's checks; exit 1 if one fails"],
       ["help", "this list"],
     ].freeze
@@ -104,6 +106,7 @@ module Busyyaks
       when "env" then env(ctx, args)
       when "ci" then ci(ctx, args)
       when "doctor" then Doctor.run(ctx, args)
+      when "update" then Update.run(ctx, args)
       when "help", "-h", "--help" then ctx.out.puts(usage) || 0
       when nil then raise Usage, "no command"
       else raise Usage, "unknown command #{cmd.inspect}"
@@ -196,3 +199,4 @@ require_relative "yaks/desktop"
 require_relative "yaks/remote"
 require_relative "yaks/chooser"
 require_relative "yaks/doctor"
+require_relative "yaks/update"

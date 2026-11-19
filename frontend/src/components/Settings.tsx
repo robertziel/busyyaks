@@ -1,11 +1,13 @@
 // The settings cog at the right end of the header: a menu with the signed-in account, Agents & launchers (/settings),
 // Daily report (/settings/daily-report), Runtime (/settings/runtime), Shortcuts (/settings/shortcuts),
+// Updates (/settings/updates; card 536: a dot on the cog + the link's tag while an update is available),
 // the hello screen (/hello),
 // the skin and Sign out.
 // Closes on Escape (focus back on the cog), an outside pointer, focus moving out of it (Tab) or a route change.
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { csrfToken, signOutPath, userEmail } from "../api";
+import { csrfToken, signOutPath, useResource, userEmail } from "../api";
+import { notice, type UpdateStatus } from "../lib/updates";
 import { SkinSwitch } from "./Skin";
 
 export function Settings() {
@@ -15,6 +17,11 @@ export function Settings() {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const btn = useRef<HTMLButtonElement>(null);
+  // the launcher answers from its last check (and re-checks on its own past updates.check_minutes); a failed read →
+  // no notice, Settings → Updates says why
+  const updates = useResource<UpdateStatus>("/api/settings/update", {
+    every: 600_000,
+  });
 
   useEffect(() => setOpen(false), [location.pathname]);
 
@@ -45,6 +52,7 @@ export function Settings() {
       email={email}
       signOut={signOut}
       csrf={signOut ? csrfToken() : ""}
+      update={notice(updates.data)}
       wrap={wrap}
       btn={btn}
     />
@@ -57,11 +65,12 @@ type ViewProps = {
   email: string;
   signOut: string | null; // null: the auth provider has no session to end → no Sign out
   csrf: string;
+  update?: string | null; // lib/updates notice: "v1.2.0 available" / "main +3", null = nothing newer known
   wrap?: RefObject<HTMLDivElement>;
   btn?: RefObject<HTMLButtonElement>;
 };
 
-export function SettingsView({ open, onToggle, email, signOut, csrf, wrap, btn }: ViewProps) {
+export function SettingsView({ open, onToggle, email, signOut, csrf, update = null, wrap, btn }: ViewProps) {
   const id = useId();
   return (
     <div className="settings" ref={wrap}>
@@ -69,8 +78,8 @@ export function SettingsView({ open, onToggle, email, signOut, csrf, wrap, btn }
         ref={btn}
         type="button"
         className="btn small settings-toggle"
-        aria-label="Settings"
-        title="Settings"
+        aria-label={update ? `Settings · ${update}` : "Settings"}
+        title={update ? `Settings · ${update}` : "Settings"}
         aria-haspopup="true"
         aria-expanded={open}
         aria-controls={`${id}-menu`}
@@ -82,6 +91,7 @@ export function SettingsView({ open, onToggle, email, signOut, csrf, wrap, btn }
             d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.3.6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.05.24.25.42.5.42h3.84c.25 0 .45-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.22.08.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"
           />
         </svg>
+        {update && <i className="settings-dot" aria-hidden="true" />}
       </button>
       <div className="settings-menu" id={`${id}-menu`} role="group" aria-label="Settings" hidden={!open}>
         {email && <div className="settings-who">{email}</div>}
@@ -96,6 +106,10 @@ export function SettingsView({ open, onToggle, email, signOut, csrf, wrap, btn }
         </Link>
         <Link className="settings-link" to="/settings/shortcuts">
           Shortcuts
+        </Link>
+        <Link className="settings-link" to="/settings/updates">
+          Updates
+          {update && <span className="tag settings-update">{update}</span>}
         </Link>
         <Link className="settings-link" to="/hello">
           Setup

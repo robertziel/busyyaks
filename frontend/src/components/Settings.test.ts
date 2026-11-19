@@ -65,4 +65,14 @@ describe("SettingsView", () => {
     expect(html).not.toContain("<form");
     expect(html).not.toContain("Sign out");
   });
+
+  it("an update notice: a dot on the cog, the label says it, the Updates link carries it (card 536)", () => {
+    const none = render({ open: true });
+    expect(none).not.toContain("settings-dot");
+    expect(none).toMatch(/<a class="settings-link" href="\/settings\/updates"[^>]*>Updates<\/a>/);
+    const html = render({ open: true, update: "v1.2.0 available" });
+    expect(html).toContain('<i class="settings-dot" aria-hidden="true"></i>');
+    expect(html).toMatch(/aria-label="Settings · v1.2.0 available"/);
+    expect(html).toContain('Updates<span class="tag settings-update">v1.2.0 available</span>');
+  });
 });

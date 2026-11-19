@@ -637,9 +637,48 @@ the reason (`projects.git_error`) and names the repo in the scan's error on the 
 
 **Remaining risk.** The containment checks run before libgit2 opens the repo and again after it; a process on the
 host that can write under `PROJECTS_ROOT` can still swap a symlink between them. What it reaches then is what the
-child can read with no secrets in its environment, inside its limits. The host side still runs the git CLI in two
-places: the launcher's `create` (`git init` / `git clone` of a URL the operator gives) and the daily report's runner
-(its own git tool).
+child can read with no secrets in its environment, inside its limits. The host side still runs the git CLI in three
+places: the launcher's `create` (`git init` / `git clone` of a URL the operator gives), the daily report's runner
+(its own git tool) and `yaks update` (busyyaks's own checkout only, with `Updates::GIT_ENV` and a per-call timeout;
+§ Updates).
+
+## Updates (`yaks update`, Settings → Updates; card 536)
+
+**One new required key** in the gitignored `config/busyyaks.yml` — every service refuses to boot without it (`Config`:
+"missing keys: updates"), the launcher's `update` op answers 422 naming it:
+
+```yaml
+updates: { remote: origin, branch: main, tags: "v*", channel: tags, check_minutes: 360 }
+```
+
+`remote` = a git remote of THIS checkout, `branch` = what `yaks update --main` follows, `tags` = the release glob (one
+`*`, the rest a version), `channel` = `tags` (a release install) or `branch` (a box that runs the branch), what the
+dashboard's notice counts. Add it before deploying the change that introduces it.
+
+- The check and the update are the host's: `bin/launcher` op `update` (`status` · `check` · `apply`) reads
+  `config/busyyaks.yml` on every call and writes `LAUNCHER_STATE_DIR/update-check.json`; `apply` starts `bin/yaks update
+  --expect <sha>` detached (log `LAUNCHER_STATE_DIR/update-<UTC>.log`), which records each step in `update.json` and
+  holds `update.lock` for its life. No container runs this git; the host's `bin/yaks update` does, on this checkout only.
+- **Git hardening**: every update git call runs with `Updates::GIT_ENV` — command-scope config (no fsmonitor, hooks
+  `/dev/null`, no `ext::` transport, plain `ssh`, no credential helper / askpass / pager, no submodule recursion, no signature check or gpg program), the
+  system and global config not read (a private remote goes over ssh). The check first reads the checkout's own
+  `.git/config` (`git config --local --no-includes --list`, which runs nothing) and refuses, naming it, any key `-c`
+  cannot reset: `filter.*`, `url.*`, `include.*`, `includeIf.*`, `credential.<url>.helper`,
+  `remote.<r>.uploadpack/receivepack/vcs/proxy`, `http[.<url>].proxy`, `core.gitProxy`, `core.worktree`, `gpg.*` — remove it
+  (`git config --unset …`) and check again. The page shows the URL git fetches from (`git ls-remote --get-url`).
+- Refused, nothing changed: tracked files changed, a commit the target lacks (`diverged` / `ahead`), the checkout on a
+  branch other than `updates.branch`, the target moved since the page showed it, a local tag that differs from the
+  remote's (git's own "would clobber existing tag"), another update running.
+- **Trust boundary**: an update runs the remote's code on this host — `docker build` of its Dockerfile, its
+  `deploy/install-launcher.sh`, then the services. Whoever can push to `updates.remote` (its branch, or a `v*` tag on
+  the tags channel) can run code here once the operator presses Update (or runs `yaks update`). Point it only at a
+  remote whose push access you trust; the page shows the exact commit before you press, and the launcher refuses a
+  target that moved since.
+- A record left `running` / `starting` with no update alive (the lock free: killed, host restarted) is shown as
+  `interrupted` with its step and log, and holds nothing back.
+- After a failure past `up`: `git checkout <from>` (the record's), restore the backup it names (§ The database), then
+  `docker build -t busyyaks:local .`, `docker compose up -d --wait --no-build web mcp scanner github notifier`,
+  `deploy/install-launcher.sh`. A migration whose `down` refuses: restore the backup instead (§ The database).
 
 ## Rollback
 

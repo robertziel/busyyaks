@@ -103,6 +103,15 @@ ci:
   max_pending_minutes: 60
   required:
     your-user/your-repo: [jenkins/ci]
+# updates:       where this checkout's updates come from (card 536: `yaks update`, Settings → Updates). An update is a
+#                fast-forward of a clean tracked tree only — local commits or changed tracked files refuse it.
+#                  remote: the git remote of this checkout (`git remote -v`)
+#                  branch: the branch on it `yaks update --main` follows
+#                  tags: the release tags' glob, exactly one * — what the * matches must be a version (v1.2.0, v1.0.0-beta.2)
+#                  channel: tags | branch — which one the dashboard's "update available" counts (a release install:
+#                    tags; a box that runs the branch: branch). `yaks update` takes the tag, `--main` the branch
+#                  check_minutes: 1..10080 — how old the last check may be before the dashboard asks the remote again
+updates: { remote: origin, branch: main, tags: "v*", channel: tags, check_minutes: 360 }
 # launch:        which repos bin/launcher answers Claude Code's folder-trust prompt for ("Yes, I trust this folder"),
 #                which lets the repo's own .claude settings, hooks and .mcp.json run. Never decided from the repo
 #                itself (its origin or config: whoever wrote the repo wrote those). Trusted are only:
