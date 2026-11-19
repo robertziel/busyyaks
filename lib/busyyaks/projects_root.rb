@@ -24,7 +24,7 @@ module Busyyaks
     class Invalid < StandardError; end
 
     # the services that mount PROJECTS_ROOT and are recreated by an apply (= CLI::SERVICES, test/unit/projects_root_test.rb)
-    SERVICES = %w[web mcp scanner github notifier].freeze
+    SERVICES = %w[web mcp scanner github notifier writer].freeze
     MAX_ENTRIES = 1000
     STATE_FILE = "projects-root.json"
 

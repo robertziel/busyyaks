@@ -12,8 +12,9 @@ class RuntimeSettingsTest < Minitest::Test
   S = Busyyaks::RuntimeSettings
   API = Busyyaks::RuntimeSettingsAPI
   ROOT = File.expand_path("../..", __dir__)
-  DOC = { "scan_interval_seconds" => 60, "github_interval_seconds" => 3600, "github_ci_interval_seconds" => 60,
-          "notifier_interval_seconds" => 5, "notifier_watch_seconds" => 30, "watchdog_grace_seconds" => 60, }.freeze
+  DOC = { "scan_interval_seconds" => 60, "writer_sync_seconds" => 30, "github_interval_seconds" => 3600,
+          "github_ci_interval_seconds" => 60, "notifier_interval_seconds" => 5, "notifier_watch_seconds" => 30,
+          "watchdog_grace_seconds" => 60, }.freeze
 
   def db = Hanami.app["db.gateway"].connection
   def save(d, base: S.current_id(db)) = API.save({ "base" => base, "doc" => d }, by: "op", db: db)
@@ -47,21 +48,21 @@ class RuntimeSettingsTest < Minitest::Test
     assert_equal 300, Busyyaks::Kanban.ci_window(db)
   end
 
-  # what a service loop does each turn (bin/scan, bin/github, bin/notifier): ask get again — the memo is
+  # what a service loop does each turn (bin/scan, bin/writer, bin/github, bin/notifier): ask get again — the memo is
   # per revision, so a save between two turns is the next turn's value
   def test_get_answers_the_newest_revision_from_one_turn_to_the_next
     assert_equal 60, S.get(db)[:scan_interval_seconds]
     assert_same S.get(db), S.get(db), "one parse per revision"
     assert_equal 200, save(DOC.merge("scan_interval_seconds" => 45)).first
     assert_equal 45, S.get(db)[:scan_interval_seconds]
-    %w[bin/scan bin/github bin/notifier].each do |f|
+    %w[bin/scan bin/writer bin/github bin/notifier].each do |f|
       src = File.read(File.join(ROOT, f))
       loop_body = src[/^\s*loop do\n.*\z/m]
       assert_match(/RuntimeSettings\.get\(/, loop_body, "#{f} asks the settings inside its loop")
     end
   end
 
-  # the six names are read only through RuntimeSettings — no compose env, no reader in the code. Allowed:
+  # the seven names are read only through RuntimeSettings — no compose env, no reader in the code. Allowed:
   # runtime_settings.rb (KEYS: the import), bin/setup (refuses leftovers), bin/runtime-settings (its usage), old
   # migrations (history), docs and tests.
   def test_the_moved_env_names_are_read_nowhere_else
@@ -144,7 +145,8 @@ class RuntimeSettingsTest < Minitest::Test
       # a comment
       TZ=UTC
       SCAN_INTERVAL_SECONDS=90
-      export GITHUB_INTERVAL_SECONDS="3600"
+      WRITER_SYNC_SECONDS="30"
+      export GITHUB_INTERVAL_SECONDS=3600
       GITHUB_CI_INTERVAL_SECONDS=60
       NOTIFIER_INTERVAL_SECONDS=5
       NOTIFIER_WATCH_SECONDS=30
@@ -152,7 +154,7 @@ class RuntimeSettingsTest < Minitest::Test
     ENV
     assert_equal DOC.merge("scan_interval_seconds" => 90), S.from_env_lines(text)
     e = assert_raises(S::Refused) { S.from_env_lines("SCAN_INTERVAL_SECONDS=60\n") }
-    assert_match(/\Athe \.env lines lack GITHUB_INTERVAL_SECONDS, GITHUB_CI_INTERVAL_SECONDS, /, e.message)
+    assert_match(/\Athe \.env lines lack WRITER_SYNC_SECONDS, GITHUB_INTERVAL_SECONDS, /, e.message)
     assert_equal "x", S.from_env_lines(text.sub("=90", "=x"))["scan_interval_seconds"], "the save names it, not the parser"
   end
 

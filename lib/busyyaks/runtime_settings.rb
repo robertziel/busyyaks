@@ -6,8 +6,8 @@ require "monitor"
 require_relative "clock"
 
 module Busyyaks
-  # The services' timing: how often the scanner scans, the github service collects and polls PRs, the notifier
-  # delivers and watches, and the watchdog's grace — once .env keys, now revisions in the
+  # The services' timing: how often the scanner scans, the writer syncs, the github service collects and polls PRs,
+  # the notifier delivers and watches, and the watchdog's grace — once .env keys, now revisions in the
   # DATABASE (table runtime_settings: the newest row is the current one, every earlier one stays as history), edited
   # on Settings → Runtime or with bin/runtime-settings. The migration seeds revision 1 from config/runtime.template.yml
   # (the values .env.example shipped); a deployment that ran other values imports its old .env lines
@@ -22,6 +22,7 @@ module Busyyaks
     # key => [the .env key it replaces, what it times]
     KEYS = {
       "scan_interval_seconds" => ["SCAN_INTERVAL_SECONDS", "scanner: seconds between repo scans"],
+      "writer_sync_seconds" => ["WRITER_SYNC_SECONDS", "writer: seconds between workflow.yml syncs"],
       "github_interval_seconds" => ["GITHUB_INTERVAL_SECONDS", "github: seconds between network collections"],
       "github_ci_interval_seconds" => ["GITHUB_CI_INTERVAL_SECONDS", "github: seconds between PR / CI polls"],
       "notifier_interval_seconds" => ["NOTIFIER_INTERVAL_SECONDS", "notifier: seconds between ping deliveries"],

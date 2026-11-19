@@ -37,7 +37,7 @@ module DBReset
     %i[daily_report_settings agent_sessions session_dialogs card_attachments card_pings checklist_items checklists
        board_labels card_activity cards projects commits reports notes scans daily gh_users gh_follows gh_repos gh_stars
        gh_pages gh_runs gh_events gh_pr_checks gh_pr_states ci_watches gh_merged_prs gh_pr_runs
-       setup_completions gh_pollers].each { |t| db[t].delete }
+       setup_completions gh_pollers workflow_files].each { |t| db[t].delete }
     # the projects' boards go; the TEMPLATE board (project_slug "", seeded by the migration) stays — every project is
     # instantiated from it
     %i[board_transitions board_columns boards].each { |t| db[t].exclude(project_slug: "").delete }

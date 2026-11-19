@@ -105,6 +105,18 @@
 .flash span {
   overflow-wrap: anywhere;
 }
+/* the board's workflow-file line (card #429): long text wraps beside the dot, never onto a row of its own */
+.flash.workflow-file {
+  flex-wrap: nowrap;
+  align-items: baseline;
+}
+.flash.workflow-file span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.flash.workflow-file .dot {
+  flex: none;
+}
 .tag.bad {
   color: var(--bad);
   background: rgba(var(--bad-rgb), 0.12);

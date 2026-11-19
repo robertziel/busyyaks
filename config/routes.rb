@@ -30,7 +30,9 @@ module Busyyaks
     get "/api/projects/*slug/board", to: "api.board.show"      # kanban JSON API (docs/API-kanban.md)
     post "/api/projects/*slug/board", to: "api.board.create"
     post "/api/projects/*slug/labels", to: "api.labels.create"
-    # the project's workflow (DB), the operator edits it
+    # the project's workflow: <repo>/.busyyaks/workflow.yml, applied to the engine's boards tables by the writer
+    # service; the editor's Save / Reset go through the writer (card #429)
+    get "/api/projects/*slug/workflow-file", to: "api.workflow_file.show"
     get "/api/projects/*slug/workflow", to: "api.workflow.show"
     post "/api/projects/*slug/workflow", to: "api.workflow.save"
     delete "/api/projects/*slug/workflow", to: "api.workflow.reset"

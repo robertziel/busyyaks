@@ -9,3 +9,6 @@
 /docker-compose.override.yml
 /deploy/rendered/
 /config/kanban.yml
+# this repo's own workflow (<repo>/.busyyaks/workflow.yml, written by the writer service; card #429) — only the file:
+# .busyyaks/skills is committed (card #477)
+/.busyyaks/workflow.yml

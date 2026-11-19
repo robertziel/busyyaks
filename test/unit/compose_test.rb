@@ -20,7 +20,7 @@ class ComposeTest < Minitest::Test
   def test_the_test_service_never_tags_the_live_image
     services = COMPOSE.fetch("services")
     test = services.fetch("test")
-    live = services.values_at("web", "mcp", "scanner", "github", "notifier").compact.map { |s| s["image"] }.uniq
+    live = services.values_at("web", "mcp", "scanner", "github", "notifier", "writer").compact.map { |s| s["image"] }.uniq
     assert_equal ["busyyaks:local"], live, "the live services share one image"
     assert_equal "busyyaks:test", test["image"]
     refute_includes live, test["image"], "the test service must not tag the live image"
@@ -30,7 +30,7 @@ class ComposeTest < Minitest::Test
   # The live services run as the host user (.env HOST_UID/HOST_GID), never root: ./data stays the operator's, and the
   # launcher's 0600 socket is reachable from the containers that mount it.
   def test_live_services_run_as_the_host_user
-    services = COMPOSE.fetch("services").values_at("web", "mcp", "scanner", "github", "notifier")
+    services = COMPOSE.fetch("services").values_at("web", "mcp", "scanner", "github", "notifier", "writer")
     assert_equal ["${HOST_UID:?}:${HOST_GID:?}"], services.map { |s| s["user"] }.uniq
     example = File.read(File.expand_path("../../.env.example", __dir__))
     assert_match(/^HOST_UID=\d+$/, example)
@@ -51,6 +51,24 @@ class ComposeTest < Minitest::Test
             "GIT_CONFIG_VALUE_0" => "${PROJECTS_MOUNT:?}/*", }
     assert_equal(git, env.slice("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"))
     refute_match(/git config .*safe\.directory/, File.read(File.expand_path("../../Dockerfile", __dir__)))
+  end
+
+  # card #429: the writer is the ONE service that mounts the projects read-write (it writes <repo>/.busyyaks/workflow.yml
+  # and nothing else); every other one gets x-app's read-only mount. It asks no launcher.
+  def test_only_the_writer_mounts_the_projects_read_write
+    rw = "${PROJECTS_ROOT:?}:${PROJECTS_MOUNT:?}"
+    live = COMPOSE.fetch("services").reject { |_, s| s.key?("profiles") }
+    writers = live.select { |_, s| Array(s["volumes"] || COMPOSE.dig("x-app", "volumes")).include?(rw) }.keys
+    assert_equal ["writer"], writers
+    w = live.fetch("writer")
+    assert_equal ["bin/writer"], w.fetch("command")
+    refute w.fetch("environment").key?("LAUNCHER_SOCKET")
+    refute_includes w.fetch("volumes"), "${PROJECTS_ROOT:?}:${PROJECTS_MOUNT:?}:ro"
+    assert_equal "service_healthy", w.dig("depends_on", "web", "condition")   # web migrates first: workflow_files exists
+    env = COMPOSE.dig("x-app", "environment")
+    assert_equal "/data/run/writer.sock", env.fetch("WRITER_SOCKET")
+    # the sync period is Settings → Runtime: no service gets it from the env
+    refute env.key?("WRITER_SYNC_SECONDS")
   end
 
   # the MCP port's host address is .env MCP_HOST, the same value the host scripts call it on
@@ -114,7 +132,7 @@ class ComposeTest < Minitest::Test
 
   # every git in the containers never fetches on demand (defence in depth: busyyaks runs no git CLI on scanned repos)
   def test_container_git_never_lazy_fetches
-    %w[web mcp scanner notifier github].each do |name|
+    %w[web mcp scanner notifier github writer].each do |name|
       env = COMPOSE.dig("services", name, "environment")
       assert_equal "1", env["GIT_NO_LAZY_FETCH"], name
       n = Integer(env.fetch("GIT_CONFIG_COUNT"))

@@ -1,0 +1,42 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The writer service (card #429): the only container with the projects mounted read-write, and what it writes is each
+# project's `<repo>/.busyyaks/workflow.yml` (lib/busyyaks/workflow_files.rb) — nothing else. Every
+# writer_sync_seconds (Settings → Runtime, read each turn; card #523) it syncs every project's file with its board; on
+# WRITER_SOCKET it answers the workflow editor's Save / Reset (the web, lib/busyyaks/writer_client.rb): one JSON line
+# in, one out ({status, body}).
+require "hanami/prepare"
+require "fileutils"
+require "busyyaks/clock"
+require "busyyaks/kanban"
+require "busyyaks/private_socket"
+require "busyyaks/workflow_files"
+require "busyyaks/runtime_settings"
+
+sock_path = ENV.fetch("WRITER_SOCKET")
+$stdout.sync = true
+db = Busyyaks::Kanban.db
+writer = Busyyaks::WorkflowFiles::Writer.new(db: db, store: -> { Busyyaks::Kanban.store(db) },
+                                             api: ->(st) { Busyyaks::Kanban.api(st) },
+                                             log: ->(line) { puts "writer: #{line}" })
+
+FileUtils.mkdir_p(File.dirname(sock_path), mode: 0o700)
+File.unlink(sock_path) if File.socket?(sock_path)
+server = Busyyaks::PrivateSocket.bind(sock_path)
+puts "writer up: sync every #{Busyyaks::RuntimeSettings.get(db)[:writer_sync_seconds]}s, socket #{sock_path}"
+
+Busyyaks::WorkflowFiles::Server.new(writer, server).start
+
+loop do
+  begin
+    done = writer.sync_all
+    counts = done.values.map { |v| v.start_with?("refused") ? "refused" : v }.tally
+    puts "writer: sync #{counts.map { |k, v| "#{k}=#{v}" }.join(' ')}" unless counts.empty? || counts.keys == ["unchanged"]
+  rescue StandardError => e
+    puts "writer: sync FAILED #{e.class}: #{e.message}"
+  end
+  break if ENV["WRITER_ONCE"] == "1"
+
+  Busyyaks::Clock.pause(Busyyaks::RuntimeSettings.get(db)[:writer_sync_seconds])
+end

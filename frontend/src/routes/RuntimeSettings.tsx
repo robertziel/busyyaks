@@ -1,4 +1,4 @@
-// /settings/runtime — Runtime: the services' timing (scan, GitHub collection and PR polls, the
+// /settings/runtime — Runtime: the services' timing (scan, writer sync, GitHub collection and PR polls, the
 // notifier's loops, the watchdog's grace), saved as a new revision of the database's runtime settings; every service
 // reads it at its next turn. The page: the watch period against the CI poll window as a meter, the keys grouped by
 // service (seconds + the duration in words + the .env name each replaced), Save / Discard with the reason Save is off,

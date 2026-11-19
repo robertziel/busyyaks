@@ -107,7 +107,7 @@ class SetupTest < Minitest::Test
     assert_equal 0o700, File.stat(v["LAUNCHER_RUN_DIR"]).mode & 0o777
     assert File.directory?(File.join(@dir, "data"))
     assert_equal "compose config -q\n", File.read(File.join(@tmp, "docker.log"))
-    assert_includes out, "Next: docker compose up -d --build --wait web mcp scanner github notifier"
+    assert_includes out, "Next: docker compose up -d --build --wait web mcp scanner github notifier writer"
   end
 
   def test_check_refuses_what_compose_or_the_launcher_would_trip_on
@@ -156,7 +156,7 @@ class SetupTest < Minitest::Test
   # the services' timing is Settings → Runtime; a .env line left over would look like it still sets it
   def test_the_moved_runtime_keys_are_the_apps_and_a_leftover_is_refused
     ruby = File.read(File.join(ROOT, "lib/busyyaks/runtime_settings.rb")).scan(/^\s*"[a-z_]+" => \["([A-Z_]+)", /).flatten
-    assert_equal 6, ruby.size
+    assert_equal 7, ruby.size
     assert_equal ruby, File.read(File.join(ROOT, "bin/setup"))[/^RUNTIME_MOVED="([A-Z_ ]+)"$/, 1].split
     ruby.each { |k| refute_match(/^#{k}=/, File.read(File.join(ROOT, ".env.example")), k) }
     setup!

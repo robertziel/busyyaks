@@ -78,6 +78,7 @@ module Busyyaks
       when "head" then head
       when "churn" then churn(list(req, "shas", 500))
       when "files_at" then files_at(list(req, "refs", MAX_REFS), list(req, "files", MAX_FILES))
+      when "ignored" then ignored(req.fetch("file"))
       else raise Refused, "unknown op #{req['op'].inspect}"
       end
     end
@@ -409,6 +410,14 @@ end }
         out[f] = hit.first if hit
       end
       { found: found }
+    end
+
+    # Does git ignore this work-tree path (.gitignore, .git/info/exclude, core.excludesFile) and is it in the index?
+    # (the writer keeps .busyyaks/workflow.yml out of git: card #429)
+    def ignored(file)
+      raise Refused, "#{file.inspect} is not a relative path in the repo" unless plain_path?(file)
+
+      { ignored: repo.path_ignored?(file), tracked: !repo.index[file].nil? }
     end
 
     def tree_of(ref)

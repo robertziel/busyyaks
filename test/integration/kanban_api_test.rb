@@ -6,6 +6,7 @@ require "tmpdir"
 require "fileutils"
 require "busyyaks/kanban"
 require "socket"
+require_relative "../support/writer_server"
 
 class KanbanApiTest < Minitest::Test
   include DBReset
@@ -17,7 +18,9 @@ class KanbanApiTest < Minitest::Test
 
   def setup
     super
-    @dir = Dir.mktmpdir
+    @dir = File.realpath(Dir.mktmpdir)
+    WriterServer.git_init(@dir)
+    @writer = WriterServer.start(root: File.dirname(@dir)) # the workflow editor saves through it (card #429)
     store.upsert_project(slug: "g/r", path: @dir, remote: "https://github.com/o/r.git", branch: "main", own: true,
                          last_commit_at: 1,
                          commits_window: 0, mine_window: 0, dirty: 0, unpushed: nil, scanned_at: 1)
@@ -27,6 +30,7 @@ class KanbanApiTest < Minitest::Test
   end
 
   def teardown
+    WriterServer.stop(@writer)
     FileUtils.rm_rf(@dir)
     super
   end
@@ -462,10 +466,41 @@ ans.values_at("body", "author")
 
     assert_equal shape["columns"], b["board"]["columns"]
 
+    # the file holds what the editor saved (card #429)
+    file = YAML.safe_load_file(File.join(@dir, ".busyyaks/workflow.yml"))
+    assert_equal shape.slice("columns", "transitions"), file
+
     j = api(:delete, "/api/projects/g/r/workflow")
     assert_equal [200, tpl["transitions"], "owner@example.com"], [last_response.status, j["transitions"], j["updated_by"]]
+    assert_equal tpl["transitions"], YAML.safe_load_file(File.join(@dir, ".busyyaks/workflow.yml"))["transitions"]
     assert_equal 404, (api(:get, "/api/projects/nope/workflow") && last_response.status)
+    assert_equal 404, (api(:post, "/api/projects/nope/workflow", shape) && last_response.status)
   end
+  # card #429: the board's workflow-file line, and a down writer refuses the editor's save (503) — nothing saved
+  def test_workflow_file_state_and_a_down_writer
+    j = api(:get, "/api/projects/g/r/workflow-file")
+    assert_equal [200, ".busyyaks/workflow.yml", true], [last_response.status, j["file"], j["stale"]]
+    assert_equal 404, (api(:get, "/api/projects/nope/workflow-file") && last_response.status)
+    shape = api(:get, "/api/projects/g/r/workflow").slice("columns", "transitions")
+    api(:post, "/api/projects/g/r/workflow", shape)
+    j = api(:get, "/api/projects/g/r/workflow-file")
+    assert_equal [nil, false], j.values_at("error", "stale")
+    WriterServer.stop(@writer)
+    @writer = nil
+    j = api(:post, "/api/projects/g/r/workflow", shape)
+    assert_equal 503, last_response.status
+    assert_match(/writer not reachable/, j["error"])
+    assert_equal 503, (api(:delete, "/api/projects/g/r/workflow") && last_response.status)
+    late = ->(*, **) { raise Busyyaks::WriterClient::NoAnswer, "the writer did not answer within 30 s" }
+    Busyyaks::WriterClient.stub(:workflow_save, late) do
+      assert_match(/did not answer/, api(:post, "/api/projects/g/r/workflow", shape)["error"])
+      assert_equal 504, last_response.status
+    end
+    Busyyaks::WriterClient.stub(:workflow_reset, late) do
+      assert_equal 504, (api(:delete, "/api/projects/g/r/workflow") && last_response.status)
+    end
+  end
+
   # the github service's answer for a card's PR: checks green, read just now (the approval gate reads it)
   def green_pr!(id)
     db = Hanami.app["db.gateway"].connection

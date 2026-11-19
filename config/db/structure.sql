@@ -485,6 +485,15 @@ CREATE TABLE `gh_pollers`(
   `paused_until` integer,
   `error` text
 );
+CREATE TABLE `workflow_files`(
+  `project_slug` varchar(255) NOT NULL PRIMARY KEY,
+  `path` text NOT NULL,
+  `applied_sha` varchar(255),
+  `applied_at` integer,
+  `error` text,
+  `error_at` integer,
+  `checked_at` integer NOT NULL
+);
 CREATE TABLE `runtime_settings`(
   `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
   `doc` text NOT NULL,
@@ -535,6 +544,8 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261208468000_pr_base_merge_flags.rb'),
 ('20261208472000_gh_hook_dirty.rb'),
 ('20261208497000_pr_checks_base_sha.rb'),
+('20261209429000_workflow_files.rb'),
 ('20261209492000_progress_watch.rb'),
 ('20261210469000_agents_kanban_pr_lists.rb'),
-('20261217523000_runtime_settings.rb');
+('20261217523000_runtime_settings.rb'),
+('20261219429000_runtime_writer_sync.rb');

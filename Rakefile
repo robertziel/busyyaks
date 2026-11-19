@@ -41,7 +41,8 @@ namespace :test do
       boot: ->(i) { "require #{coverage_rb.dump}; TestCoverage.worker(#{coverage.dump}, #{i})" },
       env_for: lambda { |i|
         dbs.env(i).merge("ATTACHMENTS_DIR" => File.join(dir, "attachments-#{i}"),
-                         "LAUNCHER_SOCKET" => File.join(dir, "launcher-#{i}.sock"))
+                         "LAUNCHER_SOCKET" => File.join(dir, "launcher-#{i}.sock"),
+                         "WRITER_SOCKET" => File.join(dir, "writer-#{i}.sock"))
       }
     )
     ok = ParallelRunner.verdict(results, out: $stdout)
@@ -80,7 +81,8 @@ namespace :test do
       files: runs, libs: ["test"], max: workers,
       env_for: lambda { |i|
         dbs.env(i).merge("ATTACHMENTS_DIR" => File.join(dir, "attachments-#{i}"),
-                         "LAUNCHER_SOCKET" => File.join(dir, "launcher-#{i}.sock"))
+                         "LAUNCHER_SOCKET" => File.join(dir, "launcher-#{i}.sock"),
+                         "WRITER_SOCKET" => File.join(dir, "writer-#{i}.sock"))
       }
     )
     # a run that did not run, or ran out of a host resource (a task / memory limit), says nothing about the test: it is

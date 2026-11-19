@@ -40,7 +40,7 @@ is another Host, refused.
 ## 1. Localhost (default)
 
 ```bash
-docker compose up -d --build web mcp scanner github notifier
+docker compose up -d --build web mcp scanner github notifier writer
 ```
 
 Then open `http://127.0.0.1:<WEB_HOST_PORT>` in a browser.
@@ -155,6 +155,7 @@ rm -rf data/run                                   # the old socket dir: nothing 
 | daily runner's git | the runner's `git -C <repo> …` runs on the host, driven by a model that reads untrusted text, with SafeGit's environment only (pager `cat`, `diff.external` blanked). A repo-config `diff.<x>.textconv` (`log -p`), `diff.<x>.command` (`--ext-diff`) or `filter.<x>` (`status`) still runs there as the operator. Open |
 | git on untrusted repos | busyyaks runs the git CLI on repos it does not control in: the scanner container, **mcp** (the full scan through `scan_now` — the operator's own `MCP_TOKEN` only — and, under the daily report's token too, the daily facts' churn and the report rendering's card links in `check_report` / `post_report`) and **web** (the kanban engine's card links: plain git, without SafeGit's flags), and on the host in the launcher. SafeGit's flags are defence in depth only. A program a repo's own `.git/config` names in a way the flags miss (known: a filter name holding `=`. A promisor lazy fetch is turned off by `GIT_NO_LAZY_FETCH=1` plus `protocol.allow=never` and `protocol.<file|ssh|git|http|https|ext>.allow=never` in command scope (a repo's own `protocol.<name>.allow=always` beats the bare `protocol.allow`, not the named keys) — set by SafeGit for its own calls and, for every git in the containers including the engine's card links, in docker-compose.yml's `x-app` environment; on the host the launcher's git gets them from SafeGit; still only flags) runs with that process's access. mcp and web hold the launcher socket, so for them that is a path to the host (launch / type into a session as the operator); the scanner and github containers do **not** mount the socket (`test/unit/compose_test.rb` `test_launcher_socket_reaches_only_web_mcp_and_notifier`) but write the database (see shared database). Open, and a blocker for the beta: reading repos with a library that runs no repo-configured program (libgit2) removes this from mcp, web, the scanner and the launcher |
 | dialog answers | the launcher's `answer` op presses a key on any dialog a session shows — Claude Code's folder-trust prompt included — when the caller sends the dialog's current hash, which its `dialog` op returns. The web UI calls it for the operator only, but any client of the launcher socket (web · mcp · notifier, and code running in them) can call both ops: a prompt "left for the operator" is not a boundary against those containers. The socket mount is the boundary (§ git on untrusted repos). Open |
+| checkout under PROJECTS_ROOT | the `writer` container mounts `PROJECTS_ROOT` read-write. Every repo under it — its `.git/config` and `.git/hooks`, which the host's git and the agents run — and a busyyaks checkout inside it (`bin/launcher`, `bin/yaks`, `deploy/*.sh`, `.env`) are writable from that container: code the host runs. Keep the checkout outside `PROJECTS_ROOT` to close it; narrowing the writer to `<repo>/.busyyaks/workflow.yml` + `.git/info/exclude` is a follow-up. Open |
 | a hung git | a repo whose `.git` holds a FIFO (or anything git blocks reading) hangs the git that reads it, with no per-git timeout: the scanner's whole scan, a `scan_now` or churn in mcp, and the request in web (the kanban card links) that reads that repo. Open until repos are read with a library instead of the git CLI |
 | terminals | an open terminal shows the agent's screen to the browser, and in control types into it as the operator. The checks are the web's session + Origin + registration and the launcher's running-agent check; the launcher cannot read the database, so any client of the launcher socket (web · mcp · notifier, and code running in them) can call `attach` on any running agent session — the socket mount is the boundary, as for dialog answers. `attach` adds reading the screen to what such a client already has: `notify` types up to 8000 characters + Enter into any running agent session and `stop` ends one, with no registration check either (the launcher reads no database: every service writes it, so a row there would be no proof). Through `PUBLIC_HOST` only with `terminal.public_host: allow`. Open |
 
@@ -268,6 +269,7 @@ import-env < .env`. Every service reads the current revision at its next turn: a
 | key | was `.env` | read by |
 |---|---|---|
 | `scan_interval_seconds` | `SCAN_INTERVAL_SECONDS` | scanner (sleep), mcp (`last_scan` stale after 3 ×) |
+| `writer_sync_seconds` | `WRITER_SYNC_SECONDS` | writer (sleep), web ("writer down" after 3 ×) |
 | `github_interval_seconds` | `GITHUB_INTERVAL_SECONDS` | github (network, feed, merged PRs) |
 | `github_ci_interval_seconds` | `GITHUB_CI_INTERVAL_SECONDS` | github (PR / CI polls), web + mcp + notifier (stale after 3 ×, window 10 ×), the webhook |
 | `notifier_interval_seconds` | `NOTIFIER_INTERVAL_SECONDS` | notifier (ping delivery) |
@@ -276,18 +278,22 @@ import-env < .env`. Every service reads the current revision at its next turn: a
 
 - Each a whole number of seconds 1..86400; the watch pass (`notifier_watch_seconds` rounded up to whole `notifier_interval_seconds` turns) below 10 × `github_ci_interval_seconds`. A refused save is 422 with the reason; nothing is written.
 - Revision 1 = `config/runtime.template.yml` (migration `20261217523000`), the values `.env.example` shipped.
-- **Upgrading** (`bin/setup check` refuses a `.env` that still has one of the six lines, so the import runs before it, on web alone — compose itself never runs the check):
+- `writer_sync_seconds` came with the writer service: a database whose current revision lacks it (migrated before the
+  writer) gets a new revision with it at the template's value (migration `20261219429000`); its `down` writes a
+  revision without it.
+- **Upgrading** (`bin/setup check` refuses a `.env` that still has one of the seven lines, so the import runs before it, on web alone — compose itself never runs the check):
 
   ```sh
-  grep -E '^[[:space:]]*(export[[:space:]]+)?(SCAN_INTERVAL|GITHUB_INTERVAL|GITHUB_CI_INTERVAL|NOTIFIER_INTERVAL|NOTIFIER_WATCH|WATCHDOG_GRACE)_SECONDS=' .env > data/runtime-env.bak
+  grep -E '^[[:space:]]*(export[[:space:]]+)?(SCAN_INTERVAL|WRITER_SYNC|GITHUB_INTERVAL|GITHUB_CI_INTERVAL|NOTIFIER_INTERVAL|NOTIFIER_WATCH|WATCHDOG_GRACE)_SECONDS=' .env > data/runtime-env.bak
   docker build -t busyyaks:local . && docker compose up -d --no-build --wait web    # migrates: revision 1 = the template
+  grep -q 'WRITER_SYNC_SECONDS=' data/runtime-env.bak || echo WRITER_SYNC_SECONDS=30 >> data/runtime-env.bak  # a .env from before the writer has none
   docker compose exec -T web bin/runtime-settings import-env < data/runtime-env.bak  # revision 2 = your values
-  sed -i -E '/^[[:space:]]*(export[[:space:]]+)?(SCAN_INTERVAL|GITHUB_INTERVAL|GITHUB_CI_INTERVAL|NOTIFIER_INTERVAL|NOTIFIER_WATCH|WATCHDOG_GRACE)_SECONDS=/d' .env
-  bin/setup check && docker compose up -d --no-build mcp scanner github notifier
+  sed -i -E '/^[[:space:]]*(export[[:space:]]+)?(SCAN_INTERVAL|WRITER_SYNC|GITHUB_INTERVAL|GITHUB_CI_INTERVAL|NOTIFIER_INTERVAL|NOTIFIER_WATCH|WATCHDOG_GRACE)_SECONDS=/d' .env
+  bin/setup check && docker compose up -d --no-build mcp scanner github notifier writer
   ```
 
   Only web runs between the migration and the import (seconds), and the services that loop on these values start after it. Your values equal `config/runtime.template.yml` → the import adds an identical revision; skipping it is the same.
-- Rollback: the previous release reads the six keys from `.env` again — put the lines back from `data/runtime-env.bak`.
+- Rollback: the previous release reads the six keys from `.env` again (it has no writer service) — put the lines back from `data/runtime-env.bak`.
 
 ## Skills (what a launched session is told)
 
@@ -345,6 +351,21 @@ The launch result and the launcher log name each skill with its source, load and
 Setup: add `skills:` to `config/busyyaks.yml` (example in `config/busyyaks.example.yml`), and for hermes launchers the
 line `- ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills` under `skills.external_dirs` of the `config.yaml` hermes reads; restart
 the launcher.
+
+## The writer service and `.busyyaks/workflow.yml`
+
+Card #429: each project's board shape (columns + workflow) lives in its repo at `.busyyaks/workflow.yml`, kept out of
+git. The `writer` compose service is the only one that mounts `PROJECTS_ROOT` read-write; it writes that file (and
+`/.busyyaks/workflow.yml` in the repo's `.git/info/exclude`; card #477: only the file — an older `/.busyyaks/` line is
+replaced, so the repo can commit its `.busyyaks/skills`) and nothing else.
+
+| | |
+|---|---|
+| Settings → Runtime | `writer_sync_seconds` (30 as shipped): a hand edit is applied within it; the board header says "writer down" after 3 periods without a look |
+| socket | `/data/run/writer.sock` (0600, created by the writer): the web's workflow editor saves through it; writer down → Save / Reset answer 503, nothing saved |
+| first start | every project without a file gets its current board written; `docker compose logs writer` → `writer: sync exported=N` |
+| refused file | `workflow_files.error`, shown above the board; the board keeps the shape last applied until the file is fixed |
+| never | a committed `.busyyaks/workflow.yml` (refused: `git rm --cached` it), a `.gitignore` `!` rule that re-includes it (refused) |
 
 ## Folder trust (the launcher)
 
@@ -437,7 +458,7 @@ SHA-256 over all rows) and fails on any difference. The SQLite file is opened re
 the rollback. Attachments are files (`ATTACHMENTS_DIR`) and do not move. CI runs it on a fixture with rows in every
 table (`test/unit/db_copy_test.rb`).
 
-1. Stop the five services: `docker compose stop web mcp scanner github notifier`.
+1. Stop the six services: `docker compose stop web mcp scanner github notifier writer`.
 2. Back up the SQLite file: `mkdir -p data/backups && docker compose run --rm --no-deps web sqlite3 /data/busyyaks.sqlite3 "VACUUM INTO '/data/backups/busyyaks-pre-postgres-$(date +%F-%H%M).sqlite3'"`.
 3. `.env`: `COMPOSE_PROFILES=postgres`, `DATABASE_ADAPTER=postgresql`, `POSTGRES_HOST=/data/postgres-run`,
    `POSTGRES_PORT=5432`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` (`openssl rand -hex 32`),
@@ -449,12 +470,12 @@ table (`test/unit/db_copy_test.rb`).
    target, a missing file), or migrated with only the migrations' own rows (a schema-version refusal, a value that does not fit its column, a difference).
    The copy only runs into a database without tables: fix, then drop and recreate the target database (or stop
    postgres and empty `data/postgres`) before running it again.
-6. Start: `docker compose up -d --no-build web mcp scanner github notifier`. mcp, scanner, github and notifier wait for web to be healthy
+6. Start: `docker compose up -d --no-build web mcp scanner github notifier writer`. mcp, scanner, github, notifier and writer wait for web to be healthy
    (it migrates first). If web is not healthy within its `start_period` (120 s) and 3 more checks — a long
-   migration —, `up` exits `dependency failed to start` and leaves those four Created, not started (a restart policy
+   migration —, `up` exits `dependency failed to start` and leaves those five Created, not started (a restart policy
    never starts a container that never ran): once `/up` answers, run the same `up` again.
 7. Check: `/up` 200; the board shows the cards; MCP `tools/list`; a new card gets the next id;
-   `docker compose logs --since 5m web mcp scanner github notifier | grep -i error` empty.
+   `docker compose logs --since 5m web mcp scanner github notifier writer | grep -i error` empty.
 8. Rollback: `.env` `DATABASE_ADAPTER=sqlite` (and `COMPOSE_PROFILES=` empty), `docker compose up -d --no-build web
    mcp scanner github notifier`: the services open the untouched SQLite file. Writes made on PostgreSQL in between
    are not in it.

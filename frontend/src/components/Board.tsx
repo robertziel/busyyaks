@@ -9,6 +9,7 @@ import { apiDelete, apiGet, apiPost, apiPostForm, apiUpload, dictationOn, invali
 import { projectPath } from "../lib/format";
 import { pickYak } from "./YakLoader";
 import { cardTerminals } from "./CardTerminals";
+import { WorkflowFile } from "./WorkflowFile";
 import { CHANGED as SHORTCUT_CHANGED, readShortcut } from "../lib/dictationShortcut";
 import {
   Board as KanbanBoard,
@@ -125,6 +126,7 @@ export function ProjectBoard({ slug }: { slug: string }) {
   };
   return (
     <div className="yak-board" data-yak={yak}>
+      <WorkflowFile slug={slug} enc={encSlug} />
       <KanbanBoard
         api={api}
         me={userEmail()}

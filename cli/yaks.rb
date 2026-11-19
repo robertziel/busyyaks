@@ -24,7 +24,7 @@ module Busyyaks
     # gate runs the host-side tests on this version (scripts/ci/test.sh host).
     MIN_RUBY = "3.2"
     # The stack's long-running services: every compose service without a `profiles:` key (test/unit/compose_test.rb).
-    SERVICES = %w[web mcp scanner github notifier].freeze
+    SERVICES = %w[web mcp scanner github notifier writer].freeze
 
     # the commands that run the stack (Host.stack!: Linux only); desktop and help run on any Unix with a desktop
     STACK_COMMANDS = %w[server panel env doctor].freeze
