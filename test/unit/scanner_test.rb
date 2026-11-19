@@ -23,6 +23,7 @@ class ScannerTest < Minitest::Test
                          "reap_protect" => [], "auth" => { "provider" => "none" },
                          "agents" => { "collector" => "none" }, "dictation" => "none", "terminal" => TERMINAL_DENY,
       "github_hook" => "none", "ci" => CI_SETTINGS, "skills" => SKILLS_SETTINGS,
+      "updates" => UPDATES_SETTINGS,
                          "launch" => LAUNCH_CLAUDE)
   end
 

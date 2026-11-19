@@ -37,6 +37,7 @@ class LauncherHarnessesTest < Minitest::Test
       "dictation" => "none", "terminal" => { "public_host" => "deny", "max_open" => 4 }, "github_hook" => "none",
       "ci" => { "max_pending_minutes" => 60, "required" => { "o/r" => ["jenkins/ci"] } },
       "skills" => { "max_bytes" => 65_536, "max_start_bytes" => 32_768, "project" => "allow", "local_dir" => nil },
+      "updates" => { "remote" => "origin", "branch" => "main", "tags" => "v*", "channel" => "tags", "check_minutes" => 60 },
       "launch" => { "trusted_paths" => [], "commands" => INVOCATIONS, "start_seconds" => 30, "scopes" => nil }
     ))
     File.write(File.join(@co, ".env"), <<~ENV)

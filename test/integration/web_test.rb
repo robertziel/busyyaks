@@ -383,6 +383,28 @@ class WebTest < Minitest::Test
     assert_includes last_response.body, '<meta name="setup" content="done">'
   end
 
+  # Settings → Updates (card 536): the routes relay the launcher's `update` op — none here, so 503 saying why; a bad
+  # step / mode / sha is refused before the launcher is asked; a POST without the CSRF token is 403
+  def test_the_update_routes_relay_the_launcher_and_refuse_bad_input
+    sign_in
+    j = api(:get, "/api/settings/update")
+    assert_equal 503, last_response.status
+    assert_match(/launcher not reachable/, j["error"])
+    token = shell_csrf
+    { { step: "bogus" } => /step must be check or apply/,
+      { step: "apply", mode: "nightly", sha: "a" * 40 } => /mode must be tags or branch/,
+      { step: "apply", mode: "tags", sha: "abc" } => /sha must be the 40-hex commit/, }.each do |body, why|
+      j = api(:post, "/api/settings/update", body, csrf: token)
+      assert_equal 400, last_response.status, body.inspect
+      assert_match(why, j["error"])
+    end
+    j = api(:post, "/api/settings/update", { step: "check" }, csrf: token)
+    assert_equal 503, last_response.status
+    assert_match(/launcher not reachable/, j["error"])
+    api(:post, "/api/settings/update", { step: "check" })
+    assert_equal 403, last_response.status, "no CSRF token"
+  end
+
   def test_built_assets_are_immutable_and_static_is_public
     get "/static/app.css"
     assert_equal 200, last_response.status

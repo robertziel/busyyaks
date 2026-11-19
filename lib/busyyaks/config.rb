@@ -13,6 +13,7 @@ require_relative "terminal"
 require_relative "github_hook"
 require_relative "ci_settings"
 require_relative "skills"
+require_relative "updates"
 
 module Busyyaks
   # The deployment's YAML (config/busyyaks.yml). Every key required, unknown keys refused,
@@ -21,11 +22,11 @@ module Busyyaks
     class Invalid < StandardError; end
 
     KEYS = %w[roots search_depth owner_remotes author_emails window_days reap_protect auth agents launch dictation
-              terminal github_hook ci skills].freeze
+              terminal github_hook ci skills updates].freeze
     OPTIONAL = %w[engines daily_report_runners].freeze
     attr_reader :roots, :search_depth, :owner_remotes, :author_emails, :window_days, :reap_protect, :engines,
                 :daily_report_runners, :auth, :agent_collector, :trusted_paths, :launch_commands,
-                :launch_start_seconds, :launch_scopes, :dictation, :terminal, :github_hook, :ci, :skills
+                :launch_start_seconds, :launch_scopes, :dictation, :terminal, :github_hook, :ci, :skills, :updates
 
     # mount: where compose mounts PROJECTS_ROOT (.env PROJECTS_MOUNT, the one place it is set): every root is under it.
     def self.load(path = ENV.fetch("BUSYYAKS_CONFIG"), mount: ENV.fetch("PROJECTS_MOUNT"))
@@ -141,6 +142,12 @@ module Busyyaks
         # the skills bin/launcher hands each session it starts (Skills)
         @skills = Skills.settings!(hash["skills"])
       rescue Skills::Invalid => e
+        raise Invalid, e.message
+      end
+      begin
+        # where `yaks update` / Settings → Updates take this checkout's updates from (Updates; card 536)
+        @updates = Updates.parse!(hash["updates"])
+      rescue Updates::Invalid => e
         raise Invalid, e.message
       end
       begin

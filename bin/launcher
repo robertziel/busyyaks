@@ -28,6 +28,13 @@
 #   {"op":"projects_root","step":"apply","path","plan_id"} → .env rewritten, compose recreated, then this launcher exits
 #                                                    (systemd restarts it on the new .env); {"step":"status"} → the
 #                                                    current root + the last apply's record (state dir projects-root.json)
+#   {"op":"update","step":"status"}                 → this checkout vs config/busyyaks.yml updates (card 536): the last
+#                                                    check (re-checked on a thread when older than check_minutes or HEAD
+#                                                    moved), the running / last update's record (state dir update.json)
+#   {"op":"update","step":"check"}                  → a check now (`bin/yaks update --check --json`, hardened git: Updates::GIT_ENV)
+#   {"op":"update","step":"apply","mode":"tags|branch","sha"} → `bin/yaks update` started detached (it outlives this
+#                                                    launcher's restart: the unit's KillMode=process), refused unless
+#                                                    sha is still that mode's target and the update is allowed
 # agents · agent_tasks · reap_preview · reap · notify read the agent-session collector (AgentCollector::OPS); with
 # config/busyyaks.yml agents.collector: none each answers {ok:false, unsupported:true, error: AgentCollector::OFF, status: 422}.
 # Only an agent type + launcher key from config/kanban.yml (the board config's `agent_types` / `launchers`, built
@@ -69,6 +76,9 @@ require_relative "../lib/busyyaks/terminal"
 require_relative "../lib/busyyaks/harnesses"
 # the projects dir chosen from the hello screen (card 532): the checks, the .env rewrite, the apply's record
 require_relative "../lib/busyyaks/projects_root"
+# updating this checkout (card 536): the check, the records; the update itself is bin/yaks update
+require_relative "../lib/busyyaks/updates"
+require "rbconfig"
 
 $stdout.sync = true
 ROOT = File.expand_path("..", __dir__)
@@ -1393,6 +1403,131 @@ rescue StandardError => e
   puts "#{Busyyaks::Clock.now.iso8601} projects dir #{rec['to']}: failure record NOT written (#{e.class}: #{e.message})"
 end
 
+# --- updates (card 536): config/busyyaks.yml updates is read on every op (an edit applies without a restart)
+# check: one check at a time · spawn: one apply at a time (held through its check) · flag: the background check's
+# flag — its own lock, so a status never waits behind an apply's check
+UPDATE = { check: Mutex.new, spawn: Mutex.new, flag: Mutex.new, checking: false, error: nil, child: nil }
+
+# bin/yaks of this checkout, its exit kept: the launcher runs no git of its own (launcher_rules_test) — the check and
+# the update are `yaks update`'s, whose every git call has its own deadline (Updates::GIT_TIMEOUT_S), so this returns
+def update_yaks(*args)
+  Open3.capture3(RbConfig.ruby, File.join(ROOT, "bin", "yaks"), "update", *args, chdir: ROOT, in: File::NULL)
+end
+
+# one check at a time (`yaks update --check --json`, which also writes update-check.json); its failure is kept (with
+# the time) and shown — the older check stays on screen with its own time, never read as "up to date"
+def update_check!
+  UPDATE[:check].synchronize do
+    out, err, st = update_yaks("--check", "--json")
+    unless st.success?
+      why = err.to_s.strip.sub(/\Ayaks: /, "")
+      why = "yaks update --check exited #{st.exitstatus}" if why.empty?
+      UPDATE[:error] = { "at" => Busyyaks::Clock.now.iso8601, "error" => why }
+      raise Busyyaks::Updates::Refused, why
+    end
+    UPDATE[:error] = nil
+    JSON.parse(out, symbolize_names: true)
+  rescue JSON::ParserError => e
+    UPDATE[:error] = { "at" => Busyyaks::Clock.now.iso8601, "error" => "yaks update --check --json: #{e.message}" }
+    raise Busyyaks::Updates::Refused, UPDATE[:error]["error"]
+  end
+end
+
+# a check is asked again when there is none, the settings it was made for changed, it is older than check_minutes, or
+# it saw another HEAD than the one the last finished update left
+def update_stale?(settings, check, last)
+  return true unless check.is_a?(Hash) && check["checked_at"] && check.dig("head", "sha")
+  return true if check["remote"] != settings.remote || check.dig("branch", "name") != settings.branch ||
+                 check["channel"] != settings.channel
+  at = Time.iso8601(check["checked_at"])
+  return true if Busyyaks::Clock.now - at > settings.check_seconds
+
+  last.is_a?(Hash) && last["state"] == "done" && last["to"].is_a?(String) && last["to"] != check.dig("head", "sha")
+rescue ArgumentError
+  true
+end
+
+def update_running? = UPDATE[:child]&.alive? || Busyyaks::Updates.running?(STATE_DIR)
+
+# a failed check is asked again only after check_minutes (or "Check now"): a broken remote is not fetched on every poll
+def update_backing_off?(settings)
+  err = UPDATE[:error]
+  err && Busyyaks::Clock.now - Time.iso8601(err["at"]) < settings.check_seconds
+end
+
+# The record as it stands: one that says starting / running while no update holds the lock (nor the child this
+# launcher started runs) was left by an update that died — said as interrupted, with the step it reached and its log;
+# never read as still running (which would hold every Update button off) nor as done
+def update_last(running)
+  last = Busyyaks::Updates.read_json(STATE_DIR, Busyyaks::Updates::RECORD_FILE)
+  return last unless last.is_a?(Hash) && %w[starting running].include?(last["state"]) && !running
+
+  last.merge("state" => "interrupted",
+             "error" => "the update stopped at #{last['step'] || 'its start'} without finishing (killed, or the host " \
+                        "restarted): see #{last['log'] || 'its log'}; the checkout and the stack are as that step left them")
+end
+
+def update_status(settings)
+  check = Busyyaks::Updates.read_json(STATE_DIR, Busyyaks::Updates::CHECK_FILE)
+  running = update_running?
+  last = update_last(running)
+  if update_stale?(settings, check, last) && !running && !update_backing_off?(settings)
+    UPDATE[:flag].synchronize do
+      unless UPDATE[:checking]
+        UPDATE[:checking] = true
+        Thread.new do
+          update_check!
+        rescue StandardError => e
+          puts "#{Busyyaks::Clock.now.iso8601} update check FAILED: #{e.message}"
+        ensure
+          UPDATE[:flag].synchronize { UPDATE[:checking] = false }
+        end
+      end
+    end
+  end
+  { ok: true, settings: settings.to_h, check: check, checking: UPDATE[:checking], check_error: UPDATE[:error],
+    running: running, last: last, }
+end
+
+def update_apply(settings, req)
+  mode = req["mode"].to_s
+  sha = req["sha"].to_s
+  return { ok: false, error: "sha must be the 40-hex commit the page showed", status: 400 } unless sha.match?(Busyyaks::Updates::SHA)
+
+  UPDATE[:spawn].synchronize do
+    return { ok: false, error: "an update is already running", status: 409 } if update_running?
+
+    check = update_check!
+    Busyyaks::Updates.target!(check, settings, mode: mode, expect: sha)
+    stamp = Busyyaks::Clock.now.utc.strftime("%Y%m%dT%H%M%SZ")
+    log = File.join(STATE_DIR, "update-#{stamp}.log")
+    argv = [RbConfig.ruby, File.join(ROOT, "bin", "yaks"), "update", *("--main" if mode == "branch"), "--expect", sha,
+            "--log", log,]
+    # the record before the child runs: a child that dies before its own first write is still on screen (interrupted)
+    Busyyaks::Updates.write_json!(STATE_DIR, Busyyaks::Updates::RECORD_FILE,
+                                  { "state" => "starting", "step" => nil, "mode" => mode, "to" => sha,
+                                    "started_at" => Busyyaks::Clock.now.iso8601, "log" => log, })
+    pid = File.open(log, File::WRONLY | File::CREAT | File::TRUNC, 0o600) do |f|
+      Process.spawn(*argv, chdir: ROOT, in: File::NULL, out: f, err: f, pgroup: true)
+    end
+    UPDATE[:child] = Process.detach(pid)
+    puts "#{Busyyaks::Clock.now.iso8601} update #{mode} → #{sha[0, 7]} started (pid #{pid}, log #{log}; head #{check.dig(:head, :sha)[0, 7]})"
+    { ok: true, started: { pid: pid, log: log, mode: mode, sha: sha } }
+  end
+end
+
+def update_op(req)
+  settings = Busyyaks::Updates.load!(ROOT)
+  case req["step"]
+  when "status" then update_status(settings)
+  when "check" then { ok: true, check: update_check! }
+  when "apply" then update_apply(settings, req)
+  else { ok: false, error: "step must be status, check or apply", status: 400 }
+  end
+rescue Busyyaks::Updates::Invalid, Busyyaks::Updates::Refused => e
+  { ok: false, error: e.message, status: 422 }
+end
+
 def browse_op(req)
   { ok: true, **Busyyaks::ProjectsRoot.browse(req["path"].to_s) }
 rescue Busyyaks::ProjectsRoot::Invalid => e
@@ -1426,6 +1561,7 @@ def handle(line)
   when "answer" then answer_op(req)
   when "browse" then browse_op(req)
   when "projects_root" then projects_root_op(req)
+  when "update" then update_op(req)
   else { ok: false, error: "unknown op" }
   end
 rescue ArgumentError, KeyError, JSON::ParserError => e

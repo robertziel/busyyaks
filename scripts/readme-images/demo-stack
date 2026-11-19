@@ -173,6 +173,7 @@ dictation: none
 terminal: { public_host: deny, max_open: 4 }
 skills: { max_bytes: 65536, max_start_bytes: 32768, project: deny, local_dir: null }
 github_hook: none
+updates: { remote: origin, branch: main, tags: "v*", channel: tags, check_minutes: 360 }
 ci:
   max_pending_minutes: 60
   required:

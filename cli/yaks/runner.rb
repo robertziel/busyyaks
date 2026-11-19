@@ -21,10 +21,23 @@ module Busyyaks
         [out, status.success?]
       end
 
-      # → [stdout, stderr, exit status] (the caller reports the program's own reason)
-      def capture_all(*argv)
-        out, err, status = Open3.capture3(resolve(argv), *argv.drop(1))
-        [out, err, status.exitstatus || 1]
+      # → [stdout, stderr, exit status] (the caller reports the program's own reason). env: added to ours. timeout:
+      # seconds — past it the program's whole process group is killed and Refused names it (a stalled network call
+      # never holds the caller forever)
+      def capture_all(*argv, env: {}, timeout: nil)
+        return capture3(env, argv) unless timeout
+
+        Open3.popen3(env, resolve(argv), *argv.drop(1), pgroup: true) do |stdin, stdout, stderr, wait|
+          stdin.close
+          out = Thread.new { stdout.read }
+          err = Thread.new { stderr.read }
+          unless wait.join(timeout)
+            kill_group(wait.pid)
+            wait.join
+            raise Refused, "#{argv.first(4).join(' ')} did not finish within #{timeout} s: killed"
+          end
+          [out.value, err.value, wait.value.exitstatus || 1]
+        end
       end
 
       # the program's stdin / stdout to the block (its stderr stays ours: ssh's own messages reach the operator);
@@ -56,6 +69,17 @@ module Busyyaks
       end
 
       private
+
+      def capture3(env, argv)
+        out, err, status = Open3.capture3(env, resolve(argv), *argv.drop(1))
+        [out, err, status.exitstatus || 1]
+      end
+
+      def kill_group(pid)
+        Process.kill("KILL", -pid)
+      rescue Errno::ESRCH, Errno::EPERM
+        nil
+      end
 
       def resolve(argv)
         name = argv.first

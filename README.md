@@ -220,7 +220,7 @@ yaks server status                         # every row ok once the stack is up
 
 | | |
 |---|---|
-| update | nothing to do: the link follows the checkout, so a `git pull` / local deploy updates `yaks` too. Moved or renamed the checkout → the link breaks: `ln -sf <new checkout>/bin/yaks ~/.local/bin/yaks` |
+| update | `yaks update` (below) — the link follows the checkout, so whatever moves the checkout updates `yaks` too. Moved or renamed the checkout → the link breaks: `ln -sf <new checkout>/bin/yaks ~/.local/bin/yaks` |
 | uninstall | `rm ~/.local/bin/yaks` |
 | several checkouts | one link per checkout, under different names (`ln -s <checkout>/bin/yaks ~/.local/bin/yaks-test`) |
 | exit codes | 0 ok · 1 a check failed or a refusal (the reason on stderr) · 2 a usage error (usage printed) |
@@ -239,6 +239,7 @@ Commands:
 | `yaks env KEY...` | `export KEY='value'` lines from `.env` (as `bin/env`) |
 | `yaks env --ports` | this server's host name and its loopback web / MCP ports as JSON — what [`yaks remote connect`](#remote) asks over ssh; no secret |
 | `yaks remote add\|list\|remove\|connect\|attach` · `yaks remote --stdio` | a busyyaks server on another machine, over your own ssh: [Remote](#remote) |
+| `yaks update [--main]` · `yaks update --check` | this checkout onto its newest release tag (`--main`: the head of `updates.branch`), then the stack on it: [Updating](#updating) |
 | `yaks doctor` | every host tool the stack needs, per feature, and the first start's checks; exit 1 if one fails |
 
 **How it works from the terminal.** `yaks` finds its checkout from the symlink's real path, reads that checkout's
@@ -265,6 +266,8 @@ usage: yaks <command>
   yaks remote connect TARGET [--mcp]   forward its dashboard (and MCP) to this machine over ssh, until ssh ends
   yaks remote attach TARGET SESSION    an agent's terminal on that server, here, over ssh
   yaks remote --stdio                  server side of attach: ssh's stdin/stdout ↔ the launcher socket
+  yaks update [--main]                 this checkout onto its newest release tag (--main: updates.branch's head), then the stack on it
+  yaks update --check                  what is newer on config/busyyaks.yml updates.remote; changes nothing
   yaks doctor                          every host tool the stack needs, per feature, and the first start's checks; exit 1 if one fails
   yaks help                            this list
 
@@ -632,6 +635,41 @@ never be exposed. The daily report has its own bearer, `MCP_REPORT_TOKEN`, which
 `check_report`, `post_report`): its model reads untrusted text, so it never gets a tool that writes a card.
 
 ---
+
+### Updating
+
+`config/busyyaks.yml` `updates` (required) says where updates come from: `{remote, branch, tags, channel,
+check_minutes}` — the git remote of this checkout, the branch `--main` follows, the release tags' glob (`v*`), which of
+the two the dashboard's notice counts, how often it asks.
+
+```console
+$ yaks update --check
+checkout       1f0c2ab on main (v1.0.0-beta.2)
+newest tag     v1.0.0 9e41d07 · available, 12 commits
+origin/main    main 4b77a10 · available, 19 commits
+update available (channel tags)
+$ yaks update            # → v1.0.0          yaks update --main → origin/main's head
+```
+
+| step | what |
+|---|---|
+| check | `git fetch` of the branch + the release tags; refused unless a **fast-forward** of a **clean** tracked tree (local commits or changed tracked files are never reset, stashed or merged), on `updates.branch` or detached |
+| checkout | the branch fast-forwarded (detached: the commit checked out) |
+| build | `docker build -t busyyaks:update-<sha>` — fails → the checkout goes back, nothing restarted |
+| backup | the database, right before the switch: SQLite `VACUUM INTO`, PostgreSQL `pg_dump` → `data/backups/busyyaks-update-<UTC>.*` — fails → the checkout goes back |
+| up | `docker tag` it `busyyaks:local`, `docker compose up -d --wait --no-build` the stack's services, `CLI::SERVICES` (web migrates) |
+| launcher | `deploy/install-launcher.sh` (`KillMode=process`: the update and your tmux sessions keep running) |
+| status | `yaks server status` |
+
+A failure after `up` is not undone (the database may be migrated): the record names the backup and the previous
+commit. Every step is written to `LAUNCHER_STATE_DIR/update.json`; one update at a time; one that died (no update
+holds the lock) is shown as interrupted. An update runs the remote's code: trust whoever can push to `updates.remote`
+(docs/DEPLOY.md § Updates).
+
+**Settings → Updates** (`/settings/updates`): the same check (the launcher's, re-asked past `check_minutes`), the
+newest tag and the branch head with an **Update to …** button each (off, with the reason, when not allowed), and the
+running / last update step by step — the page keeps polling while the web restarts. The settings cog carries a dot
+and the Updates link the notice ("v1.0.0 available", "main +3") while the channel's target is a fast-forward away.
 
 ## Running in production
 
