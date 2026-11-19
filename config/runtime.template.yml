@@ -1,9 +1,10 @@
 # The services' timing: revision 1 of Settings → Runtime (table runtime_settings), seeded from this file by
-# migration 20261217523000 — the values .env.example shipped for the six .env keys these replaced (RuntimeSettings::KEYS).
+# migration 20261217523000 — the values .env.example shipped for the seven .env keys these replaced (RuntimeSettings::KEYS).
 # Plain data, read once at migrate time; afterwards the database holds the values (Settings → Runtime, bin/runtime-settings).
 # Every key is required, a whole number of seconds 1..86400; the notifier's watch pass (notifier_watch_seconds rounded up
 # to whole notifier_interval_seconds turns) must be below 10 × github_ci_interval_seconds (lib/busyyaks/runtime_settings.rb).
 scan_interval_seconds: 60
+writer_sync_seconds: 30
 github_interval_seconds: 3600
 github_ci_interval_seconds: 60
 notifier_interval_seconds: 5

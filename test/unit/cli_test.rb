@@ -457,7 +457,7 @@ class CliTest < Minitest::Test
 
   def test_server_status_all_up
     sock = UNIXServer.new(File.join(@run, "launcher.sock"))
-    @runner = FakeRunner.new(answers: { compose("ps") => ["web\nmcp\nscanner\ngithub\nnotifier\n", true],
+    @runner = FakeRunner.new(answers: { compose("ps") => ["web\nmcp\nscanner\ngithub\nnotifier\nwriter\n", true],
                                         %w[systemctl --user is-active] => ["active\n", true], })
     code, out, = yaks("server", "status")
     assert_equal 0, code, out

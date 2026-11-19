@@ -26,7 +26,7 @@ MIN_SESSION_SECRET_BYTES=64   # lib/busyyaks/session_cookie.rb SessionCookie::MI
 MIN_MCP_TOKEN_CHARS=32        # lib/busyyaks/mcp_server.rb McpServer::MIN_TOKEN_CHARS (MCP_TOKEN and MCP_REPORT_TOKEN)
 # the .env keys moved to Settings → Runtime (lib/busyyaks/runtime_settings.rb RuntimeSettings::KEYS): `check`
 # refuses a .env that still has one
-RUNTIME_MOVED="SCAN_INTERVAL_SECONDS GITHUB_INTERVAL_SECONDS GITHUB_CI_INTERVAL_SECONDS NOTIFIER_INTERVAL_SECONDS NOTIFIER_WATCH_SECONDS WATCHDOG_GRACE_SECONDS"
+RUNTIME_MOVED="SCAN_INTERVAL_SECONDS WRITER_SYNC_SECONDS GITHUB_INTERVAL_SECONDS GITHUB_CI_INTERVAL_SECONDS NOTIFIER_INTERVAL_SECONDS NOTIFIER_WATCH_SECONDS WATCHDOG_GRACE_SECONDS"
 
 dir=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$dir"
@@ -320,7 +320,7 @@ SHAPE
     exit 1
   fi
   say "ok    .env complete · ./data and $run ready · docker compose config ok"
-  say "Next: docker compose up -d --build --wait web mcp scanner github notifier"
+  say "Next: docker compose up -d --build --wait web mcp scanner github notifier writer"
 }
 
 case "${1:-}" in

@@ -130,7 +130,7 @@ class LauncherProjectsRootTest < Minitest::Test
     assert_equal [{ "path" => "/projects/app", "from" => File.join(@old, "app"), "to" => File.join(@new, "app") }],
                  p["trusted"]
     assert_equal [], p["loses_trust"] # this launcher's create made nothing here
-    assert_equal %w[web mcp scanner github notifier], p["services"]
+    assert_equal %w[web mcp scanner github notifier writer], p["services"]
     assert_match(/\A\h{64}\z/, p["plan_id"])
   end
 
@@ -241,7 +241,7 @@ class LauncherProjectsRootTest < Minitest::Test
     @pid = nil
     assert_equal @env.sub("PROJECTS_ROOT=#{@old}", "PROJECTS_ROOT=#{@new}"), File.read(File.join(@co, ".env"))
     assert_equal 0o600, File.stat(File.join(@co, ".env")).mode & 0o777
-    assert_equal ["compose --project-directory #{@co} up -d --wait --no-build web mcp scanner github notifier | " \
+    assert_equal ["compose --project-directory #{@co} up -d --wait --no-build web mcp scanner github notifier writer | " \
                   "PROJECTS_ROOT=#{@new}"], docker_runs
     st = state
     assert_equal ["done", @old, @new], st.values_at("state", "from", "to")

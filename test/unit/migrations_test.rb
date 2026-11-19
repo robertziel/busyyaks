@@ -26,6 +26,7 @@ class MigrationsTest < Minitest::Test
   BEFORE_PR_LISTS = 20_261_209_492_000 # the last migration before v14 (a card's PRs are a list)
   BEFORE_PR_FLAGS = 20_261_208_467_999 # just before the PR base / merge flags: whatever lands before it stays
   BEFORE_PROGRESS = 20_261_209_491_999 # just before the progress watch (Schema v13 + projects.branch_tips)
+  RUNTIME = 20_261_217_523_000 # the runtime settings (before writer_sync_seconds joined them)
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -568,6 +569,28 @@ class MigrationsTest < Minitest::Test
     refute_includes cols.(:projects), :local_base
     refute_includes cols.(:gh_pr_checks), :draft
     refute_includes cols.(:gh_pr_states), :auto_merge
+  end
+
+  # a database migrated before writer_sync_seconds: its newest revision gets it at the template's value, other keys
+  # kept; down writes a revision without it; a revision that has it (a fresh database) is left alone
+  def test_writer_sync_joins_the_runtime_settings_of_a_database_that_lacks_it
+    migrate(RUNTIME)
+    seeded = JSON.parse(@db[:runtime_settings].reverse(:id).get(:doc))
+    assert_equal 30, seeded["writer_sync_seconds"], "a fresh database: the template seeds it"
+    migrate
+    assert_equal 1, @db[:runtime_settings].count, "nothing written over a revision that has it"
+    migrate(RUNTIME)
+    assert_equal 2, @db[:runtime_settings].count, "down: a revision without it"
+    assert_equal seeded.except("writer_sync_seconds"), JSON.parse(@db[:runtime_settings].reverse(:id).get(:doc))
+    old = seeded.except("writer_sync_seconds").merge("scan_interval_seconds" => 90)
+    @db[:runtime_settings].insert(doc: JSON.generate(old), author: "op", created_at: 1)
+    migrate
+    row = @db[:runtime_settings].reverse(:id).first
+    assert_equal "migration 20261219429000", row[:author]
+    assert_equal old.merge("writer_sync_seconds" => 30), JSON.parse(row[:doc])
+    assert_equal Busyyaks::RuntimeSettings::KEYS.keys, JSON.parse(row[:doc]).keys, "keys in order"
+    migrate(RUNTIME)
+    assert_equal old, JSON.parse(@db[:runtime_settings].reverse(:id).get(:doc)), "down: the key goes again"
   end
 
   # config/db/structure.sql (the schema dump, edited by hand since the services migrate with --no-dump

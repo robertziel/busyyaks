@@ -44,6 +44,7 @@ class NoGlobalSkillTest < Minitest::Test
     assert_equal [], skills.grep_v(%r{\A(skills/busyyaks|skills-local|\.busyyaks/skills)/})
     assert File.file?(File.join(ROOT, "skills/busyyaks/core/SKILL.md")), "every session's core skill"
     gi = File.read(File.join(ROOT, ".gitignore")).lines.map(&:strip)
-    refute_includes gi, "/.busyyaks/", "the repo's .busyyaks/skills must be committable"
+    refute_includes gi, "/.busyyaks/", "the repo's .busyyaks/skills must be committable (only workflow.yml is ignored)"
+    assert_includes gi, "/.busyyaks/workflow.yml"
   end
 end

@@ -160,7 +160,7 @@ bin/setup check
 
 # builds the image (a few minutes the first time) and returns once every service runs and web answers /up;
 # "container … is unhealthy" / "dependency failed to start": docker compose logs web says why
-docker compose up -d --build --wait web mcp scanner github notifier
+docker compose up -d --build --wait web mcp scanner github notifier writer
 ```
 <!-- quickstart:end -->
 
@@ -727,7 +727,7 @@ Set up busyyaks (this repo) on this machine and get its tests green.
    LAUNCHER_RUN_DIR = ~/.local/state/busyyaks/run written out (persistent; outside this checkout and PROJECTS_ROOT).
    Ask me for anything you cannot fill.
 3. Run scripts/ci/test.sh all (Docker only; install nothing on the host) and report pass/fail counts.
-4. bin/setup check && docker compose up -d --build --wait web mcp scanner github notifier;
+4. bin/setup check && docker compose up -d --build --wait web mcp scanner github notifier writer;
    check http://127.0.0.1:$WEB_HOST_PORT/up is 200.
 Do not edit vendor/agents_kanban or frontend/src/vendor: they are vendored copies.
 ```

@@ -60,7 +60,7 @@ module Busyyaks
     # files (a linked worktree's `gitdir:`) are under it; the child reads them at their place under the mount.
     def host_root = ENV.fetch("PROJECTS_ROOT")
 
-    # One read: op (scan | head | churn | files_at) of the repo at path, which must resolve inside root. → the
+    # One read: op (scan | head | churn | files_at | ignored) of the repo at path, which must resolve inside root. → the
     # answer Hash (string keys); Failed with the reason otherwise. (bin: the child's script — the tests run stand-in
     # children through the same spawn, limits and parsing.)
     # host_root is where mount is on the host; root may be a dir under the mount (a nested `roots` entry, card #268)

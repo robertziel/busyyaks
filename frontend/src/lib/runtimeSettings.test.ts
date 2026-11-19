@@ -18,6 +18,7 @@ import {
 
 const DOC = {
   scan_interval_seconds: 60,
+  writer_sync_seconds: 30,
   github_interval_seconds: 3600,
   github_ci_interval_seconds: 60,
   notifier_interval_seconds: 5,
