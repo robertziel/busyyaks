@@ -14,7 +14,7 @@ FROM zricethezav/gitleaks:v8.30.1 AS gitleaks
 
 FROM koalaman/shellcheck:v0.10.0 AS shellcheck
 
-FROM ruby:3.4-slim
+FROM ruby:3.4.13-slim
 # git: overcommit, the staged snapshot and gitleaks; procps: overcommit reads its parent command (`ps`)
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential git procps \
  && rm -rf /var/lib/apt/lists/*
