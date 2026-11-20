@@ -15,7 +15,7 @@ RUN npm run build
 # newest libgit2 release: scripts/ci/libgit2-audit.rb), the tarball is checksum-pinned, and the build has no network
 # transport (no SSH / HTTPS: a read never fetches), the system zlib (Debian's security updates) and POSIX regcomp, no
 # bundled PCRE. test/unit/git_read_test.rb asserts the version and that Rugged.features is [:threads] only.
-FROM ruby:3.4-slim AS libgit2
+FROM ruby:3.4.13-slim AS libgit2
 ARG LIBGIT2_VERSION=1.9.7
 ARG LIBGIT2_SHA256=1a4fbe7589e814777ae76b64734ad80f4ecad22cd33a22682a2aaea4ae5375e7
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake zlib1g-dev pkg-config \
@@ -30,7 +30,7 @@ RUN mkdir /src/libgit2 && tar xzf /src/libgit2.tar.gz -C /src/libgit2 --strip-co
  && echo "${LIBGIT2_VERSION}" > /opt/libgit2/VERSION
 
 # Stage 3: the app
-FROM ruby:3.4-slim
+FROM ruby:3.4.13-slim
 
 # jq: test/unit/daily_report_tick_test.rb runs the host script bin/daily-report (which needs it) in a sandbox
 RUN apt-get update && apt-get install -y --no-install-recommends \

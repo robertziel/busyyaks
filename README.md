@@ -454,7 +454,7 @@ selected, Enter opens it) and every saved server, each with its state. The dashb
 
 ### Stack
 
-Hanami 2.3 · Puma · Sequel on SQLite or PostgreSQL · `ruby:3.4-slim` · minitest · React 18 + TypeScript + Vite (built in the image's
+Hanami 2.3 · Puma · Sequel on SQLite or PostgreSQL · `ruby:3.4.13-slim` · minitest · React 18 + TypeScript + Vite (built in the image's
 node stage) · vitest.
 
 ### Two layers: the panel and the kanban module

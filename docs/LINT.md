@@ -22,7 +22,7 @@ and builds it on first use). The host needs only git and docker — no Ruby, no 
 
 | | |
 |---|---|
-| Image | `ruby:3.4-slim` + the Gemfile's `:lint` group (overcommit, RuboCop + plugins, as `Gemfile.lock` pins them: the CI lint stage's gems) · node 22 + `npm ci` of `frontend/package-lock.json` (CI's frontend packages) · gitleaks v8.30.1 (CI's secrets stage version) |
+| Image | `ruby:3.4.13-slim` + the Gemfile's `:lint` group (overcommit, RuboCop + plugins, as `Gemfile.lock` pins them: the CI lint stage's gems) · node 22 + `npm ci` of `frontend/package-lock.json` (CI's frontend packages) · gitleaks v8.30.1 (CI's secrets stage version) |
 | What it checks | the **staged** tree: the container gets the git dir and a copy of the index, checks the index out into a tmpfs and runs overcommit there. The working tree is never mounted — a hook cannot edit a file, and overcommit never has to `git stash` unstaged changes (the stash stack is shared by every worktree) |
 | `RuboCop` | overcommit's built-in hook, `.rubocop.yml`, `--force-exclusion`; any offense, convention level included (`on_warn: fail`), anywhere in a staged file |
 | `EsLintFrontend` | ad hoc hook `scripts/hooks/eslint frontend`: `eslint --max-warnings 0 --report-unused-disable-directives` on the staged `*.ts *.tsx` under `frontend/`, run in the staged `frontend/` with its `eslint.config.js` (type-aware: it sees the whole staged project) |
