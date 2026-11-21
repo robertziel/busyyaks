@@ -1,8 +1,9 @@
 // The project's Board tab: the vendored agents_kanban Board (frontend/src/vendor/agents_kanban) bound to this app —
 // its KanbanApi port over api.ts (session cookie + X-CSRF-Token, docs/API-kanban.md routes), the open card / panel /
-// archived flag in the URL (?card=&panel=&archived=), the router for same-origin links in rendered markdown, and the
-// /api/boards cache invalidated after every write; the comment box's mic over /api/dictation when the config turns it
-// on (<meta name="dictation">); the card dialog's Terminals section (CardTerminals). No board logic lives here (test/unit/no_kanban_code_test.rb).
+// archived / on-hold flags in the URL (?card=&panel=&archived=&hold=), the router for same-origin links in rendered
+// markdown, and the /api/boards cache invalidated after every write; the comment box's mic over /api/dictation when
+// the config turns it on (<meta name="dictation">); the card dialog's Terminals section (CardTerminals). No board
+// logic lives here (test/unit/no_kanban_code_test.rb).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { apiDelete, apiGet, apiPost, apiPostForm, apiUpload, dictationOn, invalidate, userEmail } from "../api";
@@ -30,15 +31,17 @@ import {
 } from "../vendor/agents_kanban";
 
 const encSlug = (slug: string) => slug.split("/").map(encodeURIComponent).join("/");
+// ?archived=1 (the archived list) and ?on_hold=1 (the On hold view)
+const boardQuery = ({ archived, onHold }: { archived: boolean; onHold?: boolean }): string => {
+  const q = [archived && "archived=1", onHold && "on_hold=1"].filter(Boolean).join("&");
+  return q ? `?${q}` : "";
+};
 
 export function busyyaksKanbanApi(): KanbanApi {
   return {
-    board: (slug, { archived }) =>
-      apiGet<BoardData>(`/api/projects/${encSlug(slug)}/board${archived ? "?archived=1" : ""}`),
-    boardRev: (slug, { archived }) =>
-      apiGet<{ rev: string }>(`/api/projects/${encSlug(slug)}/board/rev${archived ? "?archived=1" : ""}`).then(
-        (r) => r.rev,
-      ),
+    board: (slug, opts) => apiGet<BoardData>(`/api/projects/${encSlug(slug)}/board${boardQuery(opts)}`),
+    boardRev: (slug, opts) =>
+      apiGet<{ rev: string }>(`/api/projects/${encSlug(slug)}/board/rev${boardQuery(opts)}`).then((r) => r.rev),
     card: (id) => apiGet<CardData>(`/api/cards/${id}`),
     cardRev: (id) => apiGet<{ rev: string }>(`/api/cards/${id}/rev`).then((r) => r.rev),
     sessionsLive: (id) => apiGet<SessionsLive>(`/api/cards/${id}/live`),
@@ -49,6 +52,8 @@ export function busyyaksKanbanApi(): KanbanApi {
     update: (id, patch) => apiPost<CardData>(`/api/cards/${id}`, patch),
     assign: (id, assignee) => apiPost<CardData>(`/api/cards/${id}/assign`, { assignee }),
     archive: (id, archived) => apiPost<CardData>(`/api/cards/${id}/archive`, { archived }),
+    // the operator's On hold (the card dialog's Put on hold / Release hold)
+    hold: (id, onHold) => apiPost<CardData>(`/api/cards/${id}/hold`, { on_hold: onHold }),
     setOwner: (id, session) => apiPost<CardData>(`/api/cards/${id}/owner`, { session }),
     approve: (id, approved, force) =>
       apiPost<CardData>(`/api/cards/${id}/approve`, force ? { approved, force } : { approved }),
@@ -115,6 +120,7 @@ export function ProjectBoard({ slug }: { slug: string }) {
     card: Number(params.get("card")) || null,
     panel: PANELS.includes(panelParam) ? panelParam : null,
     archived: params.get("archived") === "1",
+    onHold: params.get("hold") === "1",
   };
   const onView = (change: Partial<typeof view>) => {
     const p = new URLSearchParams(params);
@@ -122,6 +128,7 @@ export function ProjectBoard({ slug }: { slug: string }) {
     if ("card" in change) set("card", change.card == null ? null : String(change.card));
     if ("panel" in change) set("panel", change.panel ?? null);
     if ("archived" in change) set("archived", change.archived ? "1" : null);
+    if ("onHold" in change) set("hold", change.onHold ? "1" : null);
     setParams(p, { replace: !("card" in change) });
   };
   return (

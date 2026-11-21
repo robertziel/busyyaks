@@ -81,6 +81,7 @@ module Busyyaks
     post "/api/cards/:id/comment", to: "api.cards.comment"
     post "/api/cards/:id/assign", to: "api.cards.assign"
     post "/api/cards/:id/archive", to: "api.cards.archive"
+    post "/api/cards/:id/hold", to: "api.cards.hold"   # operator: put on hold / release
     post "/api/cards/:id/owner", to: "api.cards.owner"
     post "/api/cards/:id/dialog-answer", to: "api.cards.dialog_answer"   # operator only: press a session dialog option
     post "/api/cards/:id/approve", to: "api.cards.approve"

@@ -27,6 +27,7 @@ class MigrationsTest < Minitest::Test
   BEFORE_PR_FLAGS = 20_261_208_467_999 # just before the PR base / merge flags: whatever lands before it stays
   BEFORE_PROGRESS = 20_261_209_491_999 # just before the progress watch (Schema v13 + projects.branch_tips)
   RUNTIME = 20_261_217_523_000 # the runtime settings (before writer_sync_seconds joined them)
+  BEFORE_HOLD = 20_261_217_523_000 # the last migration before v15 (On hold)
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -496,6 +497,20 @@ class MigrationsTest < Minitest::Test
     assert_empty @db[:gh_pr_checks].all
     migrate(BEFORE_PRS)
     assert_equal({ "prs" => { "local" => lpr } }, meta.(local), "down keeps the assignments")
+  end
+
+  # v15 adds cards.on_hold_at / on_hold_by; the rollback drops both (a held card is a live card again)
+  def test_v15_adds_the_hold_and_the_rollback_drops_it
+    hold = %i[on_hold_at on_hold_by]
+    migrate(BEFORE_HOLD)
+    assert_empty @db.schema(:cards, reload: true).map(&:first) & hold
+    migrate
+    assert_equal hold, @db.schema(:cards, reload: true).map(&:first) & hold
+    project("p")
+    id = card("p", "doing", "held", on_hold_at: 50, on_hold_by: "op")
+    migrate(BEFORE_HOLD)
+    assert_empty @db.schema(:cards, reload: true).map(&:first) & hold
+    assert_equal "doing", @db[:cards].where(id: id).get(:column), "the card itself is kept"
   end
 
   # v14 turns each card's prs {role => url} into a list (by / at from its own "PR <role>: <url>" line);
