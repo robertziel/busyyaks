@@ -5,6 +5,10 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `CITATION.cff`: how to cite busyyaks (GitHub's "Cite this repository"); its version and date follow the newest release in this file.
+
 ## [1.0.0-beta.3] - 2026-11-19
 
 ### Added
