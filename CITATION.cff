@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software in your academic work, please cite it as below."
+type: software
+title: "busyyaks"
+abstract: "Run your own agency, from your own machine, staffed by Claude agents: a dashboard, a kanban board and an MCP server for every project on one host."
+authors:
+  - family-names: "Zieliński"
+    given-names: "Robert"
+    alias: "robertziel"
+repository-code: "https://github.com/robertziel/busyyaks"
+url: "https://github.com/robertziel/busyyaks"
+license: Apache-2.0
+keywords:
+  - agents
+  - kanban
+  - mcp
+  - dashboard
+version: "1.0.0-beta.3"
+date-released: 2026-11-19
