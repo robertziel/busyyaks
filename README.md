@@ -520,7 +520,7 @@ A board's workflow is data, stored in the database: its **columns**, each of one
 | Gates and approvals | |
 |---|---|
 | enter | only `kanban_handoff` (QA steps, PR URL, CI URL; screenshots for a UI change) |
-| green CI first | a handoff into an approval gate and every explicit approval (the **Approve** button, the step's named transition) are refused until the step's PR checks are read and green (`approval.requires_green_ci`); the operator's drag is never refused by it |
+| green CI first | off by default; a gate column with `requires_green_ci: true` (Workflow editor: **Requires green CI**, or the repo's `.busyyaks/workflow.yml`) refuses a handoff into it and every explicit approval (the **Approve** button, the step's named transition) until the step's PR checks are read and green; the operator's drag is never refused by it — docs/DEPLOY.md § A gate that waits for green CI |
 | approve | the gate's **Approve** button (card dialog) records who approved and pings the owner, who then takes the next named transition |
 
 | Edit · read | |

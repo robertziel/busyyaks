@@ -28,6 +28,7 @@ class MigrationsTest < Minitest::Test
   BEFORE_PROGRESS = 20_261_209_491_999 # just before the progress watch (Schema v13 + projects.branch_tips)
   RUNTIME = 20_261_217_523_000 # the runtime settings (before writer_sync_seconds joined them)
   BEFORE_HOLD = 20_261_217_523_000 # the last migration before v15 (On hold)
+  BEFORE_GREEN_CI = 20_261_221_574_000 # the last migration before v16 (green CI per gate)
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -511,6 +512,21 @@ class MigrationsTest < Minitest::Test
     migrate(BEFORE_HOLD)
     assert_empty @db.schema(:cards, reload: true).map(&:first) & hold
     assert_equal "doing", @db[:cards].where(id: id).get(:column), "the card itself is kept"
+  end
+
+  # v16 adds board_columns.requires_green_ci (null = no gate asks CI); the rollback drops it, the columns kept
+  def test_v16_adds_requires_green_ci_and_the_rollback_drops_it
+    migrate(BEFORE_GREEN_CI)
+    refute_includes @db.schema(:board_columns, reload: true).map(&:first), :requires_green_ci
+    migrate
+    assert_includes @db.schema(:board_columns, reload: true).map(&:first), :requires_green_ci
+    n = @db[:board_columns].count
+    assert_operator n, :>, 0, "the template's columns"
+    assert_equal [nil], @db[:board_columns].distinct.select_map(:requires_green_ci), "no gate asks CI after the step"
+    @db[:board_columns].where(type: "gate").update(requires_green_ci: 1)
+    migrate(BEFORE_GREEN_CI)
+    refute_includes @db.schema(:board_columns, reload: true).map(&:first), :requires_green_ci
+    assert_equal n, @db[:board_columns].count, "the columns themselves are kept"
   end
 
   # v14 turns each card's prs {role => url} into a list (by / at from its own "PR <role>: <url>" line);

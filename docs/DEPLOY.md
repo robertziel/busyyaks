@@ -602,6 +602,64 @@ service's env`.
 
 Off again: `github_hook: none`, empty the secret, restart web + github, delete the webhook on GitHub.
 
+## A gate that waits for green CI
+
+**Default: no gate asks CI.** The operator's Approve and an agent's `kanban_handoff` into a gate go through whatever
+the PR's checks say. Each GATE column opts in on its own with `requires_green_ci: true` (engine Schema v16,
+`board_columns.requires_green_ci`); the host-wide `config/kanban.yml` `approval.requires_green_ci` is gone and refused
+at boot, naming the move.
+
+| | without it (default) | `requires_green_ci: true` on the gate |
+|---|---|---|
+| `kanban_handoff` into the gate | moves the card | refused until the step's checks are read and green ("hand off once CI is green") |
+| **Approve** (or the step's own transition) | approves | refused 422 until green, naming the PR and its state |
+| a drag along the step | approves | approves, logged "(dragged: CI not asked)" |
+| Force | not shown | approves, logged "(forced: CI not asked)" |
+| "N waiting for you" | the card counts | counts only while its Approve would pass now, else "waiting for CI" (`gate_hold`) |
+| notifier watch pass | — | the step's checks asked ahead (prefetch), the gate guard, a red CI pings the owner once |
+
+**Set it up**
+
+1. `config/busyyaks.yml` `ci.required` lists the repo of every PR the gated cards are assigned (§ CI checks below) —
+   an unlisted repo refuses the gate with "no required CI contexts for <repo>".
+2. Tick the gate: the board's **Workflow** button → select the gate column → **Requires green CI** → Save. Or in the
+   repo's `.busyyaks/workflow.yml` (the writer applies it within `writer_sync_seconds`):
+
+   ```yaml
+   columns:
+     - { key: staging_deploy_check, label: "Staging: Deploy check", type: gate, requires_green_ci: true }
+   ```
+
+   Only a `gate` column takes it (`true` on another type is refused, the board keeps its last shape and its header
+   says why); the step it gates is the gate's one forward operator exit.
+3. Check it: hand a card off into that gate while its PR's CI is red — refused with the state; green — accepted, and
+   Approve answers at once.
+
+**What a ticked gate reads** (`CiChecks::Port#approval_checks`, the card's ASSIGNED PRs — `kanban_pr_assign`):
+
+| project | the board's first step | a later step before the final (e.g. Deploy check after the merge) | the final step |
+|---|---|---|---|
+| enrolled (`git mirror-init`: `local` + `public` PRs) | every `local` PR open, its head green | every `local` PR merged, its merge commit's required checks green | every `public` PR open and green, once the local PRs are merged |
+| any other (`pr` PRs) | every `pr` PR open, its head green | each `pr` PR as it stands: still open → its head green (as before the merge); merged → its merge commit's required checks green (`gh_pr_checks` `merge:<N>`, never the head); closed unmerged or not found → refused, named repo#N | every `pr` PR open and green |
+
+A PR merged ahead of the board's first step is left out there (nothing to approve on → refused "no PR whose checks
+could be read"); the merge commit is never replaced by the PR head.
+
+**Which gates**: those where an approval on red CI would ship something broken — on a staging → main board (Staging:
+Human review → Staging: Merged → Staging: Deploy check → Main: Human review → Awaiting merge) typically Staging: Deploy
+check (the merged staging PR's merge commit) and Main: Human review (the main PR's head). Leave a gate unticked where
+a person looks first and CI is not the question.
+
+**Upgrading a deployment** (in this order — after the migration no gate asks CI, whatever `approval` said):
+
+1. Before the restart: delete `approval:` from `config/kanban.yml` (every service refuses to boot with it, naming
+   this move).
+2. Back up the database (§ The database), deploy: migration `20261221584000` = Schema v16.
+3. On every board that had green CI first: **Workflow** → each gate that should keep asking → **Requires green CI**
+   → Save (or `requires_green_ci: true` in its `.busyyaks/workflow.yml`).
+4. Check one: the board JSON's `rules.green_ci` lists exactly the ticked gates
+   (`GET /api/projects/<slug>/workflow` → `rules.green_ci`).
+
 ## CI checks (the approval gate)
 
 Card #470: the `github` service reads a card's assigned PR checks for the approval gate (`lib/busyyaks/ci_checks.rb`,

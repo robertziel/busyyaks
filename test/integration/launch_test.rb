@@ -5,6 +5,7 @@ require "minitest/mock"
 require "rack/test"
 require "socket"
 require "json"
+require_relative "../support/green_ci"
 
 # The launcher-backed API: projects tree + sessions, launch (with the Remote Control verdict), create, agents sidebar.
 class LaunchTest < Minitest::Test
@@ -259,6 +260,7 @@ mtime: Busyyaks::Clock.now.to_f, }],
   def test_a_handed_over_card_puts_its_owner_session_in_review
     fake_launcher
     kb = Busyyaks::Kanban.default
+    GreenCi.on!(kb, "group/repo") # its gates ask CI
     id = kb.create(slug: "group/repo", title: "ship it", by: "op", column: "doing")
     kb.set_owner(id, session: "elsewhere", by: "op")
     now = Busyyaks::Clock.epoch # the github service read the PR's checks green: a gate is handed off on green CI only

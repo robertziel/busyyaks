@@ -112,8 +112,10 @@ class NoKanbanCodeTest < Minitest::Test
     assert_equal %w[lead worker team plain], ex.agent_type_keys
     assert(ex.agent_types.all? { |t| t.launchers == ["claude"] && t.model.nil? }, "one launcher, no model names")
     assert_equal %w[claude] * 4, ex.agent_types.map { |t| t.launcher!(nil) }, "one launcher = unambiguous"
-    # a repo without CI must work: no CI URL demanded at handoff, no green-checks gate on approval (both commented options)
-    assert_equal [false, nil], [ex.handoff.requires_ci_url, ex.approval]
+    # a repo without CI must work: no CI URL demanded at handoff (a commented option); green CI at a gate is the board's
+    # own setting (requires_green_ci), never this file's
+    refute ex.handoff.requires_ci_url
+    refute_respond_to ex, :approval
     assert_nil ex.review_loop, "no review-loop columns of one operator's board (a commented option)"
     uncommented = [path, Busyyaks::AgentSettings::TEMPLATE].map do |f|
       File.readlines(f).reject { |l| l.lstrip.start_with?("#") }.join

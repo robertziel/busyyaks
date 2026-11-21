@@ -6,6 +6,7 @@ require "uri"
 require "digest"
 require "busyyaks/kanban"
 require "busyyaks/ci_checks"
+require_relative "../support/green_ci"
 
 # The idle watch on busyyaks's wiring: Port (notifier side) + Poller (github side) over gh_pr_checks, into the engine's
 # Notifier. A fake api.github.com and a fake launcher; the engine's own rules are tested in the vendored suite.
@@ -104,6 +105,7 @@ class CiChecksTest < Minitest::Test
                          stale_after: 180, wanted_for: 600, clock: -> { @now })
     @states = Busyyaks::PrStates::Poller.new(db: @conn, client: client, gate: @gate, wanted_for: 600, clock: -> { @now })
     @kb = Busyyaks::Kanban.store(@conn, clock: -> { @now })
+    GreenCi.on!(@kb, "o-r") # every gate of the test board asks CI
     @id = @kb.create(slug: "o-r", title: "ship", by: "lead", column: "doing")
     @kb.update(@id, { "assignee" => "lead" }, by: "lead")
     @kb.set_owner(@id, session: "shop", by: "lead")
@@ -475,7 +477,7 @@ class CiChecksTest < Minitest::Test
   # the board's own approvals (Board#approvals), not written by hand.
   def local_steps
     enrol!
-    v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
+    v3 = GreenCi.fixture("local_v4")
     @kb.board_save("o-r", v3, by: "operator")
     assign!("local", "https://github.com/o/r_local/pull/112")
     steps = CK.steps(@kb.board_of("o-r"))
@@ -506,6 +508,36 @@ class CiChecksTest < Minitest::Test
     @poller.run
     assert_equal [112, "success"], @port.approval_checks(card, deploy).values_at(:number, :state)
     assert_equal "the local PR o/r_local#112 was merged before its approval", @port.approval_checks(card, first)[:reason]
+  end
+
+  # a project that is NOT enrolled (its `pr` PRs) on a board whose workflow merges before a later gate (e.g.
+  # Staging: Merged → Staging: Deploy check): a step between the first and the final reads each PR as it stands — still
+  # open = its head's CI, as before (a review gate before the merge is unchanged); merged = its MERGE commit's CI, green
+  # passes, red and pending refuse; the board's first step still leaves out a PR merged ahead of it
+  def test_a_plain_projects_post_merge_gate_reads_the_merge_commits_ci
+    @kb.board_save("o-r", GreenCi.fixture("local_v4"), by: "operator") # its gates ask CI; o-r has no enrolment
+    first, deploy = CK.steps(@kb.board_of("o-r"))
+    card = @kb.card(@id)
+    @http.pulls = [PR]
+    @http.statuses = [{ "state" => "failure", "updated_at" => finish_at(@now) }]
+    @port.approval_checks(card, deploy)
+    @poller.run
+    assert_equal [112, "failure"], @port.approval_checks(card, deploy).values_at(:number, :state), "open: its head, red"
+    @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]
+    @poller.run
+    assert_equal [112, "success", "abc"], @port.approval_checks(card, deploy).values_at(:number, :state, :head),
+                 "open: its head, green — a middle step before the merge passes as it did"
+    @http.pulls = [MERGED]
+    @poller.run
+    assert_equal "unpolled", @port.approval_checks(card, deploy)[:state], "merged: its merge commit's CI is asked"
+    { "pending" => "pending", "failure" => "failure", "success" => "success" }.each do |status, state|
+      @http.statuses_by_sha["m1" * 20] = [{ "state" => status, "updated_at" => finish_at(@now) }]
+      @poller.run
+      assert_equal [112, state], @port.approval_checks(card, deploy).values_at(:number, :state), status
+    end
+    assert(@http.requests.any? { |u| u.include?("/repos/o/r/commits/#{'m1' * 20}/status?") }, "the merge commit")
+    assert_nil @port.approval_checks(card, first), "the first step: a PR merged ahead of it is left out → nothing to " \
+                                                   "approve on (the engine refuses: no PR whose checks could be read)"
   end
 
   # a closed-unmerged or unknown PR among several is never dropped — the final step's public PRs and a
@@ -865,7 +897,7 @@ class CiChecksTest < Minitest::Test
   # read is refused as unknown, never guessed.
   def test_the_store_gates_the_public_step_on_the_local_merge_and_the_public_ci
     enrol!
-    v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
+    v3 = GreenCi.fixture("local_v4")
     @kb.board_save("o-r", v3, by: "operator")
     assign!("local", "https://github.com/o/r_local/pull/112")
     @conn[:cards].where(id: @id).update(column: "public_human_review")
@@ -901,8 +933,9 @@ class CiChecksTest < Minitest::Test
   end
 
   # end to end (card #247, the operator: "Mirror: Human review should be after CI passes, not before!"): busyyaks's
-  # Store is built with the port (config approval.requires_green_ci), so the HANDOFF into the gate is refused until the
-  # github service read the PR's checks green — and the operator's Approve right after it answers at once.
+  # Store is built with the port and the board's gates require green CI, so the HANDOFF into the gate is
+  # refused until the github service read the PR's checks green — and the operator's Approve right after it answers at
+  # once.
   def test_the_handoff_waits_for_green_ci_and_approve_then_answers_at_once
     hand = -> { @kb.handoff(@id, qa: "open the board and check the card moves", pr_url: "https://github.com/o/r/pull/112",
                                  ci_url: "https://ci.example.com/job/r/1/", ui_change: false, by: "lead") }
@@ -1048,7 +1081,7 @@ class CiChecksTest < Minitest::Test
   # again → counted, "ready for your approval" once
   def local_gate!
     enrol!
-    v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
+    v3 = GreenCi.fixture("local_v4")
     @kb.board_save("o-r", v3, by: "operator")
     @conn[:cards].where(id: @id).update(column: "local_agent_review")
     assign!("local", "https://github.com/o/r_local/pull/112")
@@ -1286,7 +1319,7 @@ class CiChecksTest < Minitest::Test
   # owner is pinged by the PR watch
   def test_gate_card_whose_pr_closed_is_told_not_silent
     enrol!
-    v3 = JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)))
+    v3 = GreenCi.fixture("local_v4")
     @kb.board_save("o-r", v3, by: "operator")
     assign!("local", "https://github.com/o/r_local/pull/112")
     assign!("public", "https://github.com/o/r/pull/43")
@@ -1535,8 +1568,7 @@ class CiChecksTest < Minitest::Test
   # local PR merged + the open public PR). → {gate => card id}
   def gated_cards
     enrol!
-    @kb.board_save("o-r", JSON.parse(File.read(File.expand_path("../../vendor/agents_kanban/fixtures/boards/" \
-                                                                 "local_v4.board.json", __dir__))), by: "operator")
+    @kb.board_save("o-r", GreenCi.fixture("local_v4"), by: "operator")
     merged = ->(n) { MERGED.merge("number" => n, "merge_commit_sha" => format("%040d", n)) }
     @http.pulls = [PR, merged[113], merged[114], merged[115], PUB, PUB.merge("number" => 6)]
     @http.statuses = [{ "state" => "success", "updated_at" => finish_at(@now) }]

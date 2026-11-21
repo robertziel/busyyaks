@@ -137,10 +137,11 @@ module Busyyaks
         answers.empty? ? nil : combine(answers)
       end
 
-      # The engine's approval gate (config/kanban.yml approval.requires_green_ci): what each approval step checks.
+      # The engine's approval gate (a gate column's requires_green_ci): what each approval step checks.
       # The PRs are the ones the card's agents ASSIGNED (kanban_pr_assign → metadata prs, a list; PrStates.assigned),
       # EVERY one of the step's role — a card may change several repos (busyyaks + the engine it vendors): all must be
-      # green. A project that is not enrolled: its `pr` PRs. An enrolled one works on its `local` PRs:
+      # green. A project that is not enrolled: its `pr` PRs, step by step (see plain_step).
+      # An enrolled one works on its `local` PRs:
       #   - the board's FIRST approval step (Local: Human review) = every local PR OPEN with green checks (one merged
       #     ahead of the approval → refused);
       #   - a later non-final step (Local: Deploy check → Open public PR) = every local PR MERGED and the CI of each one's
@@ -266,7 +267,7 @@ module Busyyaks
 
       def step_checks(card, step)
         project = @projects.call(card[:project_slug])
-        return gate_checks(card, targets(card), nil, nil) unless project && project[:local_mode]
+        return plain_step(card, step) unless project && project[:local_mode]
 
         locals = prs!(card, PrStates::ROLES[:local])
         unless step[:final]
@@ -285,6 +286,22 @@ module Busyyaks
         gate_checks(card, prs!(card, PrStates::ROLES[:public]), "public", ->(repo) { base_of(card, project, repo, "public") })
       rescue PrStates::Invalid => e
         raise Unavailable, e.message
+      end
+
+      # A project that is not enrolled (its `pr` PRs): its first and final step = every `pr` PR open and green
+      # (a merged one left out, as gate_checks says). A step between them is read per PR as it stands — the workflow
+      # does not say which steps follow its merge: one still OPEN answers with its head, as every step did before (a
+      # review gate before the merge is unchanged); one MERGED with its merge commit's CI (`merge:<N>`, ci.required —
+      # never the PR head: a Deploy check after the board's merge, e.g. Staging: Merged → Staging: Deploy check); closed
+      # unmerged or not found blocks, named repo#N.
+      def plain_step(card, step)
+        prs = targets(card)
+        return gate_checks(card, prs, nil, nil) if prs.empty? || step[:final] || first_step?(card, step)
+
+        combine(prs.map do |repo, number|
+          merged = answer(repo, "pr:#{number}")[:state] == "merged"
+          tagged(merged ? merge_ci(repo, number, nil) : gate_read(card, repo, number, nil, nil), repo)
+        end)
       end
 
       # An approval over several PRs of one role (the final step's public PRs, a plain project's `pr` PRs): only a
