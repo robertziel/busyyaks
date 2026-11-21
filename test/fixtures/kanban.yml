@@ -78,11 +78,7 @@ progress_watch: { stale_minutes: 30 }
 # review / Local: Deploy check / Awaiting merge): kanban_handoff needs how to QA it (≥ 20 chars), the PR and CI URLs,
 # and screenshots attached first for a UI change
 handoff: { requires_pr_url: true, requires_ci_url: true, qa_min_chars: 20, ui_change_needs_screenshots: true }
-# the approval gate: every approval step (Approve button or a drag along it) is refused until the PR it is about has
-# green checks — the open local PR at Local: Human review, its merge commit's jenkins/ci on `local` at Local deploy
-# check, the public PR (the card's metadata prs.public) at Public: Human review (the final step, once the local PR is merged) — read from the github service through lib/busyyaks/ci_checks.rb (approval_checks);
-# null = no gate
-approval: { requires_green_ci: true }
+# approval: gone — the tests' boards set requires_green_ci on their gate columns (test/support)
 # parent dependencies: recorded and shown only (false); true enforces them
 dependencies: false
 # session dialogs: asked only once on screen 30 s (a prompt cleared in seconds never reaches the operator);

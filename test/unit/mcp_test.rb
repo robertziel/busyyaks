@@ -3,6 +3,7 @@
 require "test_helper"
 require "rack/test"
 require "busyyaks/mcp_server"
+require_relative "../support/green_ci"
 
 class McpTest < Minitest::Test
   include DBReset
@@ -160,6 +161,7 @@ out.dig("config", "runner"))
     store.replace_commits("a", [row.("a1", 3600, true), row.("a2", 7200, true), row.("a3", 30 * 3600, true)], t - (90 * 86_400))
     store.replace_commits("b", [row.("b1", 40 * 3600, false), row.("b2", 50 * 3600, false)], t - (90 * 86_400))
     k = Busyyaks::Kanban.default
+    GreenCi.on!(k, "a") # its gates ask CI
     id = k.create(slug: "a", title: "check me", by: "agent", column: "qa")
     k.move(id, column: "human_check", by: "op")
     held = k.create(slug: "a", title: "ci first", by: "agent", column: "qa")

@@ -147,7 +147,7 @@ module Busyyaks
     def store(conn = db, clock: -> { Busyyaks::Clock.epoch })
       boards = ->(slug) { conn[:projects].where(slug: slug.to_s).any? }
       AgentsKanban::Store.new(conn, config: config(conn), markdown: markdown, clock: clock, boards: boards,
-                              ci: ci_port(conn, clock: clock), # approval.requires_green_ci
+                              ci: ci_port(conn, clock: clock), # the gates' requires_green_ci
                               prs: pr_roles(conn))
     end
 

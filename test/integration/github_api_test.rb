@@ -2,6 +2,7 @@
 
 require "test_helper"
 require "rack/test"
+require_relative "../support/green_ci"
 
 # GET /api/github (the /github page's data) and the CSP that lets GitHub avatars — and only them — load.
 class GithubApiTest < Minitest::Test
@@ -62,8 +63,7 @@ class GithubApiTest < Minitest::Test
                          mine_window: 0, dirty: 0, scanned_at: 0, local_mode: "own", local_repo: "git@github.com:o/r.git",
                          public_repo: "git@github.com:p/x.git")
     kb = Busyyaks::Kanban.default
-    board = File.expand_path("../../vendor/agents_kanban/fixtures/boards/local_v4.board.json", __dir__)
-    kb.board_save("x", JSON.parse(File.read(board)), by: "operator")
+    kb.board_save("x", GreenCi.fixture("local_v4"), by: "operator") # its gates ask CI
     id = kb.create(slug: "x", title: "dragged here", by: "op", column: "awaiting_merge")
     kb.assign_pr(id, url: "https://github.com/o/r/pull/9", role: "local", by: "op")
     assert_equal [{ "card" => id, "project" => "x", "column" => "awaiting_merge", "path" => "/projects/x?tab=board&card=#{id}",

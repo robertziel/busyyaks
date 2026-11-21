@@ -7,6 +7,7 @@ require "fileutils"
 require "busyyaks/kanban"
 require "socket"
 require_relative "../support/writer_server"
+require_relative "../support/green_ci"
 
 class KanbanApiTest < Minitest::Test
   include DBReset
@@ -200,6 +201,7 @@ class KanbanApiTest < Minitest::Test
   end
 
   def test_waiting_lists_the_operators_cards_and_its_rev_changes_with_them
+    GreenCi.on!(kb, "g/r") # the gates ask CI only when the board says so
     r0 = api(:get, "/api/waiting/rev")["rev"]
     assert_equal "no-store", last_response.headers["Cache-Control"]
     assert_equal({ "waiting_columns" => %w[human_check ready], "total" => 0, "projects" => [], "held" => [], "external" => [],
@@ -531,8 +533,15 @@ ans.values_at("body", "author")
 
   # the local board (local_v4) asks the operator three times — the approve endpoint works at every step, withdraw too
   def test_approve_at_every_step_of_a_local_board
-    v3 = JSON.parse(File.read(File.join(__dir__, "../../vendor/agents_kanban/fixtures/boards/local_v4.board.json")))
-    j = api(:post, "/api/projects/g/r/workflow", v3)
+    # a gate asks CI only when its column says requires_green_ci — the fixture's never do: Approve passes
+    api(:post, "/api/projects/g/r/workflow", GreenCi.fixture("local_v4", on: false))
+    assert_equal 200, last_response.status
+    plain = api(:post, "/api/projects/g/r/board", { title: "no ci", column: "local_human_review" })["card"]["id"]
+    c = api(:post, "/api/cards/#{plain}/approve", { approved: true })["card"]
+    assert_equal [200, "local_merged_pr"], [last_response.status, c["column"]], "no PR, no CI read: approved"
+    api(:post, "/api/cards/#{plain}/approve", { approved: false })
+    api(:post, "/api/cards/#{plain}/move", { column: "todo" })
+    j = api(:post, "/api/projects/g/r/workflow", GreenCi.fixture("local_v4"))
     assert_equal 200, last_response.status
     assert_equal [%w[local_human_review local_merged_pr deploy_check], %w[deploy_check public_create_pr public_agent_review],
                   %w[public_human_review awaiting_merge done],],

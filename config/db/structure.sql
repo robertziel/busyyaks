@@ -370,6 +370,7 @@ CREATE TABLE `board_columns`(
   `type` varchar(255) NOT NULL,
   `position` integer NOT NULL,
   `hide_after_hours` integer,
+  `requires_green_ci` integer,
   UNIQUE(`project_slug`, `key`)
 );
 CREATE TABLE `board_transitions`(
@@ -551,4 +552,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261210469000_agents_kanban_pr_lists.rb'),
 ('20261217523000_runtime_settings.rb'),
 ('20261219429000_runtime_writer_sync.rb'),
-('20261221574000_agents_kanban_on_hold.rb');
+('20261221574000_agents_kanban_on_hold.rb'),
+('20261221584000_gate_requires_green_ci.rb');

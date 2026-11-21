@@ -3,6 +3,7 @@
 require "test_helper"
 require "rack/test"
 require "busyyaks/mcp_server"
+require_relative "../support/green_ci"
 
 class McpKanbanTest < Minitest::Test
   include DBReset
@@ -90,6 +91,7 @@ class McpKanbanTest < Minitest::Test
   end
 
   def test_agent_works_a_card_end_to_end
+    GreenCi.on!(Busyyaks::Kanban.default, "g/r") # its gates ask CI
     ok("kanban_label_save", project: "g/r", name: "auth", color: "red", author: "agent-a")
     c = ok("kanban_create", project: "g/r", title: "Fix login", author: "agent-a", tmux_session: "tl_g_r", labels: ["auth"],
                             priority: "high", description: "**why**")

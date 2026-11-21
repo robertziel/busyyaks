@@ -90,13 +90,10 @@ progress_watch: { stale_minutes: 30 }
 # (≥ 20 chars), the PR URL, and screenshots attached first for a UI change. requires_ci_url: true also demands the CI
 # run's URL — turn it on once your repos have CI (any system whose run has a URL)
 handoff: { requires_pr_url: true, requires_ci_url: false, qa_min_chars: 20, ui_change_needs_screenshots: true }
-# the approval gate: null = none (the Approve button records the approval whatever the PR's checks say). With CI on
-# GitHub, `approval: { requires_green_ci: true }` refuses every approval step (Approve button or a drag along it) until
-# the PR it is about has green checks, read from the github service through lib/busyyaks/ci_checks.rb
-# (approval_checks): no PR, checks pending / failed / not read yet → refused with the reason. A kanban_handoff INTO such a
-# gate is refused the same way ("hand off once CI is green"), and every card waiting there has its checks asked on each
-# notifier watch pass, so the Approve answers at once. Without CI every approval would be refused, so it ships off
-approval: null
+# (approval: REMOVED) whether an approval step waits for green CI is each GATE column's own setting —
+# `requires_green_ci: true` on that column in the repo's .busyyaks/workflow.yml, or "Requires green CI" in the board's
+# Workflow editor; absent = false, CI never asked (docs/DEPLOY.md § A gate that waits for green CI). A config that
+# still has `approval` is refused at boot, naming the move.
 # parent dependencies: recorded and shown only (false); true enforces them
 dependencies: false
 # session dialogs: asked only once on screen 30 s (a prompt cleared in seconds never reaches the operator);
