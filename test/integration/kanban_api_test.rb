@@ -91,6 +91,25 @@ class KanbanApiTest < Minitest::Test
     assert_equal "A2", api(:get, "/api/cards/#{id}")["card"]["title"]
   end
 
+  # the operator's On hold — the card leaves the board for the On hold view and comes back on release
+  def test_hold_and_release_through_the_api
+    held = kb.create(slug: "g/r", title: "held", by: "op", column: "doing")
+    other = kb.create(slug: "g/r", title: "other", by: "op", column: "doing")
+    c = api(:post, "/api/cards/#{held}/hold", on_hold: true)
+    assert_equal 200, last_response.status
+    refute_nil c["card"]["on_hold"]
+    board = api(:get, "/api/projects/g/r/board")
+    assert_equal ["board", 1], board.values_at("view", "on_hold_count")
+    assert_equal [other], board["columns"].flat_map { |col| col["cards"] }.map { |x| x["id"] }
+    view = api(:get, "/api/projects/g/r/board?on_hold=1")
+    assert_equal ["on_hold", [held]], [view["view"], view["columns"].flat_map { |col| col["cards"] }.map { |x| x["id"] }]
+    refute_equal api(:get, "/api/projects/g/r/board/rev")["rev"], api(:get, "/api/projects/g/r/board/rev?on_hold=1")["rev"]
+    assert_match(/on_hold must be/, api(:post, "/api/cards/#{held}/hold", on_hold: "maybe")["error"])
+    assert_equal 422, last_response.status
+    assert_nil api(:post, "/api/cards/#{held}/hold", on_hold: false)["card"]["on_hold"]
+    assert_equal 0, api(:get, "/api/projects/g/r/board")["on_hold_count"]
+  end
+
   def test_refusals_are_json_errors
     id = kb.create(slug: "g/r", title: "x", by: "op")
     assert_match(/column must be one of/, api(:post, "/api/cards/#{id}/move", column: "done")["error"])

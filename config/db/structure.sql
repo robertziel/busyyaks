@@ -124,7 +124,9 @@ CREATE TABLE `cards`(
   `progress_pinged_at` integer,
   `progress_commented_at` integer,
   `progress_stale_at` integer,
-  `progress_error` text
+  `progress_error` text,
+  `on_hold_at` integer,
+  `on_hold_by` varchar(255)
 );
 CREATE INDEX `cards_project_slug_column_position_index` ON `cards`(
   `project_slug`,
@@ -548,4 +550,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261209492000_progress_watch.rb'),
 ('20261210469000_agents_kanban_pr_lists.rb'),
 ('20261217523000_runtime_settings.rb'),
-('20261219429000_runtime_writer_sync.rb');
+('20261219429000_runtime_writer_sync.rb'),
+('20261221574000_agents_kanban_on_hold.rb');

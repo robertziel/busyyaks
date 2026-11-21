@@ -6,13 +6,14 @@ module Busyyaks
   module Actions
     module API
       module Board
-        # GET /api/projects/*slug/board[?column=&archived=1] — docs/API-kanban.md
+        # GET /api/projects/*slug/board[?column=&archived=1&on_hold=1] — docs/API-kanban.md (on_hold=1: the On hold view)
         class Show < Busyyaks::Action
           include KanbanAPI
 
           def handle(req, res)
             refusing(res) do
-              answer(res, api(req).board(slug(req), column: req.params[:column].to_s, archived: req.params[:archived] == "1"))
+              answer(res, api(req).board(slug(req), column: req.params[:column].to_s, archived: req.params[:archived] == "1",
+                                                    on_hold: req.params[:on_hold] == "1"))
             end
           end
         end

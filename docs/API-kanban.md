@@ -95,7 +95,8 @@ Single-card responses (`{card, activity}`) add `description` (markdown), `descri
 `kind`: `create` · `update` (body lists changed fields) · `move` (`From → To`, column labels) · `comment` (markdown + `body_html`
 + `edited` time or `null`) · `question` (an agent's `kanban_ask`: markdown + `body_html`, ends with `**Options:** \`A\` · \`B\`` when
 it has choices; author `busyyaks` for a session dialog) · `answer` (the operator pressed a session-dialog key: "pressed 2. No in &lt;session&gt;") · `owner` · `ping` (sent / failed) · `handoff` · `approve` · `watchdog` · `delete` (a comment deleted by its author) · `checklist` (added / renamed / removed a checklist,
-completed / unchecked an item, converted an item to a card) · `archive` (`archived`/`restored`) · `attachment`
+completed / unchecked an item, converted an item to a card) · `archive` (`archived`/`restored`) · `hold` (`put on hold in
+<column> — owner session … released` / `released from hold in <column>`) · `attachment`
 (`attached <name> (<size>)` / `deleted attachment <name>`). Oldest first.
 
 ## Endpoints
@@ -111,7 +112,7 @@ Projects with live cards or a Backlog.md `backlog/` dir.
                 "waiting": 2, "flagged": 1, "backlog_md": false } ] }
 ```
 
-### `GET /api/projects/*slug/board[?column=<key>][&archived=1]`
+### `GET /api/projects/*slug/board[?column=<key>][&archived=1][&on_hold=1]`
 
 ```json
 {
@@ -128,6 +129,9 @@ Projects with live cards or a Backlog.md `backlog/` dir.
 
 - `columns`: all eight in order (only `column` when `?column=` is given; unknown key → 422). Cards ordered by `position`.
 - `archived`: only with `?archived=1`, newest archived first.
+- `view`: `board`, or `on_hold` with `?on_hold=1` — the columns then hold the cards ON HOLD instead;
+  `on_hold_count` = how many cards that view holds (the header's "On hold · N" toggle). Card JSON `on_hold`:
+  `{at, by}` or `null`.
 - `assignees` (members): the operator, this project's live tmux sessions, configured launcher labels, and every author /
   assignee / creator seen on this board's cards. `launcher_error` is the reason when the launcher is down (sessions then
   missing from the list); show it.
@@ -155,6 +159,7 @@ Projects with live cards or a Backlog.md `backlog/` dir.
 | `POST /api/cards/:id/move` | `column` or `transition` (a workflow transition name out of the card's column; with `column` for a `*` fan-out), `position?` (0 = top; omitted / past the end = bottom). Archived → 422; no transition for the operator → 422 listing the transitions there are | `{card, counts, delivered}` (this board's live cards per column; `delivered` as for comments, `null` when the column did not change) |
 | `POST /api/cards/:id/assign` | `assignee` (key required; `""`/`null` unassigns) | `{card, activity}` |
 | `POST /api/cards/:id/archive` | `archived`: `true` / `false` (restore → bottom of its column) | `{card, activity}` |
+| `POST /api/cards/:id/hold` | `on_hold`: `true` / `false`: on hold = the card keeps its column, leaves the board's normal view, every count / waiting list / watch and every agent's sight (MCP: `no card N` / `no comment N` … for any field reaching it; `kanban_board`, children, members, presence and the PR-assign refusal leave it out), its owner session + assignee released, pending pings dropped; only the operator moves it; a terminal column ends the hold; release → bottom of its column, ownerless (the lead adopts it). `422` archived / finished / session-board card, a card another card (a held one too) waits for as its parent, unknown field | `{card, activity}` |
 | `POST /api/cards/:id/approve` | `approved`: `true` (default) approves the card at its approval step — a step = the board's `rules.gates.approvals` entry whose `from` is the card's column (the handoff check, e.g. Local: Human review → Local: Merged; the final one, e.g. Public: Human review → Awaiting merge): the card moves to the step's `to`, `approved`/`approved_by` set, the owner pinged; `false` withdraws (back to `from`) while it still sits approved in `to`; `force: true` (with `approved` true; the card dialog's **Force** button) approves the same step WITHOUT the green-CI gate (`approval.requires_green_ci`: no CI or PR-state question; every other refusal stays; refused 422 on a host without the gate) — the `approve` activity ends "(forced: CI not asked)" and the owner's ping says to take the next step only once the PR's checks are green — the operator only (no MCP tool; engine SPEC § 4) | `{card, activity}` · `422` not at a step |
 | `POST /api/cards/:id/pr-unassign` | `pr_url`, `reason` (both required): takes that PR off the card's list of assigned PRs (metadata `prs`) — logged "PR <role> unassigned: <url> — <reason>", the entry kept in metadata `prs_removed`. The operator only through this route; agents use `kanban_pr_unassign`. PRs are assigned only by the agents that open them (`kanban_pr_assign`) | `{card, activity}` · `422` not assigned / no reason |
 
@@ -275,7 +280,7 @@ Every tool takes `author` (the agent or tmux session name) for writes; refusals 
 |---|---|
 | Board | lists with drag-and-drop (correct under a filter / due order), list menu (cards · overdue · due 24 h · unassigned, add, collapse — collapse kept per browser), filter: text · labels (any) · member (me / unassigned / name) · due (overdue / 24 h / none / complete), view order: list / due date |
 | Card face | `? question` / `? N choices` (flagged `needs_operator`, any column), `⛔ blocked: <reason>` (`blocked_external`), `round n/3` (a review column), **no listener** (assignee without owner session in a listened column), cover, label strips (click: names), due badge, description, comments, attachments (paperclip + count), checklist x/y, priority, #id, assignee avatar |
-| Card modal | `?card=<id>[&panel=labels\|due\|members\|checklist\|cover]`: title, members/labels/due, "Question for you" box (flagged `needs_operator`: question, option buttons → the answer comment; the card stays in its column), "Blocked (external)" box (reason, link, by), "Nobody is listening" warning + owner picker above the comment box when no owner session, `delivered` under it after a comment, owner panel with the latest ping (status · reason · tries · times), description, checklists, activity (comments edit/delete by author, "edited"); sidebar: members, labels (create/rename/recolour/delete), checklist, due (+complete), cover, move, priority, copy link, archive |
+| Card modal | `?card=<id>[&panel=labels\|due\|members\|checklist\|cover]`: title, members/labels/due, "Question for you" box (flagged `needs_operator`: question, option buttons → the answer comment; the card stays in its column), "Blocked (external)" box (reason, link, by), "Nobody is listening" warning + owner picker above the comment box when no owner session, `delivered` under it after a comment, owner panel with the latest ping (status · reason · tries · times), description, checklists, activity (comments edit/delete by author, "edited"); sidebar: members, labels (create/rename/recolour/delete), checklist, due (+complete), cover, move, priority, copy link, archive, Put on hold / Release hold |
 | Editor | Write / Preview (`/api/markdown`), toolbar bold · italic · code · link · list · task list · attach; `Ctrl+B/I/E/K`, `Ctrl+Enter` save, `Esc` cancel. Description and comment editors: paste an image / drop a file / the paperclip → upload, a placeholder at the caret becomes the snippet; progress chip; a failure stays visible with the server's reason |
 | Attachments | "Attachments · N": one sideways row of miniature tiles, newest first, the newest marked "latest"; each caption = file name · time · a "comment" link to the comment that shows it (jumps there and focuses it). A picture / video opens the lightbox (`Esc` closes it first; Download · Delete there; a video plays); any other file downloads, ✕ deletes it; a delete of a file a comment shows says that comment keeps a broken link. A file no comment shows stays on its "attached" timeline event, also with details hidden; several pictures in one comment / description render as one row. Sidebar **Attach** (file picker, multiple); drop files anywhere on the open card |
 | Keys (board) | arrows focus · `Enter`/`e` open · `n` new card in focused list · `c` archive · `l` labels · `d` due · `m` members · `Space` assign to me · `Alt+←/→` list · `Alt+↑/↓` order · `q` my cards · `f`/`/` filter · `Esc` · `?` overlay |
