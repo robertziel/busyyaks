@@ -39,7 +39,7 @@ class RubyImageTest < Minitest::Test
   end
 
   def test_the_known_dockerfiles_are_found
-    assert_equal %w[Dockerfile scripts/hooks/Dockerfile scripts/lint/Dockerfile], DOCKERFILES
+    assert_equal %w[Dockerfile scripts/harness-lab/Dockerfile scripts/hooks/Dockerfile scripts/lint/Dockerfile], DOCKERFILES
   end
 
   def test_the_docs_name_the_pinned_image

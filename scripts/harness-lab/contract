@@ -1,0 +1,227 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Runs each real agent CLI in tmux against the mock and records what it really does: starts · answers ·
+# MCP tool · a dialog before a shell command · a paste typed mid-turn. Prints one JSON line per harness, keeps each
+# step's screen under <out>/<harness>/. Exit 1 naming every step that failed.
+require "fileutils"
+require "json"
+require "open3"
+require "timeout"
+
+class Lab
+  WAIT = 45
+  attr_reader :dir, :home, :work, :url
+
+  def initialize(name, out)
+    @name = name
+    @out = File.join(out, name)
+    @dir = File.join(@out, "run")
+    @home = File.join(@out, "home")
+    @work = File.join(@out, "work")
+    FileUtils.mkdir_p([@dir, @home, @work])
+    port = File.join(@dir, "port")
+    @server = Process.spawn("node", File.join(__dir__, "lab_mock.mjs"), @dir, port,
+%i[out err] => File.join(@dir, "server.log"))
+    up = wait("mock up", 5) { File.size?(port) }
+    unless up
+      Process.kill("TERM", @server)
+      Process.wait(@server)
+      raise "#{name}: the mock server did not start: #{File.read(File.join(@dir, 'server.log'))}"
+    end
+
+    @url = "http://127.0.0.1:#{File.read(port)}"
+  end
+
+  def tmux(*args) = Open3.capture2e("tmux", "-u", "-L", "lab-#{@name}", *args)
+  def screen = tmux("capture-pane", "-p", "-t", "lab").first
+  def keys(*k) = tmux("send-keys", "-t", "lab", *k)
+  def snap(step) = File.write(File.join(@out, "#{step}.txt"), screen)
+
+  def start(env, argv)
+    envs = env.flat_map { |k, v| ["-e", "#{k}=#{v}"] }
+    _o, st = tmux("-f", "/dev/null", "new-session", "-d", "-s", "lab", "-x", "120", "-y", "40", "-c", @work, *envs, *argv)
+    raise "tmux start failed" unless st.success?
+  end
+
+  def paste(text)
+    Open3.capture2e("tmux", "-L", "lab-#{@name}", "load-buffer", "-", stdin_data: text)
+    tmux("paste-buffer", "-p", "-d", "-t", "lab")
+    sleep 0.4
+    keys("Enter")
+  end
+
+  def rows = File.exist?(log) ? File.readlines(log).map { |l| JSON.parse(l) } : []
+  def log = File.join(@dir, "requests.jsonl")
+  def asked?(word) = rows.any? { |r| r["text"].to_s.include?(word) }
+  def path(file) = File.join(@dir, file)
+
+  def wait(what, seconds = WAIT)
+    Timeout.timeout(seconds) do
+      sleep 0.2 until yield
+      true
+    end
+  rescue Timeout::Error
+    warn "#{@name}: timed out: #{what}"
+    false
+  end
+
+  def stop
+    tmux("kill-server")
+    Process.kill("TERM", @server)
+    Process.wait(@server)
+  end
+end
+
+# How one harness is configured and driven.
+class Harness
+  def initialize(lab) = @lab = lab
+  def approve = @lab.keys("Enter")
+  def first_run(_screen) = nil
+  def dialog?(screen) = screen.match?(self.class::DIALOG)
+end
+
+class ClaudeLab < Harness
+  DIALOG = /Do you want to proceed/
+  def name = "claude"
+  def ready?(s) = s.include?("❯") || s.match?(/\? for shortcuts/)
+
+  def launch
+    home = @lab.home
+    FileUtils.mkdir_p(File.join(home, ".claude"))
+    File.write(File.join(home, ".claude.json"), JSON.generate(
+      hasCompletedOnboarding: true, projects: { @lab.work => { hasTrustDialogAccepted: true } }
+    ))
+    File.write(File.join(home, ".claude/settings.json"), JSON.generate(apiKeyHelper: "echo lab", theme: "dark"))
+    mcp = File.join(home, "mcp.json")
+    File.write(mcp, JSON.generate(mcpServers: { lab: { type: "http", url: "#{@lab.url}/mcp" } }))
+    @lab.start({ "HOME" => home, "ANTHROPIC_BASE_URL" => @lab.url, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" => "1",
+                 "ENABLE_TOOL_SEARCH" => "false", },
+               ["claude", "--model", "lab-model", "--permission-mode", "default", "--mcp-config", mcp,
+                "--allowedTools", "mcp__lab__lab_echo",])
+  end
+end
+
+class HermesLab < Harness
+  DIALOG = /dangerous|allow once/i
+  def name = "hermes"
+
+  BUSY = "queue"
+  def ready?(s) = !s.include?("No thanks") && s.match?(/❯|⚕|Welcome/)
+
+  # the first-run telemetry question, answered once: its default is "No thanks"
+  def first_run(screen)
+    return if @consented || !screen.include?("No thanks")
+
+    @consented = true
+    @lab.keys("Enter")
+  end
+
+  def launch
+    File.write(File.join(@lab.home, "config.yaml"), <<~Y)
+      model: {default: lab-model, provider: custom, base_url: "#{@lab.url}/v1", api_key: lab, context_length: 200000}
+      mcp_servers: {lab: {url: "#{@lab.url}/mcp"}}
+      approvals: {mode: manual}
+      display: {busy_input_mode: #{self.class::BUSY}}
+      tools: {tool_search: {enabled: false}}
+    Y
+    @lab.start({ "HOME" => @lab.home, "HERMES_HOME" => @lab.home }, %w[hermes chat])
+  end
+end
+
+# Hermes's default mode, what a host that never set it runs
+class HermesInterruptLab < HermesLab
+  BUSY = "interrupt"
+  def name = "hermes-interrupt"
+end
+
+class CodexLab < Harness
+  DIALOG = /Would you like to run|Yes, proceed/i
+  def name = "codex"
+  def ready?(s) = s.match?(/Ask Codex|OpenAI Codex|›/)
+
+  def launch
+    File.write(File.join(@lab.home, "config.toml"), <<~T)
+      model = "lab-model"
+      model_provider = "lab"
+      approval_policy = "on-request"
+      sandbox_mode = "read-only"
+      [model_providers.lab]
+      name = "lab"
+      base_url = "#{@lab.url}/v1"
+      wire_api = "responses"
+      [mcp_servers.lab]
+      url = "#{@lab.url}/mcp"
+      [mcp_servers.lab.tools.lab_echo]
+      approval_mode = "approve"
+      [projects."#{@lab.work}"]
+      trust_level = "trusted"
+    T
+    @lab.start({ "HOME" => @lab.home, "CODEX_HOME" => @lab.home }, ["codex"])
+  end
+end
+
+def run_harness(key, klass, out)
+  lab = Lab.new(key, out)
+  h = klass.new(lab)
+  r = { harness: h.name }
+  h.launch
+  r[:starts] = lab.wait("ready") do
+    s = lab.screen
+    h.first_run(s)
+    h.ready?(s)
+  end
+  lab.snap("1-start")
+  return r unless r[:starts]
+
+  sleep 6 # MCP discovery runs in the background on Hermes
+  lab.paste("LAB_HELLO")
+  r[:answers] = lab.wait("reply") { lab.asked?("LAB_HELLO") && lab.screen.include?("LAB_REPLY") }
+  lab.snap("2-answer")
+  lab.paste("LAB_MCP")
+  r[:mcp_tool] = lab.wait("mcp call") { lab.rows.any? { |x| x["mcp"] == "tools/call" } }
+  r[:mcp_answered] = lab.wait("mcp done", 10) { lab.screen.include?("LAB_DONE") }
+  lab.snap("3-mcp")
+  lab.paste("LAB_SHELL")
+  r[:dialog_before_shell] = lab.wait("dialog", 15) { h.dialog?(lab.screen) && !File.exist?(lab.path("shell-ran")) }
+  lab.snap("4-dialog")
+  sleep 1.5 # a dialog takes keys only once it has drawn
+  h.approve
+  r[:shell_after_approve] = lab.wait("shell ran", 15) { File.exist?(lab.path("shell-ran")) }
+  r[:shell_answered] = lab.wait("shell turn done", 10) { lab.screen.scan("LAB_DONE").size >= 2 }
+  lab.snap("5-shell")
+  sleep 1
+  lab.paste("LAB_SLOW")
+  held = lab.wait("slow turn", 15) { File.exist?(lab.path("holding")) }
+  lab.paste("LAB_PING") if held
+  sleep 2
+  r[:ping_kept_turn] = held && !lab.asked?("LAB_PING")
+  lab.snap("6-midturn")
+  File.write(lab.path("release"), "1")
+  r[:ping_delivered_after] = lab.wait("ping arrives", 20) { lab.asked?("LAB_PING") }
+  r[:slow_answer_kept] = lab.rows.any? { |x| x["text"].to_s.include?("LAB_PING") && x["history_has_slow_answer"] }
+  r[:slow_answer_on_screen] = lab.wait("slow turn's own answer", 5) { lab.screen.include?("LAB_SLOW_DONE") }
+  lab.snap("7-after")
+  r[:mock_clean] = lab.rows.none? { |x| x.key?("error") || x["side"] == "no_tools" }
+  r
+ensure
+  lab&.stop
+end
+
+HARNESSES = {
+  "claude" => ClaudeLab,
+  "hermes" => HermesLab,
+  "hermes-interrupt" => HermesInterruptLab,
+  "codex" => CodexLab,
+}.freeze
+
+out = ARGV.fetch(0)
+keys = ARGV[1..].empty? ? HARNESSES.keys : ARGV[1..]
+keys.each { |k| HARNESSES.fetch(k) { abort "unknown harness #{k} (#{HARNESSES.keys.join(', ')})" } }
+failed = keys.flat_map do |k|
+  res = run_harness(k, HARNESSES.fetch(k), out)
+  puts JSON.generate(res)
+  res.except(:harness).reject { |_step, ok| ok }.keys.map { |step| "#{k}.#{step}" }
+end
+failed.each { |f| warn "FAILED #{f}" }
+exit(failed.empty? ? 0 : 1)
