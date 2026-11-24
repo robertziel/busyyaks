@@ -138,6 +138,9 @@ module Busyyaks
       # `hermes gateway run` is Hermes's daemon (the same bootstrap, its words after the -c script), never a session
       def claims?(pid, procfs)
         argv = procfs.argv(pid)
+        # a pip / uv install's entry point: `python <path>/hermes <words>`
+        entry = argv.first(2).index { |a| File.basename(a) == "hermes" }
+        return argv[entry + 1] != "gateway" if entry
         return false unless MARKERS.any? { |m| argv.join(" ").include?(m) }
 
         script = argv.index("-c")

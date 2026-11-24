@@ -124,6 +124,13 @@ LEADS = begin
 rescue Busyyaks::LauncherRules::Invalid => e
   abort "lead records: #{e.message}"
 end
+# The Hermes sessions this launcher started in queue mode with the busyyaks MCP (HermesBoard): only those
+# take a typed ping.
+HERMES_BOARD = begin
+  Busyyaks::HermesBoard::Records.new(STATE_DIR)
+rescue Busyyaks::HermesBoard::Invalid => e
+  abort "hermes board records: #{e.message}"
+end
 # config/busyyaks.yml launch.start_seconds (required, LauncherRules.start_seconds!): how long a launch waits for its
 # agent to come up while the launcher's command still runs; a bad or missing value stops the start.
 START_SECONDS = begin
@@ -433,7 +440,9 @@ end
 def command_running?(pane_pid, command)
   tree(pane_pid).any? do |pid|
     argv = (File.read("/proc/#{pid}/cmdline") rescue "").split("\0")
-    argv.first(2).any? { |a| File.basename(a) == command } # a program, or the script an interpreter runs (hermes: python)
+    # a program, the script an interpreter runs (python <path>/hermes), or a process that names itself (hermes's
+    # installer launcher: `python -I -c <bootstrap>`, comm hermes)
+    argv.first(2).any? { |a| File.basename(a) == command } || (File.read("/proc/#{pid}/comm").strip rescue "") == command
   end
 end
 
@@ -451,25 +460,87 @@ def claude_skills_on(name, stage)
   on ? nil : "the agent runs without its skills: no --plugin-dir #{stage} on its claude (its launcher command drops busyyaks's flags)"
 end
 
-# hermes: asks hermes itself, in the session process's OWN environment (its HERMES_HOME as the pane resolved it, its
-# BUSYYAKS_SKILLS_DIR), whether the entry skill is listed — `hermes skills list` through the same interpreter + script
+# hermes: asks the ALLOWLISTED command (hermes_ask), with this launch's environment, whether the entry skill is listed
+# (`hermes skills list`); the running process is only read, to check it has that same environment.
 HERMES_PROBE_SECONDS = 60
+HERMES_TABLE_COLUMNS = "400"
 
-def hermes_skills_on(name, command, delivery)
+# The session's Hermes as DATA: [pid, its environment]. Nothing read here is ever executed.
+def hermes_session(name, command)
   pane_pid = tmux("list-panes", "-t", "=#{name}", "-F", "\#{pane_pid}")[0].lines.first.to_i
-  pid, argv = tree(pane_pid).lazy.map { |p| [p, (File.read("/proc/#{p}/cmdline") rescue "").split("\0")] }
-                              .find { |_p, a| a.first(2).any? { |x| File.basename(x) == command } }
-  return "no #{command} process in the pane to ask for its skills" unless pid
+  pid = tree(pane_pid).find do |p|
+    argv = (File.read("/proc/#{p}/cmdline") rescue "").split("\0")
+    argv.first(2).any? { |a| File.basename(a) == command } || (File.read("/proc/#{p}/comm").strip rescue "") == command
+  end
+  pid && [pid, (File.read("/proc/#{pid}/environ") rescue "").split("\0").to_h { |kv| kv.split("=", 2) }]
+end
 
-  env = (File.read("/proc/#{pid}/environ") rescue "").split("\0").to_h { |kv| kv.split("=", 2) }
-  prog = argv[0..argv.index { |x| File.basename(x) == command }]
-  out, err, st = Open3.capture3(env, "timeout", HERMES_PROBE_SECONDS.to_s, *prog, "skills", "list", unsetenv_others: true,
-                                                                                                   chdir: "/")
+# Asks Hermes through the ALLOWLISTED command (launch.commands), resolved by the launch shell as the session's was, with
+# the environment this launch gave it. Never a program, argv or environment taken from a pane's process.
+def hermes_ask(launcher, stage, delivery, *args)
+  env = ENV.to_h.merge(delivery.env(stage), Busyyaks::HermesBoard.env(File.join(stage, Busyyaks::HermesBoard::DIR)),
+                       "COLUMNS" => HERMES_TABLE_COLUMNS) # its tables are cut to the terminal's width
+  Open3.capture3(env, "timeout", HERMES_PROBE_SECONDS.to_s, "bash", "-ic",
+                 Shellwords.join([launcher.command, *args]), chdir: "/", in: File::NULL)
+end
+
+# The running process has THIS launch's environment (read as data) → nil, else why
+def hermes_env_refusal(env, delivery, stage)
+  want = delivery.env(stage).merge(Busyyaks::HermesBoard.env(File.join(stage, Busyyaks::HermesBoard::DIR)))
+  key = want.keys.find { |k| env[k] != want[k] }
+  key && "its process does not run with this launch's #{key}"
+end
+
+def hermes_skills_on(name, launcher, stage, delivery)
+  _pid, env = hermes_session(name, launcher.command)
+  return "no #{launcher.command} process in the pane to ask for its skills" unless env
+
+  why = hermes_env_refusal(env, delivery, stage)
+  return "the agent runs without its skills: #{why}" if why
+
+  out, err, st = hermes_ask(launcher, stage, delivery, "skills", "list")
   return "hermes skills list failed (exit #{st.exitstatus}): #{err.strip[0, 300]}" unless st.success?
 
   home = env["HERMES_HOME"].to_s.empty? ? File.join(env.fetch("HOME", "~"), ".hermes") : env["HERMES_HOME"]
   why = delivery.listed(out, home)
   why && "the agent runs without its skills: #{why}"
+end
+
+# Is this session a board agent (HermesBoard)? Asked of the allowlisted Hermes with this launch's environment; the
+# process is checked to run with that same environment and home. Its user config is read, never written. Proven →
+# recorded (pid + start time), so pings may be typed into this process. → nil, else why
+def hermes_board_on(name, launcher, stage, delivery)
+  pid, env = hermes_session(name, launcher.command)
+  return "no #{launcher.command} process in the pane to ask for its board settings" unless pid
+
+  why = hermes_env_refusal(env, delivery, stage)
+  return "not a board session: #{why}" if why
+
+  out, err, st = hermes_ask(launcher, stage, delivery, "config", "path")
+  return "hermes config path failed (exit #{st.exitstatus}): #{err.strip[0, 300]}" unless st.success?
+
+  path = out.lines.last.to_s.strip
+  home = env["HERMES_HOME"].to_s
+  return "not a board session: its process uses #{home}, the check read #{path}" \
+    unless home.empty? || File.dirname(path) == home
+
+  url = Busyyaks::HermesBoard.mcp!(ENV_FILE)[:url]
+  get = lambda do |key|
+    o, _e, s = hermes_ask(launcher, stage, delivery, "config", "get", key)
+    s.success? ? o.lines.last.to_s.strip : nil
+  end
+  why = Busyyaks::HermesBoard.refusal(path: path, user_config: (File.read(path) rescue nil), url: url, get: get)
+  return "not a board session: #{why}" if why
+
+  ticks = proc_start_ticks(pid) or return "its process #{pid} ended during the start check"
+  HERMES_BOARD.record(session: name, pid: pid, start_ticks: ticks, alive: ->(s) { tmux("has-session", "-t", "=#{s}")[2] })
+  nil
+end
+
+def proc_start_ticks(pid)
+  Integer(File.read("/proc/#{pid}/stat").sub(/\A.*\) /m, "").split[19], 10)
+rescue SystemCallError, ArgumentError, TypeError
+  nil
 end
 
 # tmux's session names → [names, nil]; [[], nil] when no server runs; [nil, why] when tmux cannot be read
@@ -520,14 +591,20 @@ end
 # launch): claude_code = Claude Code's folder-trust prompt answered (LaunchTrust) + `claude --remote-control <name>`
 # up; hermes = no trust prompt, no remote control: its command running in the pane. skills_why = nil when the started
 # agent has the session's staged skills, else why: claude_code --plugin-dir <stage> on its argv; hermes
-# lists busyyaks-session when asked in the session's own environment.
+# lists busyyaks-session when the allowlisted command is asked with this launch's environment.
 HOST_KINDS = {
   "claude_code" => { trust: true, up: ->(name, _launcher, clock) { confirm_remote_control(name, clock) },
                      up?: ->(r) { r[:remote_control] == "on" },
-                     skills_why: ->(name, _launcher, stage, _delivery) { claude_skills_on(name, stage) }, },
+                     skills_why: ->(name, _launcher, stage, _delivery) { claude_skills_on(name, stage) },
+                     stage_env: ->(_stage) { {} }, board_why: ->(_name, _launcher, _stage, _delivery) {}, },
   "hermes" => { trust: false, up: ->(name, launcher, clock) { confirm_process(name, launcher.command, clock) },
                 up?: ->(r) { r[:process] == "on" },
-                skills_why: ->(name, launcher, _stage, delivery) { hermes_skills_on(name, launcher.command, delivery) }, },
+                skills_why: ->(name, launcher, stage, delivery) { hermes_skills_on(name, launcher, stage, delivery) },
+                # the per-launch overlay (queue mode + the busyyaks MCP), proven after the start
+                stage_env: lambda { |stage|
+                  Busyyaks::HermesBoard.env(Busyyaks::HermesBoard.stage!(stage, Busyyaks::HermesBoard.mcp!(ENV_FILE)))
+                },
+                board_why: ->(name, launcher, stage, delivery) { hermes_board_on(name, launcher, stage, delivery) }, },
 }.freeze
 
 # The start of a session the engine already registered (Api#launch → this): the type's argv from the board config
@@ -597,14 +674,15 @@ def launch_staged(job)
     prompt = delivery.prompt(t.prompt && AgentsKanban::Launch.render(t.prompt, **vars))
     argv = AgentsKanban::Launch.argv(cfg, type: t.key, launcher: launcher.key, session: name, prompt: prompt,
                                           extra: delivery.extra(stage))
-  rescue AgentsKanban::Invalid => e
+    kind_env = host_kind[:stage_env].call(stage)
+  rescue AgentsKanban::Invalid, Busyyaks::HermesBoard::Invalid, SystemCallError => e
     FileUtils.rm_rf(stage)
     raise ArgumentError, e.message
   end
   argv = Busyyaks::LauncherRules.scoped(argv, scopes: SCOPES, session: name, lead: cfg.lead_type?(t))
   cmd = Shellwords.join(argv)
   # `bash -ic` so ~/.bashrc functions (fullclaude, …) exist; `exec bash` keeps the pane open after claude exits.
-  env = delivery.env(stage).flat_map { |k, v| ["-e", "#{k}=#{v}"] }
+  env = delivery.env(stage).merge(kind_env).flat_map { |k, v| ["-e", "#{k}=#{v}"] }
   _out, err, ok = tmux("new-session", "-d", "-s", name, "-c", dir, *env, "bash", "-ic", "#{cmd}; exec bash")
   unless ok
     FileUtils.rm_rf(stage)
@@ -619,8 +697,17 @@ def launch_staged(job)
   # reported to the operator as the result's verdict + reason (information only: it never decides the keep)
   waiting = up ? dialog_on_screen(name) : nil
   rc = rc.merge(remote_control: "failed", reason: "waiting on a dialog: #{waiting}") if waiting && rc[:remote_control] == "on"
+  # a lead that came up: its key into LEADS (the launcher's state only) BEFORE the checks below, which take
+  # seconds on Hermes while its first turn already runs and may spawn. A start they refuse kills the session,
+  # and a key is only ever answered while its session runs.
+  alive = ->(s) { tmux("has-session", "-t", "=#{s}")[2] }
+  LEADS.record(session: name, type: t.key, dir: dir, key: lead_key, alive: alive) if lead_key && up
   # an agent that is up without the stage (a shell function that drops the extra flags, an env reset): refused loudly
   if up && (why = host_kind[:skills_why].call(name, launcher, stage, delivery))
+    up = false
+    rc = rc.merge(reason: why)
+  end
+  if up && (why = host_kind[:board_why].call(name, launcher, stage, delivery))
     up = false
     rc = rc.merge(reason: why)
   end
@@ -638,9 +725,6 @@ def launch_staged(job)
     FileUtils.rm_rf(stage) if gone
     return { ok: false, error: error, status: 422 }
   end
-  # a lead that came up: its key into LEADS (the launcher's state only)
-  alive = ->(s) { tmux("has-session", "-t", "=#{s}")[2] }
-  LEADS.record(session: name, type: t.key, dir: dir, key: lead_key, alive: alive) if lead_key
   { ok: true, session: name, type: t.key, launcher: launcher.key, kind: launcher.kind, dir: dir, prompt: !prompt.nil?,
     skills: receipt, project_skills: project_skills, **trust, **rc }
 end
@@ -960,7 +1044,8 @@ end
 # Through the collector's own input op ("send": bracketed paste + Enter, refused unless the snapshot's engine is
 # still alive in that pane). Before forwarding: the session must be in a fresh snapshot (else gone), must not
 # show a question dialog (a paste would answer it — retry later), and every pane's engine must be of a family that
-# takes typed input mid-turn (Engines::Family#typeable?: Claude Code queues it; Hermes' state is unreadable).
+# takes typed input mid-turn (Engines::Family#typeable?: Claude Code queues it; Hermes only as a process this launcher
+# started in queue mode, hermes_queue_proof, and only while its composer is the plain prompt).
 def notify(req)
   name = req["session"].to_s
   sock = (req["socket"] || "default").to_s
@@ -980,7 +1065,11 @@ def notify(req)
 
   panes = s["panes"]
   return { ok: false, retry: true, error: "a question is on its screen" } if panes.any? { |p| p["waiting_for"] }
-  untypeable = ENGINES.untypeable(panes.map { |p| p["engine"] })
+  # its start check is still running: the proof below is written when it ends (a ping is never dropped for that)
+  return { ok: false, retry: true, error: "session #{name} is still starting" } if STAGE_LOCK.synchronize { IN_FLIGHT.include?(name) }
+
+  proof = hermes_queue_proof(name, sock, panes)
+  untypeable = ENGINES.untypeable(panes.map { |p| p["engine"] }, proven: !proof.nil?)
   return { ok: false, unsupported: true, error: "cannot type into #{untypeable.map { |n, why| "#{n} (#{why})" }.join(', ')}" } if untypeable.any?
 
   # The screen NOW, read by the collector (parse_dialog): any dialog on it — a question, the folder-trust prompt,
@@ -989,6 +1078,11 @@ def notify(req)
   return { ok: false, retry: true, error: "cannot read its screen: #{screen.dig('error', 'message')}" } unless screen["ok"]
   return { ok: false, retry: true, error: "a dialog is on its screen (#{screen.dig('dialog', 'kind') || 'question'})" } if screen["dialog"]
   return { ok: false, retry: true, error: "a dialog is on its screen" } if screen["text"].to_s.match?(/Enter to confirm|Do you trust|Yes, I trust this folder/i)
+
+  panes.each do |p|
+    why = ENGINES.fetch(p["engine"]).family.paste_refusal(screen["text"])
+    return { ok: false, retry: true, error: why } if why
+  end
 
   res = collector(op: "send", session: name, socket: sock, text: text)
   puts "#{Busyyaks::Clock.now.iso8601} notify #{name}: #{res['ok'] ? 'sent' : res.dig('error', 'message')}"
@@ -999,10 +1093,28 @@ def notify(req)
   # a send whose outcome is unknown — the paste had started (unconfirmed) or the collector never answered (collector) —
   # may already be on the agent's screen: it is never sent again. `unsupported` is the key the notifier ends a ping on.
   return { ok: false, unsupported: true, unconfirmed: true, error: "outcome unknown, not resent (it may have been typed): #{message}" } if %w[unconfirmed collector].include?(type)
+  # a dialog, or an input holding something else: the ping stays pending with this reason on its card, and the notifier
+  # fails it visibly after its give-up time. Nothing was typed over it
+  # paste_unconfirmed: pasted, never seen in the input: failed at once and shown, because a retry could paste it twice
+  return { ok: false, unsupported: true, error: message } if type == "paste_unconfirmed"
 
-  { ok: false, retry: type == "tmux", error: message }
+  { ok: false, retry: %w[tmux dialog input_busy input_unreadable].include?(type), error: message }
 rescue Errno::ENOENT, Errno::ECONNREFUSED, Errno::EACCES => e
   { ok: false, retry: true, error: "collector read socket unavailable: #{e.class}" }
+end
+
+# The session's one pane runs the Hermes process this launcher recorded in queue mode → that proof, else nil
+def hermes_queue_proof(name, sock, panes)
+  return nil unless panes.size == 1 && ENGINES.known?(panes[0]["engine"]) &&
+                    ENGINES.fetch(panes[0]["engine"]).family.typeable_with_proof?
+
+  # the agent's pid is in the collector's snapshot only: `agents` does not hand it on
+  raw = JSON.parse(File.read(COLLECTOR.snapshot)).fetch("sessions").find { |s| s["name"] == name && s["socket"] == sock }
+  pid = raw && raw.fetch("panes").first["pid"]
+  ticks = pid && proc_start_ticks(pid)
+  ticks && HERMES_BOARD.proof(name, pid, ticks)
+rescue SystemCallError, JSON::ParserError, KeyError
+  nil
 end
 
 # ── dialogs: the screen of an owner session blocked on a dialog, and the operator's key press ──────────

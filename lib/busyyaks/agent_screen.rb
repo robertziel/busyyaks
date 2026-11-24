@@ -87,6 +87,11 @@ module Busyyaks
     HERMES = [
       r("osc_title_blocked", "blocked", 1100, "osc_title", regex: [/\A⚠[︎️]?(?:\s|\z)/]),
       r("osc_title_working", "working", 1050, "osc_title", regex: [/\A⏳[︎️]?(?:\s|\z)/]),
+      # from real panes (test/fixtures/screens/hermes_*): the approval's hint + its `⚠ ❯` prompt row. The rule
+      # below reads 14 rows, which a five-choice panel on an 80-column pane pushes its title and first choice out of.
+      r("live_approval_prompt", "blocked", 960, "bottom_non_empty_lines(6)",
+        contains: ["to select, enter to confirm"], line_regex: [/\A⚠\s*❯/]),
+      r("composer_idle", "idle", 200, "bottom_non_empty_lines(2)", line_regex: [/\A❯(?:\s|\z)/]),
       r("dangerous_command_approval", "blocked", 900, "bottom_non_empty_lines(14)",
         any: [{ contains: ["dangerous"] }, { contains: ["approval"] }, { contains: ["allow once", "deny"] },
               { line_regex: [/\A\s*[▸>]?\s*1\.\s*allow/i] },],

@@ -1,0 +1,24 @@
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+────────────────────────────────────────
+● [busyyaks] New comment on card #1 "E2E Hermes card" (In progress, demo) by
+operator:
+
+... (+1 more line)
+
+Read the card with kanban_card id=1, act on it, and reply with kanban_comment.
+────────────────────────────────────────
+
+  ┊ ⚡ preparing mcp__busyyaks__kanban_comment…
+  ┊ 🔌 Busyyaks · kanban comment  0.0s
+  Queued for the next turn: [busyyaks] New comment on card #1 "E2E Hermes card"
+(In progress, demo) by opera...
+  ( •_•)>⌐■-■ processing...  (↓ 26 tok)
+
+ Queue · 1 queued · /queue list · Ctrl+R collapse
+ 1. [busyyaks] New comment on card #1 "E2E Hermes card" (In progress, demo) by…
+ ☤ lab-model │ ~6.84K/200K pinned │ [░░░░░░░░░░] ~3% │ ◷ 0.1s.. ─ e2e title #21
+────────────────────────────────────────────────────────────────────────────────
+☤ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel
+────────────────────────────────────────────────────────────────────────────────
+

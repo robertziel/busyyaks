@@ -43,7 +43,9 @@ class EnginesTest < Minitest::Test
     assert_equal "Hermes", t.pane("hermes")[:label]
     assert_match(/"codex" is not configured/, t.pane("codex")[:error])
     assert_equal [], t.untypeable(%w[claudeapi localclaude claudeapi])
-    assert_equal [["hermes", "family hermes"], ["codex", "not configured"]], t.untypeable(%w[claudeapi hermes codex])
+    assert_equal [["hermes", "family hermes: not launched by busyyaks in queue mode"], ["codex", "not configured"]],
+                 t.untypeable(%w[claudeapi hermes codex])
+    assert_equal [["codex", "not configured"]], t.untypeable(%w[hermes codex], proven: true), "only with the launcher's proof"
     COLLECTOR.each { |n| assert t.known?(n), n }
   end
 

@@ -333,7 +333,7 @@ to the CLI:
 | kind | how | checked after the start |
 |---|---|---|
 | claude_code | `--plugin-dir <stage>` (plugin `busyyaks`) + the prompt opens with `/busyyaks:session` | the `claude` process's argv carries `--plugin-dir <stage>` |
-| hermes | `tmux new-session -e BUSYYAKS_SKILLS_DIR=<stage>` + `-s busyyaks-session`; the skills in `<stage>/busyyaks-skills/`, reached by the line `- ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills` under `skills.external_dirs` of hermes's `config.yaml` | `hermes skills list`, run in the session process's own environment (its `HERMES_HOME`, its variable), lists `busyyaks-session`; else killed + refused with the file and the line to add |
+| hermes | `tmux new-session -e BUSYYAKS_SKILLS_DIR=<stage>` + `-s busyyaks-session`; the skills in `<stage>/busyyaks-skills/`, reached by the line `- ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills` under `skills.external_dirs` of hermes's `config.yaml` | `hermes skills list`, run through the allowlisted command with this launch's environment (the running process is only read, to check it has that environment), lists `busyyaks-session`; else killed + refused with the file and the line to add |
 
 Hermes, measured on v0.21.5: an `external_dirs` entry passes `os.path.expandvars`, a relative one is anchored at
 `HERMES_HOME`, a missing dir is skipped. So for every run busyyaks does not start (variable unset) the line stays
@@ -347,6 +347,35 @@ its real path stays inside), and no skill file may hold Claude Code's `` !`comma
 when the skill loads): refused with the file and line, never stripped. `skills.project: allow` still means a trusted
 repo's committers write text the launched agent follows — the same trust its `.claude/` settings already have.
 The launch result and the launcher log name each skill with its source, load and sha256.
+
+### A Hermes session on the board
+
+Every Hermes launch gets a per-launch overlay, `<stage>/hermes-managed/config.yaml` (dir 0700, file 0600, swept with the
+stage), through `HERMES_MANAGED_DIR`. `~/.hermes/config.yaml` is read, never written.
+
+| overlay key | value | why |
+|---|---|---|
+| `display.busy_input_mode` | `queue` | a ping typed mid-turn waits for the turn (Hermes's default cuts it) |
+| `mcp_servers.busyyaks` | `.env` `MCP_HOST` · `MCP_HOST_PORT` · `MCP_TOKEN` | the token only in this file: never on argv, in tmux's command or a log |
+| `tools.tool_search.enabled` | `false` | the MCP tools listed directly |
+| `display.language` · `display.skin` | `en` · `default` | what the screen rules were captured on |
+| `paste_collapse_char_threshold` | `1` | every paste is a one-line reference to its file, so a line left in the input is read back exactly |
+| `onboarding.seen.busy_input_prompt` · `.tool_progress_prompt` | `true` | Hermes records a shown tip in the user's `config.yaml`: marked seen, a board session leaves that file byte-identical |
+
+**One line in the operator's `config.yaml` is required:** `mcp_servers: {busyyaks: {enabled: false}}`, unless it already
+lists a server (Hermes skips MCP discovery when the user's file has none). Inert: an ordinary session connects to nothing.
+
+| after the start | not proven |
+|---|---|
+| the process runs with this launch's environment (read as data); then the **allowlisted** command (`launch.commands`, through the launch shell) answers `hermes config get` for each overlay key. Nothing from a pane's process is ever executed | session killed, launch refused naming the key or the line |
+| pings | typed only into the process recorded in `LAUNCHER_STATE_DIR/hermes-board.json` (pid + start time). A Hermes started by hand: `unsupported`, named |
+| a modal on screen (approval · clarify · sudo · secret · connection) | the ping waits and retries; the screen is read again right before Enter |
+| the input decides every send, no memory (`capture-pane -e`: Hermes's hint is italic, typed text never; `paste_collapse_char_threshold: 1` makes every paste a `[Pasted text … → file]` compared byte for byte) | empty → paste, read back for about 1 s, Enter (never seen → the ping fails at once, `paste_unconfirmed`: a retry could paste it twice; a failed read-back or Enter after the paste → `unconfirmed`, never resent) · holds this ping (a dialog stopped its Enter, even across a collector restart) → Enter only (a failed Enter → `unconfirmed`, never resent: it may have landed). With no memory the screen cannot tell a line a failed ping left behind from one a dialog stopped: a `paste_unconfirmed` line that renders later stays in the input, and a later ping with the SAME text sends it with its Enter — so a ping reported failed can still be delivered, once · holds anything else → nothing typed, never glued or overwritten: the ping stays pending with the reason on its card and **fails visibly after the notifier's 30 min**, as does each later ping until the input is sent or cleared · unreadable → nothing typed, same path |
+| who may be typed into | bin/collector reads the launcher's record itself; a request cannot claim it. An integrity guard between this host's own programs, not authentication: both sockets are this uid's |
+
+Approval panel → card question, digits answer it. `clarify` is not relayed (a digit only locks a choice): the pane shows
+blocked; a board session asks with `kanban_ask`. Phase: `tool` from its running-tool row, else "working" (its verb is
+random). Adding Hermes to lead / worker / team is the operator's choice in Settings → Agents & launchers.
 
 Setup: add `skills:` to `config/busyyaks.yml` (example in `config/busyyaks.example.yml`), and for hermes launchers the
 line `- ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills` under `skills.external_dirs` of the `config.yaml` hermes reads; restart

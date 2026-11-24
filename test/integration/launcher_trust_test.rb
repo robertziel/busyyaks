@@ -3,6 +3,7 @@
 require "minitest/autorun"
 require_relative "../support/wait"
 require_relative "../../lib/busyyaks/clock"
+require_relative "../../lib/busyyaks/hermes_board"
 require "tmpdir"
 require "fileutils"
 require "open3"
@@ -22,6 +23,7 @@ class LauncherTrustTest < Minitest::Test
   AGENTS = YAML.safe_load_file(File.expand_path("../fixtures/agents.yml", __dir__))
   # a lead's start carries its key: bin/launcher keeps it in its state dir, never in the session
   LEAD_KEY = "ab" * 32
+  MCP_TOKEN = "cd" * 32
   # the host allowlist (launch.commands): the fixture's two launchers + a hermes one
   INVOCATIONS = [*YAML.safe_load_file(File.expand_path("../fixtures/busyyaks.yml", __dir__)).dig("launch", "commands"),
                  { "kind" => "hermes", "command" => "hermes", "args" => ["chat"], "via_shell" => false },].freeze
@@ -54,6 +56,9 @@ class LauncherTrustTest < Minitest::Test
       LAUNCHER_STATE_DIR=#{File.join(@base, 'state')}
       CLAUDE_SESSIONS_DIR=#{File.join(@base, 'sessions')}
       CLAUDE_SESSION_URL=https://claude.example/{id}
+      MCP_HOST=127.0.0.1
+      MCP_HOST_PORT=8081
+      MCP_TOKEN=#{MCP_TOKEN}
     ENV
     # tmux: records every call; the pane shows Claude Code's trust prompt until Enter is pressed on it. new-session
     # starts the pane's process: a `claude --remote-control <session>` (a copy of bash named claude, so /proc shows
@@ -73,10 +78,25 @@ class LauncherTrustTest < Minitest::Test
           for d in "$BUSYYAKS_SKILLS_DIR"/busyyaks-skills/*; do echo "│ $(basename "$d") │ external │ local │ enabled │"; done
         exit 0
       fi
+      # `hermes config`: what its overlay (HERMES_MANAGED_DIR) sets, read as the real one resolves it
+      if [ "$1" = config ]; then
+        [ "$2" = path ] && { echo "$HERMES_HOME/config.yaml"; exit 0; }
+        [ -n "$HERMES_MANAGED_DIR" ] || { echo unset; exit 0; }
+        case "$3" in
+          display.busy_input_mode) echo queue ;; display.language) echo en ;; display.skin) echo default ;;
+          tools.tool_search.enabled) echo false ;; mcp_servers.busyyaks.enabled) echo true ;;
+          paste_collapse_char_threshold) echo 1 ;;
+          mcp_servers.busyyaks.url) sed -n 's/^ *url: *//p' "$HERMES_MANAGED_DIR/config.yaml" ;;
+        esac
+        exit 0
+      fi
       sleep 300
     SH
     File.chmod(0o755, File.join(@bin, "hermes"))
     @hermes = File.join(@base, "hermes_mode")
+    # a process named hermes that is NOT the allowlisted program: it records any run other than the pane's own
+    @pane_hermes = File.join(@base, "pane-bin/hermes")
+    @pane_hermes_ran = File.join(@base, "pane-hermes-ran")
     @noplugin = File.join(@base, "noplugin") # a launcher command that drops the extra flags
     # hermes reads its skills from config.yaml skills.external_dirs: the inert line busyyaks's launch env fills
     @home = File.join(@base, "home") # the launcher's HOME: a launch writes nothing user-wide into it
@@ -84,7 +104,8 @@ class LauncherTrustTest < Minitest::Test
     @hermes_home = File.join(@base, "hermes-home")
     FileUtils.mkdir_p(@hermes_home)
     File.write(File.join(@hermes_home, "config.yaml"),
-               YAML.dump("skills" => { "external_dirs" => ["${BUSYYAKS_SKILLS_DIR}/busyyaks-skills"] }))
+               YAML.dump("skills" => { "external_dirs" => ["${BUSYYAKS_SKILLS_DIR}/busyyaks-skills"] },
+                         "mcp_servers" => { "busyyaks" => { "enabled" => false } }))
     stub("tmux", <<~SH)
       echo "$*" >> #{@tmux_log}
       case "$1" in
@@ -94,12 +115,13 @@ class LauncherTrustTest < Minitest::Test
           for a; do cmd=$a; done
           pd=$(printf '%s' "$cmd" | sed -nE 's/.*--plugin-dir ([^ ]+).*/\\1/p')
           printf '%s\n' "$cmd" > #{@base}/command
-          for a; do case "$a" in BUSYYAKS_SKILLS_DIR=*) export "$a" ;; esac; done
+          for a; do case "$a" in BUSYYAKS_SKILLS_DIR=*|HERMES_MANAGED_DIR=*|HERMES_LANGUAGE=*) export "$a" ;; esac; done
           while [ "$1" != -s ]; do shift; done
           # each pane its own process group (setsid): teardown ends the whole group, its `sleep`s too — a TERM to the
           # pane's shell alone left them running 300 s (the flake gate's repeats ran out of tasks)
           if [ -e #{@pane} ]; then setsid sh #{@pane} "$2" "$pd" >/dev/null 2>&1 &
           elif [ -e #{@refuse} ]; then setsid sleep 300 >/dev/null 2>&1 &
+          elif [ -e #{@pane_hermes} ]; then setsid #{@pane_hermes} chat >/dev/null 2>&1 &
           elif [ -e #{@hermes} ]; then setsid #{@bin}/hermes chat >/dev/null 2>&1 &
           elif [ -e #{@noplugin} ]; then setsid #{@bin}/claude -c 'sleep 300; :' --remote-control "$2" >/dev/null 2>&1 &
           else setsid #{@bin}/claude -c 'sleep 300; :' --plugin-dir "$pd" --remote-control "$2" >/dev/null 2>&1 & fi
@@ -532,6 +554,69 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
  k["name"] }, "lead: core + its part + the entry skill"
     refute_match(/--remote-control/, started)
     refute_match(/send-keys/, tmux_calls, "no trust prompt answered for hermes")
+    # the overlay reached it through this session's env, its token only in the 0600 file
+    managed = File.join(stage, "hermes-managed")
+    assert_includes started, "-e HERMES_MANAGED_DIR=#{managed} "
+    assert_equal 0o600, File.stat(File.join(managed, "config.yaml")).mode & 0o777
+    assert_includes File.read(File.join(managed, "config.yaml")), "Bearer #{MCP_TOKEN}"
+    refute_includes tmux_calls, MCP_TOKEN
+    refute_includes File.read(@log), MCP_TOKEN
+    refute_includes File.read(File.join(@hermes_home, "config.yaml")), "Bearer", "the operator's config is never written"
+    assert_equal ["fresh_s"], JSON.parse(File.read(File.join(@base, "state/hermes-board.json"))).map { _1["session"] }
+  end
+
+  # the checks run the ALLOWLISTED command; a program a pane's process names is never executed
+  def test_the_hermes_checks_never_run_the_panes_program
+    FileUtils.mkdir_p(File.dirname(@pane_hermes))
+    File.write(@pane_hermes, <<~SH)
+      #!/bin/sh
+      [ "$1" = chat ] || : > #{@pane_hermes_ran}
+      sleep 300
+    SH
+    File.chmod(0o755, @pane_hermes)
+    FileUtils.touch(@hermes)
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    hermes = { "key" => "hermes", "label" => "hermes", "kind" => "hermes", "command" => "hermes", "args" => ["chat"],
+               "via_shell" => false, }
+    types = AGENTS["agent_types"].map do |t|
+      next t unless t["key"] == "plain"
+
+      t.merge("launchers" => t["launchers"] + ["hermes"],
+              "model" => t["model"].is_a?(Hash) ? t["model"].merge("hermes" => nil) : t["model"])
+    end
+    doc = AGENTS.merge("launchers" => AGENTS["launchers"] + [hermes], "agent_types" => types)
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "plain", "launcher" => "hermes",
+            "settings" => { "id" => 3, "doc" => doc },
+            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "plain", "cards" => "-" })
+    refute File.exist?(@pane_hermes_ran), "the launcher ran the pane's program"
+    assert r["ok"], r.inspect
+  end
+
+  # Hermes skips MCP discovery when the user's config has no mcp_servers: refused, naming the line, file unchanged
+  def test_a_hermes_launch_without_mcp_servers_is_refused_naming_the_line
+    config = File.join(@hermes_home, "config.yaml")
+    File.write(config, YAML.dump("skills" => { "external_dirs" => ["${BUSYYAKS_SKILLS_DIR}/busyyaks-skills"] }))
+    before = File.read(config)
+    FileUtils.touch(@hermes)
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    hermes = { "key" => "hermes", "label" => "hermes", "kind" => "hermes", "command" => "hermes", "args" => ["chat"],
+               "via_shell" => false, }
+    types = AGENTS["agent_types"].map do |t|
+      next t unless t["key"] == "plain"
+
+      t.merge("launchers" => t["launchers"] + ["hermes"],
+              "model" => t["model"].is_a?(Hash) ? t["model"].merge("hermes" => nil) : t["model"])
+    end
+    doc = AGENTS.merge("launchers" => AGENTS["launchers"] + [hermes], "agent_types" => types)
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "plain", "launcher" => "hermes",
+            "settings" => { "id" => 3, "doc" => doc },
+            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "plain", "cards" => "-" })
+    refute r["ok"], r.inspect
+    assert_includes r["error"], "#{config} has no mcp_servers"
+    assert_includes r["error"], Busyyaks::HermesBoard::INERT
+    assert_match(/kill-session -t =fresh_s/, tmux_calls)
+    refute File.exist?(File.join(@base, "state/skills/fresh_s")), "the stage (with the token) is gone"
+    assert_equal before, File.read(config)
   end
 
   # the start check waits on the REAL signal, not a fixed window — a planted repo (trust left: no trust wait)
