@@ -20,6 +20,11 @@
   don't work around it. Run cards concurrently, never in a serial chain. Arm ONE Haiku supervisor per batch of
   spawned workers (stuck = no commit, push or CI run of that card for 30 min; failed = a red check) and act on its
   report at once: nudge the worker, or respawn it.
+- Your workers' events reach you as pings, one each: a question to the operator, a handoff, a block, a session that
+  ended, or no progress on a card (an approved gate card its agent has not carried on included). Act on each at once:
+  no progress → nudge the worker, or respawn it; a session ended → `kanban_spawn` each card the ping lists for it once
+  it is yours (a card it lists as waiting for the operator gets none yet); a question or block → keep the rest of the
+  board moving. Nothing is sent for a plain comment.
 - A live process is not progress: judge each card by its commits, pushes, PR heads and CI runs.
 - Never idle-wait: while anything runs, do the next independent step (the next card's spawn, a nudge, a supervisor
   report).

@@ -383,7 +383,7 @@ class CiChecksTest < Minitest::Test
     # a conflicting row whose base commit was not read (GitHub gave none) is refused as not read, never guessed
     @http.pulls = [dirty.merge("base" => { "ref" => "local" })]
     @poller.run
-    assert_equal ["blocked", "the local PR #112 has conflicts with local; its base commit is not read yet (asked now " \
+    assert_equal ["unpolled", "the local PR #112 has conflicts with local; its base commit is not read yet (asked now " \
                              "— try again in a minute)",],
                  @port.approval_checks(@kb.card(@id), LOCAL_STEP).values_at(:state, :reason)
     # auto-merge on a conflicting PR still refuses (its own reason)
@@ -405,7 +405,7 @@ class CiChecksTest < Minitest::Test
       .each do |fields, reason|
         @http.pulls = [PR.merge(fields)]
         @poller.run
-        assert_equal ["blocked", reason], @port.approval_checks(@kb.card(@id), LOCAL_STEP).values_at(:state, :reason)
+        assert_equal ["unpolled", reason], @port.approval_checks(@kb.card(@id), LOCAL_STEP).values_at(:state, :reason)
       end
     # mergeable, GitHub's word kept, never "clean": unstable = its checks not all green
     # (CI's call), blocked = branch rules (the board's approval is the review), has_hooks — the gate does not refuse
@@ -1587,6 +1587,224 @@ class CiChecksTest < Minitest::Test
       notifier.watch
       @poller.run
     end
+  end
+
+  # ── the quiet-card ping on an approved card, on the real Port + Poller and the local_v4 board ──────────────
+  # the approval → the column it puts the card in → the label of the agent's next step
+  APPROVED = { "local_human_review" => ["local_merged_pr", "Local: Deploy check"],
+               "deploy_check" => ["public_create_pr", "Public: Agent review"],
+               "public_human_review" => %w[awaiting_merge Done], }.freeze
+  STRETCH = 1800 # kanban.yml progress_watch.stale_minutes in the test config
+  FIRST_READ = 90 # the first watch + poll after the approval: the stretch counts from the evidence read then
+
+  # A real handoff for the first gate: its merged PR is answered by the merge commit only after an approve that follows it
+  def approved_card(gate)
+    id = gated_cards.fetch(gate)
+    @conn[:projects].where(slug: "o-r").update(scanned_at: @now, branch_tips: "{}", remote_heads: "{}")
+    @kb.register_session(session: "shop", project: "o-r", type: "lead", launcher: "fullclaude", by: "lead")
+    @kb.set_owner(id, session: "shop", by: "lead")
+    hand_in(id) if gate == "local_human_review"
+    try_read { @kb.approve(id, by: "operator") }
+    assert_equal APPROVED.fetch(gate).first, @kb.card(id)[:column]
+    @conn[:card_pings].delete
+    id
+  end
+
+  def hand_in(id)
+    @conn[:cards].where(id: id).update(column: "local_agent_review")
+    try_read do
+      @kb.handoff(id, qa: "Open the page and check the row", pr_url: "https://github.com/o/r_local/pull/112",
+                      ci_url: CI_URL, ui_change: false, by: "lead")
+    end
+  end
+
+  # the first ask of a row answers "not read yet": the github service polls it, and the second ask reads it
+  def try_read
+    3.times do
+      return yield
+    rescue AgentsKanban::Invalid => e
+      raise unless e.message.include?("not read yet")
+
+      @poller.run
+    end
+    flunk "never read"
+  end
+
+  def merge_the_local_pr!
+    @http.pulls = @http.pulls.map { |p|
+ p["number"] == 112 ? MERGED.merge("number" => 112, "merge_commit_sha" => format("%040d", 112)) : p }
+  end
+
+  def red! = @http.statuses = [{ "state" => "failure", "updated_at" => finish_at(@now) }]
+
+  # → the owner's first quiet-card ping, after watching as the notifier and the github service do
+  def quiet_ping(id, &after_poll)
+    n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: StringIO.new)
+    ((STRETCH + FIRST_READ) / 30).times do
+      @now += 30
+      @conn[:projects].where(slug: "o-r").update(scanned_at: @now)
+      n.watch
+      @poller.run
+      after_poll&.call
+      text = @conn[:card_pings].where(card_id: id, session: "shop", reason: "progress").get(:text)
+      return text if text
+    end
+    flunk "no quiet-card ping on card #{id} in #{STRETCH + FIRST_READ}s"
+  end
+
+  def assert_held(text, nxt)
+    refute_includes text, "take its next step"
+    assert_includes text, "It is approved but held:"
+    assert_match(/CI failed|merge is failure/, text) # an open PR's head, or the merge commit once merged
+    assert_includes text, "Its next step (#{nxt}) waits for green checks"
+  end
+
+  APPROVED.each do |gate, (column, nxt)|
+    define_method(:"test_approved_in_#{column}_green_ci_says_take_the_next_step") do
+      text = quiet_ping(approved_card(gate))
+      assert_includes text, "It is approved: take its next step (#{nxt})"
+      refute_includes text, "held"
+      refute_includes text, "not read"
+    end
+
+    define_method(:"test_approved_in_#{column}_red_ci_names_the_hold") do
+      id = approved_card(gate)
+      red!
+      assert_held(quiet_ping(id), nxt)
+    end
+  end
+
+  def test_approved_in_local_merged_with_a_merged_pr_green_merge_commit_says_take_the_next_step
+    id = approved_card("local_human_review")
+    merge_the_local_pr!
+    assert_includes quiet_ping(id), "It is approved: take its next step (Local: Deploy check)"
+  end
+
+  def test_approved_in_local_merged_with_a_merged_pr_red_merge_commit_names_the_hold
+    id = approved_card("local_human_review")
+    merge_the_local_pr!
+    red!
+    assert_held(quiet_ping(id), "Local: Deploy check")
+  end
+
+  def test_an_approved_cards_rows_stay_inside_the_poll_window_in_every_column
+    ids = APPROVED.keys.map { |gate| approved_card_keeping_the_lead(gate) }
+    n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: StringIO.new)
+    wait_with_the_scanner(n, 2 * 600)
+    ids.each do |id|
+      c = @kb.card(id)
+      step = CK.steps(@kb.board_of("o-r")).find { |s| s[:to] == c[:column] }
+      assert_empty @port.stale_reads(c, step), "#{c[:column]}: every row its approving step reads is still polled"
+      assert_equal "success", @port.approval_checks(c, step)[:state], c[:column]
+    end
+  end
+
+  # An open PR's mergeable answer that is not known yet: nothing is known, so it is unread for the ping, and it still
+  # refuses an Approve and a handoff. nil = a row read before the merge fields existed (written after each poll).
+  UNREAD_MERGE = { "fields" => nil, "computing" => { "mergeable" => nil, "mergeable_state" => "unknown" },
+                   "base_commit" => { "mergeable" => false, "mergeable_state" => "dirty" }, }.freeze
+  # the column that reads an open PR's mergeable answer → [approval gate, repo, its PR]
+  OPEN_PR = { "local_merged_pr" => ["local_human_review", "o/r_local", 112],
+              "awaiting_merge" => ["public_human_review", "o/r", 5], }.freeze
+
+  def make_unread(shape, number) = UNREAD_MERGE.fetch(shape)&.then do |fields|
+    @http.pulls = @http.pulls.map { |p| p["number"] == number ? p.merge(fields) : p }
+  end
+
+  def unread_row(shape, repo, number)
+    return nil unless shape == "fields"
+
+    -> { @conn[:gh_pr_checks].where(repo: repo, ref: "pr:#{number}").update(base: nil, draft: nil, merge_state: nil) }
+  end
+
+  UNREAD_MERGE.each_key do |shape|
+    OPEN_PR.each do |column, (gate, repo, number)|
+      define_method(:"test_#{column}_#{shape}_unread_is_not_a_hold") do
+        id = approved_card(gate)
+        make_unread(shape, number)
+        text = quiet_ping(id, &unread_row(shape, repo, number))
+        assert_match(/It is approved; .*(not read yet|still computing).*\(asked now/, text)
+        assert_includes text, "Read its checks before its next step"
+        refute_includes text, "held"
+        refute_includes text, "take its next step"
+      end
+
+      define_method(:"test_#{gate}_#{shape}_unread_still_refuses_the_approve") do
+        id = gated_cards.fetch(gate)
+        hand_in(id) if gate == "local_human_review"
+        step = CK.steps(@kb.board_of("o-r")).find { |s| s[:from] == gate }
+        make_unread(shape, number)
+        # twice: the final step reads the public PR only once its local PR reads merged
+        2.times do
+          @port.approval_checks(@kb.card(id), step)
+          @poller.run
+        end
+        unread_row(shape, repo, number)&.call
+        answer = @port.approval_checks(@kb.card(id), step)
+        assert_equal "unpolled", answer[:state]
+        assert_match(/not read yet|still computing/, answer[:reason], "the mergeable answer, not an unread CI row")
+        e = assert_raises(AgentsKanban::Invalid) { @kb.approve(id, by: "operator") }
+        assert_match(/not approved .*(not read yet|still computing)/, e.message)
+        assert_equal gate, @kb.card(id)[:column]
+        assert_nil @kb.card(id)[:approved_at]
+        n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: StringIO.new)
+        n.watch # a gate card's hold is read off the watch pass's last view
+        assert_match(/not read yet|still computing/, @kb.gate_hold(@kb.card(id), @kb.board_of("o-r")), "held, not approvable")
+        assert_equal 0, @conn[:card_pings].where(card_id: id, reason: "gate_red").count, "unread is never called red"
+      end
+    end
+
+    define_method(:"test_#{shape}_unread_still_refuses_the_handoff") do
+      id = gated_cards.fetch("local_human_review")
+      @conn[:cards].where(id: id).update(column: "local_agent_review")
+      step = CK.steps(@kb.board_of("o-r")).first
+      make_unread(shape, 112)
+      @port.approval_checks(@kb.card(id), step)
+      @poller.run
+      unread_row(shape, "o/r_local", 112)&.call
+      e = assert_raises(AgentsKanban::Invalid) do
+        @kb.handoff(id, qa: "Open the page and check the row", pr_url: "https://github.com/o/r_local/pull/112",
+                        ci_url: CI_URL, ui_change: false, by: "lead")
+      end
+      assert_match(/not handed off .*(not read yet|still computing)/, e.message)
+      assert_equal "local_agent_review", @kb.card(id)[:column]
+    end
+  end
+
+  def test_a_row_truly_unread_says_unread_never_a_hold
+    id = approved_card("public_human_review")
+    n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: StringIO.new)
+    wait_with_the_scanner(n, STRETCH - 60)
+    @conn[:gh_pr_checks].delete # nothing read: as on a service that never answered this row
+    @now += 90
+    @conn[:projects].where(slug: "o-r").update(scanned_at: @now)
+    n.watch
+    text = @conn[:card_pings].where(card_id: id, session: "shop", reason: "progress").get(:text)
+    assert_match(/It is approved; .*not read yet \(asked now/, text)
+    refute_includes text, "held"
+    refute_includes text, "take its next step"
+  end
+
+  def wait_with_the_scanner(notifier, seconds)
+    (seconds / 30).times do
+      @now += 30
+      @conn[:projects].where(slug: "o-r").update(scanned_at: @now)
+      notifier.watch
+      @poller.run
+    end
+  end
+
+  # several cards on one board: one lead registration owns them all
+  def approved_card_keeping_the_lead(gate)
+    @cards ||= gated_cards
+    @conn[:projects].where(slug: "o-r").update(scanned_at: @now, branch_tips: "{}", remote_heads: "{}")
+    @kb.register_session(session: "shop", project: "o-r", type: "lead", launcher: "fullclaude",
+by: "lead") unless @kb.open_session("shop")
+    id = @cards.fetch(gate)
+    @kb.set_owner(id, session: "shop", by: "lead")
+    hand_in(id) if gate == "local_human_review"
+    try_read { @kb.approve(id, by: "operator") }
+    id
   end
 
   def test_each_approval_gate_s_first_approve_succeeds_after_waiting_longer_than_the_poll_window

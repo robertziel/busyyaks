@@ -318,14 +318,14 @@ module Busyyaks
       # An open PR the approval would let through only when it can merge as it stands — refused (state
       # "blocked" + the reason) when it is a draft, is based on another branch than its side's (want_base; nil = a
       # plain project's PR, any base; a Proc of the PR's repo: asked only for a read PR), has GitHub's auto-merge on
-      # (GitHub would merge it on green, without the board's approval), or GitHub is still computing whether it merges
-      # (mergeable null: never guessed). `behind` is NOT refused: the working branch moves on every other card's merge,
+      # (GitHub would merge it on green, without the board's approval), or — unread, refused the same way (`unpolled` +
+      # the reason) — GitHub is still computing whether it merges (mergeable null: never guessed).
+      # `behind` is NOT refused: the working branch moves on every other card's merge,
       # and a conflict never parks a card — the rail warns, the merge itself is where it counts. Conflicts with its base
-      # are not refused either: the
-      # row gains rebase: {state: "conflicts", base:, base_sha:} — the engine accepts the approval (its CI still
-      # decides: a red or pending one refuses first), marks the card needs rebase and holds its onward move until an
-      # answer comes back green without it. A conflicting row whose base commit was not read yet is refused as not
-      # read, never guessed.
+      # are not refused either: the row gains rebase: {state: "conflicts", base:, base_sha:} — the engine accepts the
+      # approval (its CI still decides: a red or pending one refuses first), marks the card needs rebase and holds its
+      # onward move until an answer comes back green without it. A conflicting row whose base commit was not read yet
+      # is refused as not read, never guessed.
       # Not read yet (unpolled) or no open PR → the row as it is.
       def mergeable(row, repo, number, role, want_base)
         return row unless row && CHECKED.include?(row[:state])
@@ -333,26 +333,42 @@ module Busyyaks
         want_base = want_base&.call(repo)
 
         pr = "the #{[role, 'PR'].compact.join(' ')} ##{number}"
-        why = if !row.key?(:draft) # a row the github service answered before it read these fields
-                "#{pr}'s draft / base / mergeable state is not read yet (asked now — try again in a minute)"
-              elsif row[:draft] then "#{pr} is a draft"
-              elsif want_base && row[:base] != want_base
-                "#{pr} is based on #{row[:base]}, not #{want_base}"
-              elsif row[:auto_merge]
-                "#{pr} has GitHub auto-merge on: GitHub would merge it on green CI without the board's approval — " \
-                  "turn it off (gh pr merge --disable-auto #{number} -R #{repo})"
-              elsif row[:merge_state] == "computing"
-                "GitHub is still computing whether #{pr} merges cleanly (asked now — try again in a minute)"
-              elsif row[:merge_state]&.start_with?(PrStates::UNKNOWN) # a value busyyaks does not know: never passed
-                "#{pr}'s mergeability is #{row[:merge_state]}: GitHub answered a state busyyaks does not know"
-              elsif row[:merge_state] == "conflicts" && !row[:base_sha]
-                "#{pr} has conflicts with #{row[:base]}; its base commit is not read yet (asked now — try again in a " \
-                  "minute)"
-              end
+        # a row the github service answered before it read these fields
+        unless row.key?(:draft)
+          return unread(number, "#{pr}'s draft / base / mergeable state is not read yet (asked now — try again in a minute)")
+        end
+
+        why = merge_refusal(row, pr, repo, number, want_base)
         return blocked(number, why) if why
+
+        unknown = merge_unknown(row, pr)
+        return unread(number, unknown) if unknown
+
         return row unless row[:merge_state] == "conflicts"
 
         row.merge(rebase: { state: "conflicts", base: row[:base], base_sha: row[:base_sha] })
+      end
+
+      # What GitHub says refuses this PR as it stands, or nil.
+      def merge_refusal(row, pr, repo, number, want_base)
+        if row[:draft] then "#{pr} is a draft"
+        elsif want_base && row[:base] != want_base
+          "#{pr} is based on #{row[:base]}, not #{want_base}"
+        elsif row[:auto_merge]
+          "#{pr} has GitHub auto-merge on: GitHub would merge it on green CI without the board's approval — " \
+            "turn it off (gh pr merge --disable-auto #{number} -R #{repo})"
+        elsif row[:merge_state]&.start_with?(PrStates::UNKNOWN) # a value busyyaks does not know: never passed
+          "#{pr}'s mergeability is #{row[:merge_state]}: GitHub answered a state busyyaks does not know"
+        end
+      end
+
+      # What is not known yet about whether this PR merges, or nil: an unread answer, which refuses like any non-green one.
+      def merge_unknown(row, pr)
+        if row[:merge_state] == "computing"
+          "GitHub is still computing whether #{pr} merges cleanly (asked now — try again in a minute)"
+        elsif row[:merge_state] == "conflicts" && !row[:base_sha]
+          "#{pr} has conflicts with #{row[:base]}; its base commit is not read yet (asked now — try again in a minute)"
+        end
       end
 
       # The branch the card's `side` PR on `repo` must be based on: the scanner's local_base / public_base of the
@@ -412,7 +428,7 @@ module Busyyaks
         when "none" then blocked(number, "the local PR #{repo}##{number} was not found")
         else
           mergeable(read(repo, "pr:#{number}"), repo, number, "local", want_base) ||
-            blocked(number, "the local PR #{repo}##{number} cannot be read")
+            unread(number, "the local PR #{repo}##{number} cannot be read")
         end
       end
 
@@ -499,17 +515,21 @@ module Busyyaks
 
       def blocked(number, reason) = { number: number, state: "blocked", finished_at: nil, reason: reason }
 
+      # Nothing is known yet: its own state, never "blocked". It refuses an Approve and a handoff like every non-green
+      # answer (the engine's green_ci!), holds a gate card, is never called red, and an approved card's ping says unread.
+      def unread(number, reason) = { number: number, state: "unpolled", finished_at: nil, reason: reason }
+
       # → nil when the local PR is merged, else the refusal (engine `reason:`): not read yet, open, closed.
       def local_unmerged(repo, number)
         row = answer(repo, "pr:#{number}")
         return nil if row[:state] == "merged"
         return blocked(number, "the local #{closed(repo, number)}") if row[:state] == "closed"
 
-        what = case row[:state]
-               when "unpolled" then "not read yet (asked now — try again in a minute)"
-               when "none" then "not found"
-               else "still open, not merged into the local repo"
-               end
+        # not read is its own state, never "blocked": the engine says it is unread, and its gate watch never calls it red
+        return unread(number,
+"the local PR #{repo}##{number} is not read yet (asked now — try again in a minute)") if row[:state] == "unpolled"
+
+        what = row[:state] == "none" ? "not found" : "still open, not merged into the local repo"
         { number: row[:number], state: "blocked", finished_at: nil, reason: "the local PR #{repo}##{number} is #{what}" }
       end
 
