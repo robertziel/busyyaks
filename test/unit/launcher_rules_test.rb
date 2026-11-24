@@ -247,6 +247,23 @@ class LauncherRulesTest < Minitest::Test
     end
   end
 
+  # 2026-11-24: a dead lead's background loop kept busyyaks-<s>.scope alive and the next launch of <s> failed
+  # ("Unit … was already loaded"): every busyyaks scope whose session tmux no longer lists is stopped
+  def test_stale_scopes_are_the_busyyaks_scopes_of_ended_sessions
+    r = Busyyaks::LauncherRules
+    out = <<~UNITS
+      busyyaks-repo_teamlead.scope         loaded active running /home/u/.local/bin/claude --remote-control x
+      busyyaks-repo_worker.scope              loaded active running claude
+      busyyaks-gone_worker_1.scope            loaded active running bash supervise.sh
+      other-app.scope                         loaded active running x
+      busyyaks-.scope                         loaded active running x
+    UNITS
+    assert_equal %w[busyyaks-gone_worker_1.scope],
+                 r.stale_scopes(out, %w[repo_teamlead repo_worker])
+    assert_equal [], r.stale_scopes("", [])
+    assert_equal "busyyaks-s1.scope", r.scope_unit("s1")
+  end
+
   # a corrupt leads.json is refused naming the file, the error class and the line — never the
   # parser's quote of the text, which would carry a key fragment
   def test_a_corrupt_leads_file_is_refused_without_quoting_it

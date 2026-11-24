@@ -66,7 +66,28 @@ module Busyyaks
               else
                 scopes["session_memory_max"] ? ["-p", "MemoryMax=#{scopes['session_memory_max']}"] : []
               end
-      ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit=busyyaks-#{session}", *props, "--", *argv]
+      ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit=#{SCOPE_PREFIX}#{session}", *props, "--", *argv]
+    end
+
+    SCOPE_PREFIX = "busyyaks-"
+    SCOPE_SUFFIX = ".scope"
+
+    def scope_unit(session) = "#{SCOPE_PREFIX}#{session}#{SCOPE_SUFFIX}"
+
+    # The session scopes to stop: every `busyyaks-<session>.scope` unit (the first word of each
+    # `systemctl --user list-units --plain --no-legend` line) whose session is not in `live` (tmux lists it, or its
+    # launch is in flight). A session that ended — stopped, reaped, its claude dead — leaves what it ran in the
+    # background (a supervisor loop, a Monitor) alive in its scope; the scope keeps the unit name, so the next launch
+    # under that name fails ("Unit busyyaks-<s>.scope was already loaded", 2026-11-24). Its processes belong to no
+    # session any more: stopped, never adopted by the next one.
+    def stale_scopes(list_units_out, live)
+      list_units_out.lines.filter_map do |line|
+        unit = line.split.first.to_s
+        next unless unit.start_with?(SCOPE_PREFIX) && unit.end_with?(SCOPE_SUFFIX)
+
+        session = unit.delete_prefix(SCOPE_PREFIX).delete_suffix(SCOPE_SUFFIX)
+        unit unless session.empty? || live.include?(session)
+      end
     end
 
     # The leads THIS launcher started (lead-first boards): .env LAUNCHER_STATE_DIR/leads.json (the

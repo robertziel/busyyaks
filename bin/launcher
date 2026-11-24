@@ -563,6 +563,42 @@ def sweep_stages(where)
 
   gone = Busyyaks::Skills.sweep(STAGES, live + IN_FLIGHT)
   puts "#{Busyyaks::Clock.now.iso8601} skills sweep (#{where}): removed #{gone.join(', ')}" if gone.any?
+  sweep_scopes(where, live + IN_FLIGHT)
+end
+
+# Stops the systemd user scope of every session that ended (LauncherRules.stale_scopes): what it left running in
+# the background dies with it, and its name is free for the next launch. launch.scopes null → no scopes to sweep.
+# systemctl unreadable → nothing stopped, said in the log. Each stop is logged with the processes it ended.
+def sweep_scopes(where, live)
+  return if SCOPES.nil?
+
+  out, err, st = Open3.capture3("systemctl", "--user", "list-units", "--type=scope", "--all", "--plain", "--no-legend",
+                                "--no-pager", "#{Busyyaks::LauncherRules::SCOPE_PREFIX}*", in: File::NULL)
+  unless st.success?
+    return puts("#{Busyyaks::Clock.now.iso8601} scope sweep skipped (#{where}): systemctl: #{err.strip[0, 200]}")
+  end
+
+  Busyyaks::LauncherRules.stale_scopes(out, live).each do |unit|
+    procs = scope_procs(unit)
+    _o, serr, sst = Open3.capture3("systemctl", "--user", "stop", unit, in: File::NULL)
+    verdict = sst.success? ? "stopped" : "stop FAILED: #{serr.strip[0, 200]}"
+    puts "#{Busyyaks::Clock.now.iso8601} scope sweep (#{where}): #{unit} #{verdict} · " \
+         "#{procs.empty? ? 'no processes' : procs.join(' | ')}"
+  end
+end
+
+def scope_procs(unit)
+  cg, _e, st = Open3.capture3("systemctl", "--user", "show", "-p", "ControlGroup", "--value", unit, in: File::NULL)
+  return [] unless st.success? && !cg.strip.empty?
+
+  File.read(File.join("/sys/fs/cgroup", cg.strip, "cgroup.procs")).split.map do |pid|
+    cmd = File.read("/proc/#{pid}/cmdline").tr("\0", " ").strip
+    "#{pid} #{cmd[0, 120]}"
+  rescue SystemCallError
+    pid
+  end
+rescue SystemCallError
+  []
 end
 
 def tree(root)
@@ -1010,6 +1046,7 @@ def reap(req)
     puts "#{Busyyaks::Clock.now.iso8601} reap #{name} (#{c[:reason]}): #{ok ? 'stopped' : err.strip}"
     { name: name, stopped: ok, reason: ok ? c[:reason] : "tmux: #{err.strip}" }
   end
+  STAGE_LOCK.synchronize { sweep_stages("reap") }
   { ok: true, results: results }
 rescue ReapRefused => e
   { ok: false, error: e.message, status: 409 }
@@ -1037,6 +1074,7 @@ def stop_op(req)
     puts "#{Busyyaks::Clock.now.iso8601} stop #{name} (operator, #{path}): #{ok ? 'stopped' : err.strip}"
     { name: name, stopped: ok, reason: ok ? "stopped" : "tmux: #{err.strip}" }
   end
+  STAGE_LOCK.synchronize { sweep_stages("stop") }
   { ok: true, results: results }
 end
 
