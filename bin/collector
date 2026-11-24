@@ -36,6 +36,9 @@ end
 def env!(key) = ENV_FILE[key].to_s.empty? ? abort("#{key} missing in .env") : ENV_FILE[key]
 
 CONFIG = YAML.safe_load_file(File.join(ROOT, "config/busyyaks.yml"))
+# the launcher's own records (HermesBoard::Records): only a process it recorded in queue mode is typed into.
+# No state dir → nothing is proven, so nothing of that family is typed into
+STATE_DIR = ENV_FILE["LAUNCHER_STATE_DIR"].to_s
 PATHS = begin
   Busyyaks::AgentCollector.parse(CONFIG["agents"]) or
     abort "config/busyyaks.yml agents.collector is none: set {snapshot, read_socket} to run busyyaks's collector " \
@@ -135,7 +138,20 @@ LATEST = Busyyaks::Collector::Latest.new
 SERVER = Busyyaks::Collector::Server.new(
   latest: LATEST, procfs: PROCFS, tmux: TMUX,
   dialog: ->(text) { AgentsKanban::SessionDialog.parse(text)&.slice(:question, :command, :options, :escape, :free_text, :hash) },
-  typeable: ->(engine) { ENGINES.known?(engine) && ENGINES.fetch(engine).family.typeable? }
+  typeable: ->(engine) { ENGINES.known?(engine) && ENGINES.fetch(engine).family.typeable? },
+  proven: lambda { |engine, session, pid, ticks|
+    next false unless !STATE_DIR.empty? && ENGINES.known?(engine) && ENGINES.fetch(engine).family.typeable_with_proof?
+
+    begin
+      !Busyyaks::HermesBoard::Records.new(STATE_DIR).proof(session, pid, ticks).nil?
+    rescue Busyyaks::HermesBoard::Invalid, SystemCallError => e
+      puts "#{Busyyaks::Clock.now.iso8601} queue-mode record unreadable: #{e.message}"
+      false
+    end
+  },
+  paste_refusal: ->(engine, screen) { ENGINES.fetch(engine).family.paste_refusal(screen) },
+  input_state: ->(engine, ansi, text) { ENGINES.fetch(engine).family.input_state(ansi, text) },
+  reads_input: ->(engine) { ENGINES.known?(engine) && ENGINES.fetch(engine).family.reads_input? }
 )
 
 sock = PATHS.read_socket

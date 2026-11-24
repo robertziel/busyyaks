@@ -149,6 +149,14 @@ class CollectorTest < Minitest::Test
   end
 
   # every pane carries every key the launcher allowlists (bin/launcher PANE_KEYS)
+  # a pip / uv install runs `python <path>/hermes <words>`, no bootstrap in argv (the real CLI)
+  def test_a_pip_installed_hermes_is_a_session_and_its_gateway_is_not
+    f = C::Hermes.new
+    procfs = Struct.new(:list) { def argv(_pid) = list }
+    assert f.claims?(1, procfs.new(["/v/bin/python", "/usr/local/bin/hermes", "chat"]))
+    refute f.claims?(1, procfs.new(["/v/bin/python", "/usr/local/bin/hermes", "gateway", "run"]))
+  end
+
   # `hermes gateway run` is Hermes's daemon (its bootstrap, then "gateway" after the -c script), never a session
   def test_the_hermes_gateway_is_no_session
     process(50, 1, "bash", ["bash"])
@@ -282,15 +290,21 @@ class CollectorTest < Minitest::Test
 
   # ── the read socket ──────────────────────────────────────────────────────────────────────────────────────────────
 
-  def server(fake, typeable: ->(e) { e == "claude" })
+  def server(fake, typeable: ->(e) { e == "claude" }, paste_refusal: ->(_engine, _screen) {},
+             proven: ->(_engine, _session, _pid, _ticks) { false }, input_state: ->(_engine, _ansi, _text) {
+ { state: :empty } })
     latest = C::Latest.new
     latest.set(build(fake).last)
     @log = []
     @pauses = []
-    C::Server.new(latest: latest, procfs: procfs, tmux: tmux(fake), typeable: typeable, log: ->(m) { @log << m },
-                  pause: ->(s) { @pauses << s },
+    C::Server.new(latest: latest, procfs: procfs, tmux: tmux(fake), typeable: typeable, proven: proven,
+                  paste_refusal: paste_refusal, input_state: wrapped(input_state),
+                  reads_input: ->(e) { e == "hermes" }, log: ->(m) { @log << m }, pause: ->(s) { @pauses << s },
                   dialog: ->(t) { AgentsKanban::SessionDialog.parse(t)&.slice(:question, :options, :hash) })
   end
+
+  # a list of answers, one per read of the input
+  def wrapped(state) = state.is_a?(Array) ? ->(_e, _a, _t) { state.shift } : state
 
   def inputs(fake)
     fake.calls.reject { |argv, _| %w[list-panes capture-pane].include?(argv[3]) }.map { |argv, s, _| [argv.drop(3), s] }
@@ -351,6 +365,138 @@ class CollectorTest < Minitest::Test
     process(11, 10, "claude", ["claude"], ticks: 900)
     assert_equal "no_session", s.handle("op" => "send", "session" => "app lead", "text" => "ls")[:error][:type]
     assert_empty inputs(fake)
+  end
+
+  # Hermes takes a line only when the launcher's RECORD names that process; a request cannot claim it
+  def test_hermes_is_typed_into_only_when_the_record_names_that_process
+    fake = box
+    asked = []
+    record = [%w[desk], 21, 700]
+    proven = lambda do |engine, session, pid, ticks|
+      asked << [engine, session, pid, ticks]
+      [[session], pid, ticks] == record
+    end
+    s = server(fake, proven: proven, input_state: [EMPTY, OURS])
+    req = { "op" => "send", "session" => "desk", "text" => "ping" }
+    record[1] = 99
+    forged = req.merge("queue_proof" => { "pid" => 21, "start_ticks" => 700 })
+    assert_equal "unsupported", s.handle(forged)[:error][:type], "a proof in the request counts for nothing"
+    assert_empty inputs(fake)
+    record[1] = 21
+    assert_equal({ ok: true }, s.handle(req))
+    assert_equal ["hermes", "desk", 21, 700], asked.last
+  end
+
+  def enters(fake) = inputs(fake).count { |a, _| a.first == "send-keys" }
+  def pastes(fake) = inputs(fake).count { |a, _| a.first == "paste-buffer" }
+
+  DESK = { "op" => "send", "session" => "desk", "text" => "ping" }.freeze
+  YES = ->(_e, _s, _p, _t) { true }
+  EMPTY = { state: :empty }.freeze
+  OURS = { state: :ours }.freeze
+
+  def test_no_paste_while_the_screen_refuses
+    fake = box
+    r = server(fake, proven: YES, paste_refusal: ->(_e, _t) { "a prompt waits" }).handle(DESK)
+    assert_equal ["dialog", "a prompt waits"], r[:error].values_at(:type, :message)
+    assert_empty inputs(fake)
+  end
+
+  def test_an_empty_input_is_pasted_read_back_and_entered
+    fake = box
+    assert_equal({ ok: true }, server(fake, proven: YES, input_state: [EMPTY, OURS]).handle(DESK))
+    assert_equal [1, 1], [pastes(fake), enters(fake)]
+  end
+
+  # The Enter on a line that already shows this ping may land although tmux reports a failure: unconfirmed, so the
+  # launcher never retries it — a retry would find an empty input and paste a second copy
+  def test_a_failed_enter_on_this_ping_already_in_the_input_is_unconfirmed
+    fake = box
+    fake.fail["send-keys"] = "lost"
+    r = server(fake, proven: YES, input_state: [OURS]).handle(DESK)
+    assert_equal({ type: "unconfirmed", message: "pasted, then the Enter failed: lost" }, r[:error])
+    assert_equal [0, 1], [pastes(fake), enters(fake)], "nothing pasted, one Enter tried"
+  end
+
+  # the read-back after our own paste cannot read the screen: the line may be there, not drawn yet — unconfirmed, so a
+  # retry never finds an "empty" input and pastes a second copy (a capture failure BEFORE the paste stays tmux)
+  def test_a_failed_read_back_after_our_paste_is_unconfirmed
+    fake = box
+    pasted = false
+    fake.define_singleton_method(:call) do |argv, stdin, seconds|
+      pasted ||= argv[3] == "paste-buffer"
+      next super(argv, stdin, seconds) unless pasted && argv[3] == "capture-pane"
+
+      calls << [argv, stdin, seconds]
+      ["", "lost", false]
+    end
+    r = server(fake, proven: YES, input_state: [EMPTY, OURS]).handle(DESK)
+    assert_equal({ type: "unconfirmed", message: "pasted, then its input could not be read back: lost" }, r[:error])
+    assert_equal [1, 0], [pastes(fake), enters(fake)]
+  end
+
+  def test_a_failed_enter_after_our_own_checked_paste_is_unconfirmed
+    fake = box
+    fake.fail["send-keys"] = "lost"
+    r = server(fake, proven: YES, input_state: [EMPTY, OURS]).handle(DESK)
+    assert_equal "unconfirmed", r[:error][:type]
+    assert_equal [1, 1], [pastes(fake), enters(fake)]
+  end
+
+  # no memory. A dialog between paste and Enter, the collector restarts: the screen alone says it is this ping
+  def test_a_dialog_between_paste_and_enter_then_a_restart_leaves_one_copy
+    fake = box
+    answers = [nil, "a prompt opened"]
+    r = server(fake, proven: YES, paste_refusal: ->(_e, _t) { answers.shift }, input_state: [EMPTY, OURS]).handle(DESK)
+    assert_equal "dialog", r[:error][:type]
+    assert_match(/waits in its input/, r[:error][:message])
+    assert_equal [1, 0], [pastes(fake), enters(fake)], "the Enter would have answered the dialog"
+    assert_equal({ ok: true }, server(fake, proven: YES, input_state: [OURS]).handle(DESK), "a new process")
+    assert_equal [1, 1], [pastes(fake), enters(fake)], "Enter on the line already there, no second paste"
+  end
+
+  def test_an_input_holding_anything_else_gets_nothing_typed
+    fake = box
+    r = server(fake, proven: YES, input_state: [{ state: :other, why: "typed text (8 chars)" }]).handle(DESK)
+    assert_equal "input_busy", r[:error][:type]
+    assert_includes r[:error][:message], "typed text (8 chars)"
+    r = server(fake, proven: YES, input_state: [{ state: :unreadable, why: "no prompt" }]).handle(DESK)
+    assert_equal "input_unreadable", r[:error][:type]
+    assert_empty inputs(fake)
+  end
+
+  def test_no_enter_when_the_paste_does_not_read_back_as_this_ping
+    fake = box
+    r = server(fake, proven: YES, input_state: [EMPTY, { state: :other, why: "typed text (9 chars)" }]).handle(DESK)
+    assert_equal "input_busy", r[:error][:type]
+    assert_equal "the line was pasted, but its input now holds typed text (9 chars): Enter not pressed", r[:error][:message]
+    assert_equal [1, 0], [pastes(fake), enters(fake)]
+  end
+
+  # a paste that renders late is waited for, then entered once
+  def test_a_paste_that_renders_late_is_read_again_before_the_enter
+    fake = box
+    assert_equal({ ok: true }, server(fake, proven: YES, input_state: [EMPTY, EMPTY, EMPTY, OURS]).handle(DESK))
+    assert_equal [1, 1], [pastes(fake), enters(fake)]
+    assert_equal [C::Server::PASTE_SETTLE_S, C::Server::READ_BACK_STEP_S, C::Server::READ_BACK_STEP_S], @pauses
+  end
+
+  def test_a_repaint_during_the_read_back_is_read_again
+    fake = box
+    states = [EMPTY, { state: :unreadable, why: "its input row is not on the screen" }, OURS]
+    assert_equal({ ok: true }, server(fake, proven: YES, input_state: states).handle(DESK))
+    assert_equal [1, 1], [pastes(fake), enters(fake)]
+  end
+
+  def test_a_paste_never_seen_is_refused_for_good_and_says_what_the_input_shows
+    fake = box
+    states = [EMPTY] + ([EMPTY] * (C::Server::READ_BACK_POLLS + 1))
+    r = server(fake, proven: YES, input_state: states).handle(DESK)
+    assert_equal "paste_unconfirmed", r[:error][:type]
+    assert_equal "the line was pasted but its input still shows nothing: Enter not pressed, not pasted again",
+                 r[:error][:message]
+    assert_equal [1, 0], [pastes(fake), enters(fake)]
+    assert_empty states, "read for the whole window"
   end
 
   # nothing typed yet (the buffer load failed) → tmux, worth a retry; the paste or the Enter failed → unconfirmed: the

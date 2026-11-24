@@ -1,0 +1,33 @@
+#!/bin/sh
+# board-e2e only: bin/collector's tmux. While <mock>/race-arm exists, a paste lets the held model go and returns once
+# its dangerous-command panel is on the screen: a dialog between a ping's paste and its Enter, every run.
+# While <mock>/race-late exists (its content = seconds), the paste lands that much later: a paste that renders late.
+real=/usr/bin/tmux
+case " $* " in
+  *" paste-buffer "*)
+    if [ -e "$BOARD_E2E_MOCK/race-late" ]; then
+      late=$(cat "$BOARD_E2E_MOCK/race-late")
+      rm -f "$BOARD_E2E_MOCK/race-late"
+      (sleep "$late"; "$real" "$@") </dev/null >/dev/null 2>&1 &
+      exit 0
+    fi
+    ;;
+esac
+"$real" "$@"
+status=$?
+case " $* " in
+  *" paste-buffer "*)
+    if [ -e "$BOARD_E2E_MOCK/race-arm" ]; then
+      rm -f "$BOARD_E2E_MOCK/race-arm"
+      : > "$BOARD_E2E_MOCK/race-release"
+      for last; do :; done
+      i=0
+      while [ "$i" -lt 40 ]; do
+        "$real" -S "$2" capture-pane -p -t "$last" | grep -q 'Dangerous Command' && break
+        sleep 0.1
+        i=$((i + 1))
+      done
+    fi
+    ;;
+esac
+exit "$status"

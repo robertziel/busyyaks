@@ -152,10 +152,11 @@ class CollectorContractTest < Minitest::Test
     refute desk["screen"].key?("error"), desk["screen"].inspect
   end
 
-  # Hermes: listed, its state off its screen, but nothing is typed into it (its family is not typeable)
+  # Hermes started by hand: listed, its state off its screen, nothing typed into it (no launcher record of queue mode)
   def test_nothing_is_typed_into_hermes
     r = launcher("op" => "notify", "session" => "desk", "socket" => "default", "text" => "hello")
-    assert_equal [false, true, "cannot type into hermes (family hermes)"], r.values_at("ok", "unsupported", "error")
+    assert_equal [false, true, "cannot type into hermes (family hermes: not launched by busyyaks in queue mode)"],
+r.values_at("ok", "unsupported", "error")
     refute File.exist?(File.join(@base, "inputs")), "no tmux input"
   end
 

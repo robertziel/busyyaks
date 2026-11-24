@@ -61,6 +61,21 @@ module Busyyaks
         card: tool && tool[:card], }
     end
 
+    # Hermes (frames from real panes: test/fixtures/screens/hermes_*): only a running tool has a row of its own,
+    # right above the status bar: "💻 sleep 7 ( 43.2s · ↓ 41 tok)", which may wrap. While the model answers the row is a
+    # kaomoji with a random verb ("(°ロ°) ruminating...  (↓ 26 tok)"): it does not say thinking from writing → nil.
+    HERMES_STATUS = /\A ☤ /
+    HERMES_TOOL = /\(\s*(?:(?<m>\d+)m)?(?<s>\d+(?:\.\d+)?)s\s*·\s*(?<tok>↓\s*\d+(?:\.\d+)?k?)\s+tok\)\s*\z/
+
+    def hermes(screen)
+      lines = screen.to_s.delete("\r").lines.map(&:chomp)
+      at = lines.rindex { |l| l.match?(HERMES_STATUS) } or return nil
+      row = lines[0...at].reverse.find { |l| !l.strip.empty? } or return nil
+      m = row.match(HERMES_TOOL) or return nil
+
+      { phase: "tool", elapsed_s: (m[:m].to_i * 60) + m[:s].to_f.floor, tokens: m[:tok].sub(/\s+/, " "), tool: nil, card: nil }
+    end
+
     STREAM_WINDOW_S = 30 # a previous read older than this is no base to compare with
     WRITING_S = 5 # the ↓ count steps by 0.1k: it rose within this many seconds = still streaming
 

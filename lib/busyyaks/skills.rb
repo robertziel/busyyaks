@@ -377,7 +377,7 @@ end
     # literal under HERMES_HOME: no such dir, nothing loaded; set EMPTY it is `/busyyaks-skills`: none either (a bare
     # `${BUSYYAKS_SKILLS_DIR}` line would be HERMES_HOME itself then — not used). `-s busyyaks-session-<token>` with the skill
     # missing makes hermes exit with "Unknown skill(s)": a visible failed start. After the start, bin/launcher asks
-    # hermes itself (`skills list` in the session process's own environment: its HERMES_HOME, its variable) whether
+    # hermes itself (`skills list` through the allowlisted command, with this launch's environment) whether
     # the entry skill is listed and enabled.
     #
     # Every name carries a per-launch token (busyyaks-<name>-<token>): hermes resolves a name local skills dir first,
@@ -401,7 +401,7 @@ end
       def extra(_dest) = ["-s", skill_name(ENTRY)]
       def env(dest) = { VAR => dest }
 
-      # `hermes skills list` (v0.21.5: Name │ Category │ Source │ Trust │ Status, run in the session's environment) →
+      # `hermes skills list` (v0.21.5: Name │ Category │ Source │ Trust │ Status, run with this launch's environment) →
       # nil when the entry skill's row says enabled, else why
       def listed(output, home)
         entry = skill_name(ENTRY)

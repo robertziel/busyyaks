@@ -1,0 +1,24 @@
+Welcome to Hermes Agent! Type your message or /help for commands.
+✦ Tip: agent.tool_use_enforcement steers models that describe actions instead of
+calling tools — auto for GPT/Codex.
+Activated skills: busyyaks-session-8d883eb9379d
+
+
+────────────────────────────────────────
+● E2E_WORKER session=demo_worker agent=worker-demo_worker #1
+Initializing agent...
+────────────────────────────────────────
+
+  ┊ ⚡ preparing mcp__busyyaks__kanban_move…
+  ┊ 🔌 Busyyaks · kanban move  0.0s
+  ┊ ⚡ preparing mcp__busyyaks__kanban_comment…
+  ┊ 🔌 Busyyaks · kanban comment  0.0s
+
+╭─ ☤ Hermes ───────────────────────────────────────────────────────────────────╮
+E2E_WORKER_TURN_DONE
+╰──────────────────────────────────────────────────────────────────────────────╯
+ ☤ lab-model │ ~6.95K/200K pinned │ [░░░░░░░░░░] ~3% │ ◷ 0.2s │ ↑ 117 t/s │ 6...
+────────────────────────────────────────────────────────────────────────────────
+❯ Summarize what's in this folder
+────────────────────────────────────────────────────────────────────────────────
+

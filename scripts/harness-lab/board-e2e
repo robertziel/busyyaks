@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# The board end to end: a real Hermes lead + worker take a card through the whole flow against a throwaway
+# busyyaks stack built from THIS checkout, with a scripted model and no network at run time. Exit 0 only when every step
+# of board_e2e.rb passed; a failed step is named. usage: scripts/harness-lab/board-e2e <new output dir>
+#
+# Nothing of a deployment is read or touched: no .env, no ~/.hermes, no live compose project, image or tmux server. The
+# stack lives in a private temp dir (bin/setup writes its own secrets) and everything is removed on exit; <output dir>
+# keeps the step log and the screens.
+set -euo pipefail
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+out=${1:?usage: board-e2e <new output dir>}
+[ ! -e "$out" ] || { echo "board-e2e: $out already exists" >&2; exit 2; }
+mkdir -p "$(dirname "$out")"
+mkdir -m 700 "$out"
+out=$(cd "$out" && pwd)
+
+# bin/setup refuses a launcher dir under a group- or world-writable parent (so not /tmp)
+state=${XDG_STATE_HOME:-$HOME/.local/state}
+mkdir -p "$state"
+base=$(mktemp -d "$state/busyyaks-board-e2e.XXXXXX")
+id=$(basename "$base" | tr -cd 'a-zA-Z0-9' | tr '[:upper:]' '[:lower:]')
+box=$id-box
+project=$id
+image=busyyaks:$id
+compose() { docker compose --project-directory "$base/app" -p "$project" -f "$base/app/docker-compose.yml" -f "$base/app/board-e2e.override.yml" "$@"; }
+cleanup() {
+  status=$?
+  trap - EXIT INT TERM
+  [ -d "$base/out" ] && cp -r "$base/out/." "$out/"
+  [ -f "$base/app/board-e2e.override.yml" ] && compose down -v --remove-orphans >/dev/null 2>&1
+  docker rm -f "$box" >/dev/null 2>&1
+  docker image rm "$image" >/dev/null 2>&1
+  rm -rf "$base"
+  exit "$status"
+}
+trap cleanup EXIT INT TERM
+
+mkdir -m 700 "$base"/{app,projects,run,state,collector,home,mock,out}
+mkdir -p "$base/home/.hermes" "$base/home/.claude/sessions"
+git -C "$repo" ls-files -co --exclude-standard -z | tar -C "$repo" --null -T - -cf - | tar -C "$base/app" -xf -
+git init -q "$base/projects/demo"
+git -C "$base/projects/demo" -c user.name=e2e -c user.email=e2e@example.invalid commit -q --allow-empty -m init
+
+HOME=$base/home "$base/app/bin/setup" >/dev/null
+put() { sed -i "s|^$1=.*|$1=$2|" "$base/app/.env"; grep -q "^$1=" "$base/app/.env" || echo "$1=$2" >> "$base/app/.env"; }
+# the services share the box's network namespace (--network none): their ports are its loopback ports
+for kv in "PROJECTS_ROOT=$base/projects" "LAUNCHER_RUN_DIR=$base/run" "LAUNCHER_STATE_DIR=$base/state" \
+          "CLAUDE_SESSIONS_DIR=$base/home/.claude/sessions" MCP_HOST=127.0.0.1 \
+          DATABASE_ADAPTER=sqlite COMPOSE_PROFILES= PUBLIC_HOST= GITHUB_LOGIN=e2e-user GITHUB_TOKEN=e2e-unused \
+          'SSH_ATTACH_TEMPLATE="ssh e2e-host"' TEAM_TERMINAL_URL=http://127.0.0.1:1/; do put "${kv%%=*}" "${kv#*=}"; done
+{
+  echo "services:"
+  for s in web mcp scanner github notifier writer; do
+    printf '  %s:\n    image: %s\n    network_mode: "container:%s"\n' "$s" "$image" "$box"
+    case $s in web|mcp) echo '    ports: !reset []' ;; esac
+  done
+} > "$base/app/board-e2e.override.yml"
+
+lab=busyyaks:harness-lab-$(sha256sum < "$here/Dockerfile" | cut -c1-12)
+docker build -q -t "$lab" "$here" >/dev/null
+docker build -q -t "$image" "$base/app" >/dev/null
+docker run -d --name "$box" --network none --user "$(id -u):$(id -g)" -e HOME="$base/home" -e TMUX_TMPDIR="$base/home" \
+  -e LANG=C.UTF-8 -v "$base:$base" -w "$base/app" "$lab" sleep 1800 >/dev/null
+# the web, MCP and scripted-model ports: free in the box's own network namespace, asked of the kernel there (port 0).
+# The services listen on their CONTAINER port inside that namespace and nothing is published, so each host port equals
+# its container port (the web's Host check and the MCP URL name the host port)
+read -r web_port mcp_port model_port < <(docker exec "$box" ruby -rsocket \
+  -e 's = Array.new(3) { TCPServer.new("127.0.0.1", 0) }; puts s.map { _1.addr[1] }.join(" ")')
+[[ "$web_port $mcp_port $model_port" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ ]] || { echo "FAILED free_ports" >&2; exit 1; }
+for kv in "WEB_HOST_PORT=$web_port" "WEB_CONTAINER_PORT=$web_port" "MCP_HOST_PORT=$mcp_port" "MCP_CONTAINER_PORT=$mcp_port"; do
+  put "${kv%%=*}" "${kv#*=}"
+done
+driver="$base/app/scripts/harness-lab/board_e2e.rb"
+docker exec "$box" ruby "$driver" configure "$base"
+"$base/app/bin/setup" check >/dev/null
+compose up -d --wait --no-build web mcp scanner notifier writer >/dev/null 2>&1 || { echo "FAILED stack_up"; compose logs --tail 20 >&2; exit 1; }
+compose exec -T web bin/agent-settings show 2>/dev/null > "$base/settings.yml"
+docker exec "$box" ruby "$driver" settings "$base"
+compose exec -T web bin/agent-settings import < "$base/settings-hermes.yml" >/dev/null 2>&1
+# the real bin/collector, its tmux through board_tmux_shim (a paste can be held until the dialog is open)
+mkdir "$base/shim"
+ln -s "$base/app/scripts/harness-lab/board_tmux_shim" "$base/shim/tmux"
+docker exec -d "$box" sh -c "PATH='$base/shim':\$PATH BOARD_E2E_MOCK='$base/mock' ruby bin/collector > '$base/collector.log' 2>&1"
+docker exec "$box" ruby "$driver" await-file "$base/collector/sessions.json"
+docker exec -d "$box" sh -c "ruby bin/launcher > '$base/launcher.log' 2>&1"
+docker exec "$box" ruby "$driver" await-file "$base/run/launcher.sock"
+docker exec -d -e BOARD_E2E_MODEL_PORT="$model_port" "$box" sh -c "node '$base/app/scripts/harness-lab/board_mock.mjs' '$base/mock' > '$base/mock.log' 2>&1"
+docker exec "$box" ruby "$driver" await-file "$base/mock/up"
+docker exec -e BOARD_E2E_MODEL_PORT="$model_port" "$box" ruby "$driver" run "$base"
+# the services' own logs, read here: the token through grep's pattern FILE, never on a command line
+sed -n 's/^MCP_TOKEN=//p' "$base/app/.env" > "$base/token"
+if compose logs --no-color 2>&1 | grep -q -F -f "$base/token"; then
+  echo "FAIL token_not_in_service_logs" | tee -a "$base/out/steps.log"
+  exit 1
+fi
+echo "PASS token_not_in_service_logs" | tee -a "$base/out/steps.log"
+echo "board-e2e: every step passed ($(grep -c '^PASS' "$base/out/steps.log"))"

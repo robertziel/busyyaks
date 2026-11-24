@@ -30,16 +30,27 @@ module Busyyaks
       # marker, into the terminal
       CONTROL = /[\x00-\x08\x0b-\x1f\x7f\u0080-\u009f]/
       SESSION = /\A[^\x00-\x1f]{1,200}\z/
+      READ_BACK_POLLS = 8 # further reads of the input after our own paste, READ_BACK_STEP_S apart (about a second in all)
+      READ_BACK_STEP_S = 0.1
+      STYLE = /\e\[[0-9;:]*m/ # the colours of a `capture-pane -e`
       TASKS = "busyyaks's collector reads no subagents, workflows or background tasks"
 
       # dialog: the dialog parser (AgentsKanban::SessionDialog.parse — the one bin/launcher uses); typeable: engine
-      # family → may a message be typed into it (Busyyaks::Engines's families: Claude Code yes, Hermes no)
-      def initialize(latest:, procfs:, tmux:, dialog:, typeable:, log: ->(m) { puts m }, pause: ->(s) { sleep s })
+      # family → may a message be typed into it unconditionally (Claude Code); proven: (family, session, pid, start ticks)
+      # → bin/launcher's own record says THAT process runs in queue mode (Hermes; read here, never taken from a request);
+      # paste_refusal: (family, screen) → why a line may not be typed now; input_state: (family, styled screen, text) → what
+      # its input holds (HermesBoard.input_state), nil = this family's input is not read
+      def initialize(latest:, procfs:, tmux:, dialog:, typeable:, proven:, paste_refusal:, input_state:, reads_input:,
+                     log: ->(m) { puts m }, pause: ->(s) { sleep s })
         @latest = latest
         @procfs = procfs
         @tmux = tmux
         @dialog = dialog
         @typeable = typeable
+        @proven = proven
+        @paste_refusal = paste_refusal
+        @input_state = input_state
+        @reads_input = reads_input
         @log = log
         @pause = pause
         @input = Mutex.new # one keystroke stream at a time
@@ -130,29 +141,129 @@ module Busyyaks
 
       def send_text(t, req)
         text = clean(req["text"]) or return err("invalid_request", "text must be 1..#{TEXT_MAX} characters")
-        return err("unsupported", "a message is not typed into #{t.family.name}") unless @typeable.call(t.family.name)
+        unless @typeable.call(t.family.name) || @proven.call(t.family.name, t.name, t.pid, t.start_ticks)
+          return err("unsupported", "a message is not typed into #{t.family.name}")
+        end
 
         @input.synchronize do
           return err("no_session", "the agent is no longer running in that pane") unless alive?(t)
-          return err("dialog", "a dialog is on its screen: a paste would answer it") if @dialog.call(capture(t))
 
-          paste(t, text)
-          begin
-            unless req["submit"] == false
-              @pause.call(PASTE_SETTLE_S) # the paste lands before the Enter
-              _o, e, ok = @tmux.run(t.socket, "send-keys", "-t", t.pane_id, "Enter")
-              raise TmuxFailed, e.strip[0, 200] unless ok
-            end
-          rescue TmuxFailed => e
-            return err("unconfirmed", "pasted, then the Enter failed: #{e.message}")
-          end
-          @log.call("#{Clock.now.iso8601} send #{text.length} chars → #{t.name} (#{t.pane_id})") # never the text
-          { ok: true }
+          @reads_input.call(t.family.name) ? send_checked(t, text, req) : send_plain(t, text, req)
         end
       rescue TmuxFailed => e
         err("tmux", e.message)
       rescue Unconfirmed => e
         err("unconfirmed", "the paste failed and may have been typed in part: #{e.message}")
+      end
+
+      def send_plain(t, text, req)
+        return err("dialog", "a dialog is on its screen: a paste would answer it") if @dialog.call(capture(t))
+
+        paste(t, text)
+        return sent(t, text) if req["submit"] == false
+
+        @pause.call(PASTE_SETTLE_S) # the paste lands before the Enter
+        enter_after_paste(t, text)
+      end
+
+      # No memory between sends: the input on the screen decides, every time. Empty → paste. This very ping (a dialog
+      # stopped its Enter, even before a restart) → Enter only. Anything else → nothing typed: never glued to it.
+      def send_checked(t, text, req)
+        ansi = capture_styled(t)
+        why = blocked(t, ansi.gsub(STYLE, ""))
+        return err("dialog", why) if why
+
+        now = @input_state.call(t.family.name, ansi, text)
+        case now[:state]
+        when :ours then enter_after_paste(t, text) # its paste is on the screen: a failed Enter is never retried
+        when :empty then paste_and_enter(t, text, req)
+        else refused(now)
+        end
+      end
+
+      # After our own paste the input must show THIS ping before Enter. It may render late, so it is read for about a
+      # second. Never seen → `paste_unconfirmed`, which is not retried: an input that still looks empty cannot be told
+      # from a paste not drawn yet, and a retry would paste a second copy.
+      def paste_and_enter(t, text, req)
+        paste(t, text)
+        return sent(t, text) if req["submit"] == false
+
+        @pause.call(PASTE_SETTLE_S) # the paste lands before the Enter
+        begin
+          read_back_and_enter(t, text)
+        rescue TmuxFailed => e
+          # the line is in (or on its way into) the input: a retry could find it not drawn yet and paste a second copy
+          err("unconfirmed", "pasted, then its input could not be read back: #{e.message}")
+        end
+      end
+
+      def read_back_and_enter(t, text)
+        seen = nil
+        (READ_BACK_POLLS + 1).times do |i|
+          @pause.call(READ_BACK_STEP_S) if i.positive?
+          ansi = capture_styled(t)
+          screen = ansi.gsub(STYLE, "")
+          # a dialog that opened meanwhile would take the Enter as its answer (Hermes: "Allow once" is preselected)
+          return err("dialog", "a dialog is on its screen (the line waits in its input)") if @dialog.call(screen)
+
+          seen = @input_state.call(t.family.name, ansi, text)
+          next if seen[:state] == :unreadable # a repaint
+
+          why = @paste_refusal.call(t.family.name, screen)
+          return err("dialog", "#{why} (the line waits in its input)") if why
+          next if seen[:state] == :empty # not drawn yet
+
+          return after_paste(t, text, seen)
+        end
+        shows = seen[:state] == :empty ? "nothing" : seen[:why]
+        err("paste_unconfirmed", "the line was pasted but its input still shows #{shows}: Enter not pressed, not pasted again")
+      end
+
+      def after_paste(t, text, seen)
+        unless seen[:state] == :ours
+          return err("input_busy", "the line was pasted, but its input now holds #{seen[:why]}: Enter not pressed")
+        end
+
+        enter_after_paste(t, text)
+      end
+
+      # Enter on a line of ours in the input (pasted just now, or by an earlier send of this ping): a failed Enter may still
+      # have landed, and a retry would then find an empty input and paste a second copy — so it is unconfirmed, never sent
+      # again
+      def enter_after_paste(t, text)
+        enter(t)
+        sent(t, text)
+      rescue TmuxFailed => e
+        err("unconfirmed", "pasted, then the Enter failed: #{e.message}")
+      end
+
+      def refused(now)
+        return err("input_unreadable", "its input cannot be read: #{now[:why]}: nothing typed") if now[:state] == :unreadable
+
+        err("input_busy", "its input holds #{now[:why]}: nothing typed until it is sent or cleared")
+      end
+
+      def capture_styled(t)
+        out, e, ok = @tmux.run(t.socket, "capture-pane", "-e", "-p", "-t", t.pane_id)
+        raise TmuxFailed, e.strip[0, 200] unless ok
+
+        out
+      end
+
+      def enter(t)
+        _o, e, ok = @tmux.run(t.socket, "send-keys", "-t", t.pane_id, "Enter")
+        raise TmuxFailed, e.strip[0, 200] unless ok
+      end
+
+      def sent(t, text)
+        @log.call("#{Clock.now.iso8601} send #{text.length} chars → #{t.name} (#{t.pane_id})") # never the text
+        { ok: true }
+      end
+
+      def blocked(t, screen)
+        return "a dialog is on its screen: a paste would answer it" if @dialog.call(screen)
+
+        @paste_refusal.call(t.family.name, screen)
       end
 
       # one bracketed paste (a multi-line text arrives as ONE paste, never a series of Enters): the text through stdin into

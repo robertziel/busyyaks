@@ -1,0 +1,24 @@
+  minus C:\Windows\System32\bash.exe (the WSL launcher stub, first on PATH
+
+⚠ Approval: rm -rf /home/labuser/.local/state/hermes-lab-run1/mock/target && sle
+ep 7 && touch /home/labuser/.local/state/busyyaks-e… → allowed once
+  💻 rm -rf /home/labuser/.local/state/hermes-lab-run1/mock/target + 2 commands
+ ( 38.4s · ↓ 41 tok)
+
+ ☤ lab-model │ 7.63K/200K pinned │ [░░░░░░░░░░] 4% │ ◷ 0.8s │ . ─ e2e title #21
+────────────────────────────────────────────────────────────────────────────────
+☤ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel
+────────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -117,15 +117,24 @@ class HermesLab < Harness
     @lab.keys("Enter")
   end
 
+  # The shape bin/launcher gives a board session (lib/busyyaks/hermes_board.rb): the user's config holds the one
+  # inert MCP line and nothing about the board; everything else is the per-launch overlay in HERMES_MANAGED_DIR.
   def launch
     File.write(File.join(@lab.home, "config.yaml"), <<~Y)
       model: {default: lab-model, provider: custom, base_url: "#{@lab.url}/v1", api_key: lab, context_length: 200000}
-      mcp_servers: {lab: {url: "#{@lab.url}/mcp"}}
       approvals: {mode: manual}
-      display: {busy_input_mode: #{self.class::BUSY}}
+      mcp_servers: {lab: {enabled: false}}
+    Y
+    managed = File.join(@lab.dir, "managed")
+    FileUtils.mkdir_p(managed)
+    File.chmod(0o700, managed)
+    File.write(File.join(managed, "config.yaml"), <<~Y, perm: 0o600)
+      mcp_servers: {lab: {enabled: true, url: "#{@lab.url}/mcp", headers: {Authorization: "Bearer lab-file-token"}}}
+      display: {busy_input_mode: #{self.class::BUSY}, language: en, skin: default}
       tools: {tool_search: {enabled: false}}
     Y
-    @lab.start({ "HOME" => @lab.home, "HERMES_HOME" => @lab.home }, %w[hermes chat])
+    @lab.start({ "HOME" => @lab.home, "HERMES_HOME" => @lab.home, "HERMES_MANAGED_DIR" => managed,
+                 "HERMES_LANGUAGE" => "en", }, %w[hermes chat])
   end
 end
 

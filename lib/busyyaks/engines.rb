@@ -3,6 +3,7 @@
 require "yaml"
 require_relative "agent_screen"
 require_relative "agent_activity"
+require_relative "hermes_board"
 
 module Busyyaks
   # The coding-agent engines: the names the agent_engines collector reports per pane. What an engine IS is
@@ -19,6 +20,14 @@ module Busyyaks
       def rules = raise(NotImplementedError)
       # may a busyyaks message be typed into the pane mid-turn (bin/launcher notify)?
       def typeable? = false
+      # typeable only for a process bin/launcher proves it started in queue mode (HermesBoard::Records)
+      def typeable_with_proof? = false
+      # why a line may not be typed on this screen right now, nil = it may
+      def paste_refusal(_screen) = nil
+      # what its input holds relative to this line, from a styled capture (HermesBoard.input_state); nil = this family's
+      # input is not read: the line is pasted and entered
+      def input_state(_ansi, _text) = nil
+      def reads_input? = false
       # what a working pane is doing (AgentActivity's verdict), nil = this family's screen does not say
       def activity(_screen) = nil
     end
@@ -31,10 +40,16 @@ module Busyyaks
       def activity(screen) = AgentActivity.claude(screen)
     end
 
-    # Hermes' input state is unreadable, so typing into it is not risked.
+    # Hermes cuts the running turn on a typed line in its default mode: typed only into a session busyyaks launched with
+    # queue mode, and only while its composer is the plain prompt.
     class Hermes < Family
       def name = "hermes"
       def rules = AgentScreen::HERMES
+      def typeable_with_proof? = true
+      def paste_refusal(screen) = HermesBoard.paste_refusal(screen)
+      def activity(screen) = AgentActivity.hermes(screen)
+      def input_state(ansi, text) = HermesBoard.input_state(ansi, text)
+      def reads_input? = true
     end
 
     FAMILIES = [ClaudeCode, Hermes].map(&:new).to_h { |f| [f.name, f] }.freeze
@@ -91,12 +106,17 @@ module Busyyaks
       # bin/launcher's pane: {label, family} for a known engine, {error} for one that is not configured
       def pane(name) = known?(name) ? { label: fetch(name).label, family: fetch(name).family } : { error: missing(name) }
 
-      # bin/launcher notify: the engines among `names` a message may not be typed into → [[name, why]]
-      def untypeable(names)
+      # bin/launcher notify: the engines among `names` a message may not be typed into → [[name, why]].
+      # proven: bin/launcher holds the record that this session's process runs in queue mode
+      def untypeable(names, proven: false)
         names.uniq.filter_map do |n|
           next [n, "not configured"] unless known?(n)
 
-          [n, "family #{fetch(n).family.name}"] unless fetch(n).family.typeable?
+          family = fetch(n).family
+          next if family.typeable? || (proven && family.typeable_with_proof?)
+
+          why = family.typeable_with_proof? ? "#{family.name}: not launched by busyyaks in queue mode" : family.name
+          [n, "family #{why}"]
         end
       end
     end
