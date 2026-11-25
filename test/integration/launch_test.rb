@@ -177,6 +177,30 @@ mtime: Busyyaks::Clock.now.to_f, }],
     assert_equal 1, j["total"]
   end
 
+  # card 275: the project page polls GET /api/projects/*slug/sessions (card 614) — a session started later is listed,
+  # one that ended is gone, and the launcher down answers 200 with launcher_error and NO sessions (it could not ask):
+  # this test proves the answers the page reads; the held list itself is the frontend's (sessionLanes.test.ts heldSessions)
+  def test_project_sessions_poll_follows_the_launcher
+    fake_launcher
+    names = -> { api(:get, "/api/projects/group/repo/sessions")["sessions"].map { |s| s["name"] } }
+    assert_equal ["group_repo"], names.call
+    assert_equal 200, last_response.status
+    @live_extra = ["group_repo_worker"]
+    assert_equal %w[group_repo group_repo_worker], names.call, "a session started after the page loaded is listed"
+    @live_extra = nil
+    assert_equal ["group_repo"], names.call, "an ended session is gone"
+
+    @server.close
+    @thread.kill
+    File.unlink(SOCK)
+    j = api(:get, "/api/projects/group/repo/sessions")
+    assert_equal 200, last_response.status
+    assert_equal [], j["sessions"]
+    assert_includes j["launcher_error"], "launcher not reachable"
+    api(:get, "/api/projects/nope/sessions")
+    assert_equal 404, last_response.status
+  end
+
   def agent(j, name) = j["groups"].flat_map { |g| g["sessions"] }.find { |x| x["name"] == name }
 
   # unread (formerly "done"): a turn that ended after the operator last saw the session;
