@@ -76,5 +76,6 @@ A pull request is reviewed once `scripts/ci/test.sh all` is green. Stages, paral
 - Subject: imperative, at most ~72 characters, saying what changes for the user (`Board: refuse a move with no
   transition`), optionally prefixed with the area. The body says why, and what was measured or tested.
 - Sign-off and GPG signatures are welcome, not required.
-- A pull request fills in the [template](.github/PULL_REQUEST_TEMPLATE.md): what and why, how it was tested, the
-  screenshots of any visible change (desktop and phone width, light and dark skin when the colours change).
+- A pull request fills in the [template](.github/PULL_REQUEST_TEMPLATE.md): what, why (the real case behind it), what
+  was verified and what was not, and a visual where it helps — the screenshots of any visible change (desktop and
+  phone width, light and dark skin when the colours change), taken on a demo or test stack.

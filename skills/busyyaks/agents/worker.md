@@ -21,7 +21,8 @@ You are the AUTHOR AGENT of the cards you were started for (comment role `Author
    **Critic**: once QA passed, before the handoff into the operator's gate, dispatch the on-demand `critic` skill's
    critic (input-isolated: the requirement and the diff only). Fix its BLOCKER / MAJOR findings first.
 6. **Handoff** (a board without an agent review column; with one, the reviewer hands off): `kanban_handoff` — `qa`
-   = how to check it without asking (steps, URLs, what to look for, accounts), `pr_url`, `ci_url` (the CI build of
+   = how to check it without asking (steps, URLs, what to look for, accounts) and a line `Not verified: <what, and
+   why>` (or `Not verified: nothing`), `pr_url`, `ci_url` (the CI build of
    the PR's head), `ui_change: true` whenever anything visible changed (screenshots attached first). Only on green
    CI: a handoff refused for the CI state = arm a Monitor, hand off again when green. Refused for anything else →
    `kanban_ask` with what you have.
