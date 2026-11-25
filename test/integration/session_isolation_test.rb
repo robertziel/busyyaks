@@ -59,9 +59,9 @@ class SessionIsolationTest < Minitest::Test
   # U4: the project page's session list (its chips) and the card owner picker come from
   # the same launcher answer — the hand-run session is in none of them
   def test_the_project_page_lists_no_session_started_from_the_terminal
-    j = api(:get, "/api/projects/app")
+    j = api(:get, "/api/projects/app/sessions")
     assert_equal 200, last_response.status, j.inspect
-    assert_equal %w[by_app_lead by_desk], j.dig("project", "sessions").map { |s| s["name"] }.sort
+    assert_equal %w[by_app_lead by_desk], j["sessions"].map { |s| s["name"] }.sort
     assert_nil j["launcher_error"]
     assignees = api(:get, "/api/projects/app/board")["assignees"]
     assert_includes assignees, "by_app_lead"

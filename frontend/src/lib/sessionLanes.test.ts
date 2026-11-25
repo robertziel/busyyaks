@@ -13,6 +13,9 @@ import {
   inTerminal,
   laneOf,
   liveIssue,
+  behindKey,
+  catchUpAsks,
+  catchUpTracker,
   menuPosition,
   triggerHidden,
   needOf,
@@ -277,6 +280,112 @@ describe("liveIssue", () => {
       kind: "old",
       text: "showing the last snapshot: collector snapshot 42s old · collector: herdr down",
     });
+  });
+});
+
+describe("liveIssue: the session list (card 614)", () => {
+  const data = (o: Record<string, unknown> = {}) =>
+    ({ stale: false, age_s: 2, collector_error: null, groups: [], ...o }) as unknown as Parameters<typeof liveIssue>[0];
+  it("its failed refresh: the lanes are its last read, said first", () => {
+    expect(liveIssue(data(), null, "503 down")).toEqual({
+      kind: "old",
+      text: "showing the last snapshot: session list refresh failed: 503 down",
+    });
+    expect(liveIssue(data({ stale: true, age_s: 40 }), "502", "503 down")?.text).toBe(
+      "showing the last snapshot: session list refresh failed: 503 down · refresh failed: 502 · collector snapshot 40s old",
+    );
+    expect(liveIssue(data(), null, null)).toBeNull();
+    // the Agents read failed with no answer: both failures said
+    expect(liveIssue(undefined, "502", "503 down")).toEqual({
+      kind: "none",
+      text: "live state unknown: 502 · session list refresh failed: 503 down",
+    });
+    // the Agents read not answered yet: the list's failure is still said
+    expect(liveIssue(undefined, null, "503 down")).toEqual({
+      kind: "old",
+      text: "showing the last snapshot: session list refresh failed: 503 down",
+    });
+  });
+});
+
+// card 614: the session list and the Agents read are polled apart; one naming what the other lacks asks it again
+describe("behindKey + catchUpAsks", () => {
+  it("names one read lists that the other does not, sorted, deduplicated, order-free", () => {
+    expect(behindKey(["b", "a", "c"], ["c"])).toBe("a\nb");
+    expect(behindKey(["a", "b"], ["b", "a"])).toBe("");
+    expect(behindKey(["x", "x"], [])).toBe("x");
+    expect(behindKey(["b", "a"], [])).toBe(behindKey(["a", "b"], []));
+  });
+  it("a session the lead spawned: the Agents read lists it first → the session list is asked once", () => {
+    const tmux = ["p_teamlead"];
+    const k0 = behindKey(["p_teamlead", "other_lead"], tmux); // another project's session: a standing difference
+    expect(catchUpAsks(null, k0)).toBe(false); // first render: both reads fresh
+    const k1 = behindKey(["p_teamlead", "other_lead", "p_worker_9"], tmux);
+    expect(catchUpAsks(k0, k1)).toBe(true); // the new worker → ask
+    expect(catchUpAsks(k1, k1)).toBe(false); // re-render, no new read: never a loop
+    const k2 = behindKey(["p_teamlead", "other_lead", "p_worker_9"], [...tmux, "p_worker_9"]);
+    expect(catchUpAsks(k1, k2)).toBe(false); // the list caught up: back to the standing difference, nothing asked
+    // two sessions at once, one read behind by one of them: the newer name asks again
+    expect(catchUpAsks("a", "a\nb")).toBe(true);
+    expect(catchUpAsks("a\nb", "b")).toBe(false);
+  });
+  it("a session that ended: the list drops it while the Agents read still has it, then both agree", () => {
+    const k0 = behindKey(["a", "b"], ["b", "a"]);
+    expect(k0).toBe("");
+    const k1 = behindKey(["a", "b"], ["a"]); // the list dropped b first
+    expect(catchUpAsks(k0, k1)).toBe(true);
+    expect(catchUpAsks(k1, behindKey(["a"], ["a"]))).toBe(false); // agreed: nothing more
+  });
+});
+
+describe("catchUpTracker: the page's catch-up, render by render (card 614)", () => {
+  it("asks once per new difference; a re-render with the same key, the first key or no Agents read asks nothing", () => {
+    const step = catchUpTracker();
+    expect(step(null)).toBe(false); // the Agents read has not answered: nothing recorded
+    expect(step("")).toBe(false); // first key: both reads fresh, only recorded
+    expect(step("")).toBe(false); // a re-render (or a new ask function) with the same key
+    expect(step("p_worker_9")).toBe(true); // the lead spawned a worker the session list has not seen: ask once
+    expect(step("p_worker_9")).toBe(false); // the next renders until the list answers: no second ask
+    expect(step(null)).toBe(false); // the Agents read lost (null) keeps the record
+    expect(step("p_worker_9")).toBe(false);
+    expect(step("p_worker_9\np_worker_10")).toBe(true); // another new name while still behind: ask again
+    expect(step("")).toBe(false); // caught up
+    expect(step("p_worker_10")).toBe(true); // a name differs again after agreeing: asked
+  });
+  it("each tracker is its own: two catch-ups on one page never share a record", () => {
+    const a = catchUpTracker();
+    const b = catchUpTracker();
+    expect(a("x")).toBe(false);
+    expect(b("y")).toBe(false);
+    expect(a("x\ny")).toBe(true);
+    expect(b("y")).toBe(false);
+  });
+});
+
+describe("buildLanes follows the session list (card 614)", () => {
+  const tmux = (name: string, created: number) => ({ name, created }) as unknown as TmuxSession;
+  const ag = (name: string, state: string) => ({ name, state }) as unknown as AgentSession;
+  const regs = (...names: string[]) =>
+    names.map((session) => ({ session, type: "worker", launcher: "fullclaude" }) as RegisteredSession);
+  it("a session added between two reads gets a chip; one removed leaves every lane", () => {
+    const before = buildLanes([tmux("p_lead", 1)], [ag("p_lead", "idle")], regs("p_lead"));
+    expect(before.quiet.map((l) => l.tmux.name)).toEqual(["p_lead"]);
+    const added = buildLanes(
+      [tmux("p_lead", 1), tmux("p_worker", 2)],
+      [ag("p_lead", "idle"), ag("p_worker", "working")],
+      regs("p_lead", "p_worker"),
+    );
+    expect(added.working.map((l) => l.tmux.name)).toEqual(["p_worker"]);
+    const gone = buildLanes(
+      [tmux("p_lead", 1)],
+      [ag("p_lead", "idle"), ag("p_worker", "working")],
+      regs("p_lead", "p_worker"),
+    );
+    expect([...gone.you, ...gone.working, ...gone.quiet].map((l) => l.tmux.name)).toEqual(["p_lead"]);
+  });
+  it("listed before the Agents read has it: Quiet with no live state, never a guessed one", () => {
+    const l = buildLanes([tmux("p_new", 3)], [], regs("p_new"));
+    expect(l.quiet.map((x) => [x.tmux.name, x.agent])).toEqual([["p_new", null]]);
   });
 });
 

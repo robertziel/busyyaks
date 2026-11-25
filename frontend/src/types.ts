@@ -91,6 +91,8 @@ export type LaunchState = {
   launches: import("./vendor/agents_kanban/types").LaunchesData;
   launcher_error: string | null;
 };
+// GET /api/projects/:slug/sessions — the project page's live part, polled (card 614): its tmux sessions + the launches
+export type ProjectSessionsData = LaunchState & { sessions: TmuxSession[] };
 export type Scan = { started_at: number; finished_at: number | null; repos: number | null; error: string | null };
 export type WeekActivity = { project_slug: string; commits: number; mine: number };
 export type DailyCounts = Record<string, number>;
@@ -140,7 +142,13 @@ export type TodayData = LaunchState & {
 export type Root = { path: string; prefix: string };
 export type Job = { url: string; path: string; status: string; exit: number | null; tail: string | null };
 export type ProjectsData = LaunchState & { tree: TreeNode[]; total: number; roots: Root[]; jobs: Job[] };
-export type ProjectData = LaunchState & { project: Project; year: DailyCounts; commits: Commit[]; notes: Note[] };
+// the page's one-off read: no sessions / launches — those are ProjectSessionsData, polled (card 614)
+export type ProjectData = {
+  project: Omit<Project, "sessions">;
+  year: DailyCounts;
+  commits: Commit[];
+  notes: Note[];
+};
 export type ReportsData = { reports: ReportRow[] };
 export type ReportData = { report: Report; older: ReportRow | null; newer: ReportRow | null };
 export type ComponentsData = {
