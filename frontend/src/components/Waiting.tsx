@@ -9,7 +9,7 @@ import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { apiGet, useResource } from "../api";
 import { now, projectPath } from "../lib/format";
-import { useLiveRev } from "../lib/live";
+import { refreshed, useLiveRev } from "../lib/live";
 import { readWaiting } from "../lib/appBadge";
 import { useNewWaitingAlert } from "../lib/tabAlert";
 import {
@@ -368,20 +368,23 @@ export function WaitingWidget() {
   const box = useRef<HTMLDivElement>(null);
   const segments = useRef(new Map<Kind, HTMLButtonElement>());
 
-  const load = useCallback(() => {
-    // the installed app's dock badge follows each read: the total, or unknown on a failure
-    void readWaiting(
-      () => apiGet<Waiting>("/api/waiting"),
-      (w) => {
-        setData(w);
-        setFetchErr(null);
-      },
-      setFetchErr,
-    );
-  }, []);
-  useEffect(load, [load]);
-  // polled in a background tab too: a card that starts waiting there marks the tab (card 611)
-  const live = useLiveRev("/api/waiting/rev", load, { every: 4000, whileHidden: true });
+  const load = useCallback(
+    () =>
+      // the installed app's dock badge follows each read: the total, or unknown on a failure
+      readWaiting(
+        () => apiGet<Waiting>("/api/waiting"),
+        (w) => {
+          setData(w);
+          setFetchErr(null);
+        },
+        setFetchErr,
+      ),
+    [],
+  );
+  useEffect(() => void load(), [load]);
+  // polled in a background tab too: a card that starts waiting there marks the tab; a failed read is
+  // asked again on the next poll
+  const live = useLiveRev("/api/waiting/rev", refreshed(load), { every: 4000, whileHidden: true });
   useNewWaitingAlert(data);
   useEffect(() => setAt(now()), [live.at, data]);
 

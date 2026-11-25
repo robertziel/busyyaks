@@ -11,6 +11,10 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - Comment actions: a card's comment box offers **Comment** (pings the owner, no move) and one **Comment & <transition> → <column>** button per workflow transition marked `comment: true` out of the card's column — the comment is posted and the card moved in one step. Marked per transition in the board (`.busyyaks/workflow.yml` or the Workflow editor's "Comment action" checkbox), never in code.
 - Tab alert: a card that starts waiting for you (a question or a gate) while busyyaks is not in front of you puts `(N new)` in the tab title and a dot on the favicon, and sets the page's theme colour; looking at the tab clears them, even while the card still waits.
 
+### Fixed
+
+- Live pages (the board, the waiting widget, Today): a refresh that fails after a change is retried on the next poll and shown as "live · error" until it lands — a card moved on the server no longer stays in its old column under a green live mark.
+
 ## [0.1.0] - 2026-11-25
 
 ### Added

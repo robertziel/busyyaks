@@ -47,7 +47,7 @@ describe("readWaiting (the widget's /api/waiting read)", () => {
     const n = nav();
     const onData = vi.fn();
     const onError = vi.fn();
-    await readWaiting(() => Promise.resolve({ total: 5 }), onData, onError, n);
+    expect(await readWaiting(() => Promise.resolve({ total: 5 }), onData, onError, n)).toBeNull();
     expect(onData).toHaveBeenCalledWith({ total: 5 });
     expect(n.setAppBadge).toHaveBeenCalledWith(5);
     expect(onError).not.toHaveBeenCalled();
@@ -57,7 +57,10 @@ describe("readWaiting (the widget's /api/waiting read)", () => {
     const n = nav();
     const onData = vi.fn();
     const onError = vi.fn();
-    await readWaiting(() => Promise.reject(new Error("502 bad gateway")), onData, onError, n);
+    // the outcome is the caller's too — the live poll asks again after a failed read
+    expect(await readWaiting(() => Promise.reject(new Error("502 bad gateway")), onData, onError, n)).toBe(
+      "502 bad gateway",
+    );
     expect(onError).toHaveBeenCalledWith("502 bad gateway");
     expect(onData).not.toHaveBeenCalled();
     expect(n.setAppBadge).toHaveBeenCalledWith();

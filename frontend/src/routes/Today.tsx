@@ -12,7 +12,7 @@ import { useTitle } from "../lib/title";
 import { attention, commitsLabel, localDay, reportBlock, weekLabel, yearFacts } from "../lib/today";
 import { useMedia } from "../lib/useMedia";
 import { useNow } from "../lib/useNow";
-import { useLiveRev } from "../lib/live";
+import { refreshed, useLiveRev } from "../lib/live";
 import { useMemo, useState } from "react";
 import type { Scan, TodayData } from "../types";
 
@@ -29,7 +29,7 @@ export function Today() {
   useTitle("today");
   const { data, error, loading, reload } = useResource<TodayData>("/api/today");
   const [liveScan, setLiveScan] = useState<Scan | null | undefined>(undefined);
-  const live = useLiveRev<TodayRev>("/api/today/rev", () => void reload(), {
+  const live = useLiveRev<TodayRev>("/api/today/rev", refreshed(reload), {
     every: REV_EVERY_MS,
     onRev: (b) => setLiveScan(b.scan),
   });

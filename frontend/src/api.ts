@@ -109,7 +109,7 @@ export function apiUpload<T>(path: string, form: FormData, onProgress?: (fractio
 }
 
 // ── cache ────────────────────────────────────────────────────────────────────────────────────────
-type Entry = { data?: unknown; error?: ApiError; at: number; inflight?: Promise<void> };
+type Entry = { data?: unknown; error?: ApiError; at: number; inflight?: Promise<ApiError | null> };
 const cache = new Map<string, Entry>();
 const listeners = new Map<string, Set<() => void>>();
 
@@ -117,19 +117,23 @@ function notify(key: string) {
   listeners.get(key)?.forEach((cb) => cb());
 }
 
-// Never rejects: a failed read is stored as the entry's error (useResource → error), so callers may `void` it.
-export function revalidate(key: string): Promise<void> {
+// Never rejects: a failed read is stored as the entry's error (useResource → error), so callers may `void` it. It
+// resolves to the read's outcome — null when the data landed, the ApiError when it failed — so a live poll can ask a
+// failed refresh again; a read already in flight answers with that read's outcome.
+export function revalidate(key: string): Promise<ApiError | null> {
   const cur = cache.get(key);
   if (cur?.inflight) return cur.inflight;
   const inflight = apiGet<unknown>(key).then(
     (data) => {
       cache.set(key, { data, at: Date.now() });
       notify(key);
+      return null;
     },
     (err: unknown) => {
       const e = err instanceof ApiError ? err : new ApiError(0, err instanceof Error ? err.message : String(err));
       cache.set(key, { data: cur?.data, error: e, at: Date.now() });
       notify(key);
+      return e;
     },
   );
   cache.set(key, { ...(cur ?? { at: 0 }), inflight });
@@ -147,7 +151,7 @@ export type Resource<T> = {
   error: ApiError | undefined;
   loading: boolean; // nothing to show yet
   refreshing: boolean;
-  reload: () => Promise<void>; // never rejects: a failure lands in `error`
+  reload: () => Promise<ApiError | null>; // never rejects: the outcome (null = landed); a failure also lands in `error`
 };
 
 export function useResource<T>(key: string | null, opts: { every?: number } = {}): Resource<T> {
@@ -182,7 +186,7 @@ export function useResource<T>(key: string | null, opts: { every?: number } = {}
     };
   }, [key, every]);
 
-  const reload = useCallback(() => (key ? revalidate(key) : Promise.resolve()), [key]);
+  const reload = useCallback(() => (key ? revalidate(key) : Promise.resolve(null)), [key]);
   return {
     data: entry?.data as T | undefined,
     error: entry?.error,
