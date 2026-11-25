@@ -80,6 +80,7 @@ require_relative "../lib/busyyaks/env_file"
 require_relative "../lib/busyyaks/private_socket"
 require_relative "../lib/busyyaks/launcher_rules"
 require_relative "../lib/busyyaks/launch_trust"
+require_relative "../lib/busyyaks/trust_dialog"
 require_relative "../lib/busyyaks/agent_settings"
 # the skills every launch hands its session: busyyaks's own + the project's, staged per launch
 require_relative "../lib/busyyaks/skills"
@@ -241,12 +242,18 @@ end
 # .mcp.json run, so the launcher answers it only for a repo trusted from outside the repo (LaunchTrust: a
 # launch.trusted_paths entry, or a repo this launcher's create made) — cursor to "Yes, I trust this folder" (checked
 # on screen before Enter), then checks it is gone. Any other repo keeps the prompt on screen ({trust: "left"}): the
-# launch flash says so, and a card the session owns gets it as a session dialog. Any OTHER dialog is never touched.
-TRUST_YES = "Yes, I trust this folder"
+# launch flash says so, and the operator answers it from the page as a session dialog (Busyyaks::TrustDialog:
+# screen_dialog, answer_op). Any OTHER dialog is never touched.
+TRUST_YES = Busyyaks::TrustDialog::YES
 
 def pane_text(name) = tmux("capture-pane", "-p", "-t", "=#{name}:").first.to_s
 
-def trust_prompt?(text) = text.include?(TRUST_YES) && text.match?(/trust this folder|Do you trust/i)
+def trust_prompt?(text) = Busyyaks::TrustDialog.prompt?(text)
+
+# The dialog on a screen, as the page / card / answer op see it: Claude Code's folder-trust prompt (unnumbered
+# choices: Busyyaks::TrustDialog), else any other dialog (AgentsKanban::SessionDialog) — two different screens, each
+# read by its own parser; nil = no dialog.
+def screen_dialog(text) = Busyyaks::TrustDialog.parse(text)&.except(:cursor) || AgentsKanban::SessionDialog.parse(text)
 
 # refusal: LaunchTrust.refusal, decided BEFORE the session started (a corrupt record refuses the launch, nothing runs).
 # clock: the launch's one start clock (start_clock): the wait for the prompt (up to `wait`) ends at once when the start
@@ -1068,7 +1075,7 @@ def pane_screen(socket, pane_id, family)
   title, = tmux(*base, "display-message", "-p", "-t", pane_id, "\#{pane_title}")
   verdict = Busyyaks::AgentScreen.detect(family.rules, text, title.to_s.chomp)
   verdict[:activity] = settled_activity("#{sock}/#{pane_id}", family.activity(text)) if verdict[:state] == "working"
-  if verdict[:state] == "blocked" && (d = AgentsKanban::SessionDialog.parse(text))
+  if verdict[:state] == "blocked" && (d = screen_dialog(text))
     verdict[:dialog] = d.slice(:question, :command, :options, :escape, :free_text, :hash).merge(answerable: sock == "default")
   end
   verdict
@@ -1312,7 +1319,7 @@ def dialog_op(req)
   _o, _e, ok = tmux("has-session", "-t", "=#{name}")
   return { ok: false, gone: true, error: "session #{name} is not running" } unless ok
 
-  { ok: true, dialog: AgentsKanban::SessionDialog.parse(pane_text(name)) }
+  { ok: true, dialog: screen_dialog(pane_text(name)) }
 end
 
 # WHERE a session works (the idle watch: which branch's PR to check, how long since a commit): its pane's dir,
@@ -1346,12 +1353,51 @@ def answer_op(req)
   _o, _e, ok = tmux("has-session", "-t", "=#{name}")
   return { ok: false, error: "session #{name} is not running — nothing typed", status: 409 } unless ok
 
-  refusal = AgentsKanban::SessionDialog.refuse_answer(pane_text(name), hash: req["hash"], key: key)
+  screen = pane_text(name)
+  return answer_trust(name, key, req["hash"], screen) if Busyyaks::TrustDialog.parse(screen)
+
+  refusal = AgentsKanban::SessionDialog.refuse_answer(screen, hash: req["hash"], key: key)
   return { ok: false, error: "#{name}: #{refusal} — nothing typed", status: 409 } if refusal
 
   _o, err, ok = tmux("send-keys", "-t", "=#{name}:", key == "esc" ? "Escape" : key)
   puts "#{Busyyaks::Clock.now.iso8601} answer #{name}: #{key} #{ok ? 'pressed' : err.strip}"
   ok ? { ok: true, pressed: key } : { ok: false, error: "tmux: #{err.strip}", status: 500 }
+end
+
+# The folder-trust prompt: its choices carry no number, so the answer is the cursor moved onto the chosen
+# label — each step read back off the screen (the prompt still the one the operator saw) — then Enter, and the
+# prompt checked gone (as accept_trust_enter does): still on screen = a failed answer, said.
+# The operator's own choice: "Yes" trusts the folder for Claude Code from now on, "No" ends the session's claude.
+def answer_trust(name, key, hash, screen)
+  4.times do
+    refusal = Busyyaks::TrustDialog.refuse_answer(screen, hash: hash, key: key)
+    return { ok: false, error: "#{name}: #{refusal} — nothing typed", status: 409 } if refusal
+
+    step = Busyyaks::TrustDialog.step(Busyyaks::TrustDialog.parse(screen), key)
+    break unless step
+
+    tmux("send-keys", "-t", "=#{name}:", step)
+    sleep 0.3
+    screen = pane_text(name)
+  end
+  d = Busyyaks::TrustDialog.parse(screen)
+  unless d && d[:hash] == hash.to_s && d[:cursor] == key
+    return { ok: false, error: "#{name}: the cursor did not reach choice #{key} of the trust prompt — Enter not pressed",
+             status: 409, }
+  end
+
+  _o, err, ok = tmux("send-keys", "-t", "=#{name}:", "Enter")
+  label = d[:options].find { |o| o[:key] == key }[:label]
+  gone = ok && 10.times.any? do
+    sleep 0.5
+    !Busyyaks::TrustDialog.parse(pane_text(name))
+  end
+  puts "#{Busyyaks::Clock.now.iso8601} answer #{name}: trust prompt \"#{label}\" " \
+       "#{ok ? (gone ? 'pressed' : 'pressed, still on screen') : err.strip}"
+  return { ok: false, error: "tmux: #{err.strip}", status: 500 } unless ok
+  return { ok: false, error: "#{name}: the trust prompt is still on screen after Enter", status: 500 } unless gone
+
+  { ok: true, pressed: key }
 end
 
 # ── attach: a session's live terminal ───────────────────────────────────────────────────────────────────────────────

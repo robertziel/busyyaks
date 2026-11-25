@@ -25,6 +25,7 @@ require_relative "../lib/busyyaks/engines"
 require_relative "../lib/busyyaks/private_socket"
 require_relative "../lib/busyyaks/collector"
 require_relative "../vendor/agents_kanban/ruby/lib/agents_kanban/session_dialog"
+require_relative "../lib/busyyaks/trust_dialog"
 
 $stdout.sync = true
 ROOT = File.expand_path("..", __dir__)
@@ -141,7 +142,11 @@ end
 LATEST = Busyyaks::Collector::Latest.new
 SERVER = Busyyaks::Collector::Server.new(
   latest: LATEST, procfs: PROCFS, tmux: TMUX,
-  dialog: ->(text) { AgentsKanban::SessionDialog.parse(text)&.slice(:question, :command, :options, :escape, :free_text, :hash) },
+  # the dialog on a screen, read as bin/launcher's screen_dialog reads it: the folder-trust prompt, else any other
+  dialog: lambda { |text|
+    (Busyyaks::TrustDialog.parse(text) || AgentsKanban::SessionDialog.parse(text))
+      &.slice(:question, :command, :options, :escape, :free_text, :hash)
+  },
   typeable: ->(engine) { ENGINES.known?(engine) && ENGINES.fetch(engine).family.typeable? },
   proven: lambda { |engine, session, pid, ticks|
     next false unless !STATE_DIR.empty? && ENGINES.known?(engine) && ENGINES.fetch(engine).family.typeable_with_proof?

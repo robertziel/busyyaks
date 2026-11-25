@@ -71,6 +71,9 @@ class LauncherTrustTest < Minitest::Test
     @pids = File.join(@base, "pids")
     @pane = File.join(@base, "pane.sh") # a pane command of a test's own: `sh pane.sh <session>`
     @dialog = File.join(@base, "dialog") # the pane shows a permission dialog
+    # the pane draws Claude Code's trust prompt as it does today: unnumbered, the cursor on the choice the
+    # trust_cursor file names (no = "No, exit", the default; yes), moved by send-keys Up / Down
+    @trust_ui = File.join(@base, "trust_ui")
     FileUtils.cp(Open3.capture2("sh", "-c", "command -v bash").first.strip, File.join(@bin, "claude"))
     # a hermes launch: its pane runs `hermes`. Like hermes v0.21.5: `skills list` shows the
     # skills of skills.external_dirs, `${BUSYYAKS_SKILLS_DIR}/busyyaks-skills` resolved from ITS environment
@@ -147,13 +150,21 @@ class LauncherTrustTest < Minitest::Test
             [ -e #{@base}/ls_err ] && cat #{@base}/ls_err >&2; exit 1 ;;
         display-message) exit 1 ;;
         capture-pane)
-          if [ -e #{@dialog} ]; then printf '%s\\n' "Do you want to proceed?" "❯ 1. Yes" "Enter to confirm · Esc to cancel"
+          if [ -e #{@base}/quoting ]; then
+            printf '%s\\n' "Run: echo 'Yes, I trust this folder'?" "❯ 1. Yes" "  2. No" "Enter to confirm · Esc to cancel"
+          elif [ -e #{@dialog} ]; then printf '%s\\n' "Do you want to proceed?" "❯ 1. Yes" "Enter to confirm · Esc to cancel"
           elif [ -e #{@refuse} ]; then echo "Temp directory /tmp/claude-1000 is owned by uid 0, expected 1000."; echo '$ '
-          elif [ -e #{entered} ]; then echo "> "; else
+          elif [ -e #{entered} ]; then echo "> "
+          elif [ -e #{@trust_ui} ]; then
+            if [ "$(cat #{@base}/trust_cursor 2>/dev/null)" = yes ]; then n='  '; y='❯ '; else n='❯ '; y='  '; fi
+            printf '%s\n' " Accessing workspace:" "" " /projects/planted" "" " Quick safety check: Is this a project you created or one you trust?" "" \
+              " ${n}No, exit" " ${y}Yes, I trust this folder" "" " Enter to confirm · Esc to cancel"
+          else
             printf '%s\\n' "Do you trust the files in this folder?" "❯ 1. Yes, I trust this folder" "  2. No, exit"
           fi
           exit 0 ;;
-        send-keys) case " $* " in *" Enter "*) touch #{entered} ;; esac; exit 0 ;;
+        send-keys) case " $* " in *" Enter "*) [ -e #{@base}/deaf ] || touch #{entered} ;; *" Down "*) echo yes > #{@base}/trust_cursor ;;
+            *" Up "*) echo no > #{@base}/trust_cursor ;; esac; exit 0 ;;
       esac
       exit 0
     SH
@@ -261,6 +272,87 @@ class LauncherTrustTest < Minitest::Test
     assert_equal "left", r["trust"], r.inspect
     assert_includes tmux_calls, "new-session"
     refute_includes tmux_calls, "Enter", "nothing pressed for a repo the launcher did not make"
+  end
+
+  # an untrusted repo's trust prompt (unnumbered choices) is a dialog the operator answers from the page —
+  # the launcher moves the cursor onto the chosen label, read back off the screen, then presses Enter; a stale hash or a
+  # key that is no choice types nothing
+  def test_the_operator_answers_an_untrusted_repos_trust_prompt
+    FileUtils.touch(@trust_ui)
+    Open3.capture3("git", "init", "-q", File.join(@projects, "planted"))
+    r = launch("planted")
+    assert_equal "left", r["trust"], r.inspect
+    refute_match(/send-keys/, tmux_calls, "nothing pressed at the launch")
+    File.write(File.join(@base, "alive"), "=by_planted_s\n")
+
+    d = ask("op" => "dialog", "session" => "by_planted_s")["dialog"]
+    assert_equal [["1", "No, exit"], ["2", "Yes, I trust this folder"]], d["options"].map { |o| [o["key"], o["label"]] }
+    assert_equal "/projects/planted", d["command"]
+    refute d.key?("cursor"), "the cursor is the launcher's, never shown"
+
+    %w[esc 3].each do |key|
+      a = ask("op" => "answer", "session" => "by_planted_s", "hash" => d["hash"], "key" => key)
+      refute a["ok"], a.inspect
+    end
+    a = ask("op" => "answer", "session" => "by_planted_s", "hash" => "0" * 64, "key" => "2")
+    assert_match(/changed — nothing typed/, a["error"])
+    refute_match(/send-keys/, tmux_calls, "nothing typed for a refused answer")
+
+    a = ask("op" => "answer", "session" => "by_planted_s", "hash" => d["hash"], "key" => "2")
+    assert a["ok"], a.inspect
+    keys = tmux_calls.lines.grep(/send-keys/).map { |l| l.split.last }
+    assert_equal %w[Down Enter], keys
+    assert_match(/answer by_planted_s: trust prompt "Yes, I trust this folder" pressed/, File.read(@log))
+  end
+
+  # the cursor on "Yes": choosing "No, exit" steps it Up first (review round 1)
+  def test_no_with_the_cursor_on_yes_steps_up
+    FileUtils.touch(@trust_ui)
+    File.write(File.join(@base, "trust_cursor"), "yes\n")
+    Open3.capture3("git", "init", "-q", File.join(@projects, "planted"))
+    launch("planted")
+    File.write(File.join(@base, "alive"), "=by_planted_s\n")
+    d = ask("op" => "dialog", "session" => "by_planted_s")["dialog"]
+    assert ask("op" => "answer", "session" => "by_planted_s", "hash" => d["hash"], "key" => "1")["ok"]
+    assert_equal %w[Up Enter], tmux_calls.lines.grep(/send-keys/).map { |l| l.split.last }
+  end
+
+  # a prompt that stays on screen after Enter (claude ignored the key): the answer fails, said
+  def test_a_trust_prompt_still_on_screen_after_enter_is_a_failed_answer
+    FileUtils.touch(@trust_ui)
+    FileUtils.touch(File.join(@base, "deaf"))
+    Open3.capture3("git", "init", "-q", File.join(@projects, "planted"))
+    launch("planted")
+    File.write(File.join(@base, "alive"), "=by_planted_s\n")
+    d = ask("op" => "dialog", "session" => "by_planted_s")["dialog"]
+    a = ask("op" => "answer", "session" => "by_planted_s", "hash" => d["hash"], "key" => "1")
+    refute a["ok"], a.inspect
+    assert_match(/still on screen after Enter/, a["error"])
+  end
+
+  # a numbered permission dialog that merely QUOTES the trust choices is answered as that dialog (review round 1)
+  def test_a_numbered_dialog_quoting_the_trust_phrase_is_answered_as_itself
+    Open3.capture3("git", "init", "-q", File.join(@projects, "planted"))
+    launch("planted")
+    File.write(File.join(@base, "alive"), "=by_planted_s\n")
+    FileUtils.rm_f(File.join(@base, "entered"))
+    File.write(File.join(@base, "quoting"), "")
+    File.write(@tmux_log, "")
+    d = ask("op" => "dialog", "session" => "by_planted_s")["dialog"]
+    assert_equal "Run: echo 'Yes, I trust this folder'?", d["question"]
+    assert ask("op" => "answer", "session" => "by_planted_s", "hash" => d["hash"], "key" => "1")["ok"]
+    assert_equal %w[1], tmux_calls.lines.grep(/send-keys/).map { |l| l.split.last }
+  end
+
+  # "No, exit" under the cursor already: Enter alone
+  def test_no_on_the_trust_prompt_is_enter_alone
+    FileUtils.touch(@trust_ui)
+    Open3.capture3("git", "init", "-q", File.join(@projects, "planted"))
+    launch("planted")
+    File.write(File.join(@base, "alive"), "=by_planted_s\n")
+    d = ask("op" => "dialog", "session" => "by_planted_s")["dialog"]
+    assert ask("op" => "answer", "session" => "by_planted_s", "hash" => d["hash"], "key" => "1")["ok"]
+    assert_equal %w[Enter], tmux_calls.lines.grep(/send-keys/).map { |l| l.split.last }
   end
 
   # a clone and a git init of one name at the same moment: at most one create succeeds, and nothing cloned is ever
