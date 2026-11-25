@@ -1,0 +1,20 @@
+# The standalone tests of what runs on the host, one path per line (none requires test_helper: no app, no gems).
+# scripts/ci/test.sh host runs them on the oldest host Ruby (HOST_RUBY_IMAGE); scripts/ci/host-distros on each
+# distro's own packaged Ruby. A new host-side test file goes here, nowhere else.
+test/unit/cli_test.rb
+test/unit/cli_remote_test.rb
+test/unit/cli_chooser_test.rb
+test/integration/yaks_test.rb
+test/unit/env_file_test.rb
+test/unit/launcher_rules_test.rb
+test/unit/deploy_template_test.rb
+test/unit/install_launcher_test.rb
+test/unit/deploy_units_test.rb
+test/unit/collector_test.rb
+test/unit/install_collector_test.rb
+test/integration/collector_test.rb
+test/unit/setup_test.rb
+test/unit/ci_stages_test.rb
+test/unit/ci_settings_test.rb
+test/unit/skills_test.rb
+test/unit/no_global_skill_test.rb

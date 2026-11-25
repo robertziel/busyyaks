@@ -1,6 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+# every file this program reads is UTF-8 (.env, config/*.yml, skills, screens), never the locale's encoding: on a host
+# with no UTF-8 locale (LANG unset → US-ASCII) it broke on the first non-ASCII byte (scripts/ci/host-distros)
+Encoding.default_external = Encoding::UTF_8
+
 # The shell scripts' .env reader: prints `export KEY='value'` for each KEY named, for `eval`, read by the one .env
 # parser (lib/busyyaks/env_file.rb) — never `. ./.env`, which would interpolate `$` and cut inline comments its own way.
 # A malformed .env, or a KEY missing or empty → exit 1 naming it; nothing is printed.

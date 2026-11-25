@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# scripts/ci/install-test on a disposable Linux machine made on the spot: the container scripts/ci/machine/Dockerfile
+# builds (systemd as PID 1, the lingering user `ci` with its systemd user manager, its own Docker daemon), started
+# privileged on THIS host's Docker, the change copied in as a git bundle, install-test run as `ci` in a login session,
+# the artifacts copied out, the machine and its volumes removed. Nothing of the host is mounted into it, and no
+# credential goes in: the machine runs the change's own code as its root.
+#
+#   scripts/ci/machine-run image                                       build the machine image (once per build)
+#   scripts/ci/machine-run install|update <checkout> sqlite|postgresql
+#
+# Only on a ROOTLESS Docker daemon (the Jenkins agents'): there --privileged is root of the CI user's own user
+# namespace, its subordinate uids, never the host's. A rootful daemon is refused — privileged there is host root.
+# Env: CI_ARTIFACTS (a dir: the machine's artifacts land there), CI_REGISTRY_MIRROR (the CI host's Docker Hub
+# pull-through cache URL, or none), `update` also CI_UPDATE_FROM (a commit of <checkout>:
+# the code before the change).
+# Bounds: install-test gets RUN_SECONDS; an abort (INT / TERM: a Jenkins abort or timeout) removes the machine too, and
+# a machine or volume that cannot be removed fails the run, naming it.
+set -euo pipefail
+CLAUDE_CODE_VERSION=2.1.329   # the claude CLI bin/launcher and yaks doctor look for (not logged in: nothing is launched)
+BOOT_SECONDS=120
+RUN_SECONDS=1800              # one install-test (measured: install ≈ 3 min, update ≈ 6 min)
+
+usage() {
+  echo "usage: scripts/ci/machine-run image | install|update <checkout> sqlite|postgresql" >&2
+  exit 2
+}
+fail() { printf 'machine-run: %s\n' "$*" >&2; exit 1; }
+here=$(cd "$(dirname "$0")" && pwd)
+
+case "${1:-}" in
+  image) [ "$#" -eq 1 ] || usage ;;
+  install | update)
+    [ "$#" -eq 3 ] || usage
+    case "$3" in sqlite | postgresql) ;; *) usage ;; esac
+    [ -n "${CI_ARTIFACTS:-}" ] || fail "CI_ARTIFACTS is empty"
+    [ "$1" = install ] || [ -n "${CI_UPDATE_FROM:-}" ] || fail "CI_UPDATE_FROM is empty: the commit to update from"
+    ;;
+  *) usage ;;
+esac
+mode=$1
+
+security=$(docker info --format '{{json .SecurityOptions}}') || fail "docker info failed (DOCKER_HOST=${DOCKER_HOST:-unset})"
+case "$security" in
+  *name=rootless*) ;;
+  *) fail "the Docker daemon is not rootless: a privileged machine on it would be host root — run on a rootless daemon" ;;
+esac
+# the registry mirror the machine's dockerd pulls through (see where the machine boots): a URL, or `none`. The daemon
+# running the machine must agree — its mirrors include that URL, or it has none for `none` — refused before anything
+# is built or started (card #573)
+mirror=${CI_REGISTRY_MIRROR:-}
+if [ "$mode" != image ]; then
+  case "$mirror" in
+    none | http://?* | https://?*) ;;
+    "") fail "CI_REGISTRY_MIRROR is empty: the CI host's registry mirror URL, or none" ;;
+    *) fail "CI_REGISTRY_MIRROR is '$mirror': a http(s):// URL or none" ;;
+  esac
+  outer=$(docker info --format '{{json .RegistryConfig.Mirrors}}') || fail "docker info (the daemon's registry mirrors) failed"
+  case "$mirror" in
+    none) [ "$outer" = "[]" ] || [ "$outer" = null ] ||
+      fail "CI_REGISTRY_MIRROR is none, but the daemon running the machine uses $outer: set them alike" ;;
+    *) [[ "$outer" == *"\"${mirror%/}/\""* ]] ||
+      fail "CI_REGISTRY_MIRROR is $mirror, but the daemon running the machine uses ${outer:-no mirror}: set them alike" ;;
+  esac
+fi
+
+image=busyyaks-ci-machine:$(cat "$here/machine/Dockerfile" <(echo "$CLAUDE_CODE_VERSION") | sha256sum | cut -c1-12)
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  echo "machine-run: building $image"
+  docker build -q --build-arg CLAUDE_CODE_VERSION="$CLAUDE_CODE_VERSION" -t "$image" "$here/machine" >/dev/null
+fi
+echo "machine-run: image $image"
+[ "$mode" != image ] || exit 0
+
+src=$(cd "$2" && pwd) adapter=$3
+id=$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')
+name=busyyaks-machine-$mode-$adapter-$id
+mkdir -p "$CI_ARTIFACTS"
+art=$(cd "$CI_ARTIFACTS" && pwd)
+bundle=$(mktemp "${TMPDIR:-/tmp}/machine-$id.XXXXXX.bundle")
+
+# this run's machine and volumes only (by their random name): other builds' machines share this daemon
+cleanup() {
+  local status=$? left=()
+  trap - EXIT INT TERM
+  if docker container inspect "$name" >/dev/null 2>&1 && ! docker rm -f "$name" >/dev/null; then left+=("container $name"); fi
+  for v in "$name-docker" "$name-containerd"; do
+    if docker volume inspect "$v" >/dev/null 2>&1 && ! docker volume rm "$v" >/dev/null; then left+=("volume $v"); fi
+  done
+  rm -f "$bundle"
+  if [ "${#left[@]}" -gt 0 ]; then
+    printf 'machine-run: could not remove %s — remove it by hand\n' "${left[@]}" >&2
+    [ "$status" -ne 0 ] || status=1
+  fi
+  exit "$status"
+}
+# a signal stops the in-flight docker call (bash runs a trap only between commands: the long ones run in the background
+# and are waited for, which a trap interrupts at once), then EXIT's cleanup removes the machine
+child=
+stop() { [ -z "$child" ] || kill "$child" 2>/dev/null || true; exit "$1"; }
+trap cleanup EXIT
+trap 'stop 143' TERM
+trap 'stop 130' INT
+
+# the change: HEAD (+ the commit it updates from), as a bundle — the machine clones it like any remote
+head=$(git -C "$src" rev-parse HEAD)
+git -C "$src" bundle create -q "$bundle" HEAD ${CI_UPDATE_FROM:+"$CI_UPDATE_FROM"} \
+  || fail "git bundle of HEAD${CI_UPDATE_FROM:+ + $CI_UPDATE_FROM} failed"
+
+# /var/lib/docker + containerd on volumes: the machine's daemon cannot stack overlayfs on its own overlay rootfs
+docker run -d --name "$name" --hostname busyyaks-machine --privileged --cgroupns=private \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec \
+  -v "$name-docker:/var/lib/docker" -v "$name-containerd:/var/lib/containerd" "$image" >/dev/null
+# systemd's bus appears a moment after the container starts: until then is-system-running answers nothing it can mean
+state=$(docker exec "$name" timeout "$BOOT_SECONDS" sh -c '
+  until [ -S /run/systemd/private ]; do sleep 0.5; done
+  systemctl is-system-running --wait' 2>&1) || true
+if [ "$state" != running ]; then
+  docker exec "$name" systemctl --failed --no-pager >&2 || true
+  fail "the machine did not boot to 'running' in ${BOOT_SECONDS}s: $state"
+fi
+# Nested here, the machine's systemd boots with its root cgroup enabling no controller for its children
+# (cgroup.subtree_control empty, though cgroup.controllers lists cpu memory pids) until some later unit start enables
+# them. The machine's dockerd (cgroupfs) needs them there, or a memory-limited container fails "openat2
+# /sys/fs/cgroup/docker/<id>/memory.max: no such file or directory" (card #573).
+# Reproduced on a rootless dockerd: 6 of 6 machines booted with it empty and their first --memory container failed;
+# after `systemctl daemon-reexec` 6 of 6 had cpu memory pids, 90 of 90 --memory containers started, and the three
+# stayed through 20 unit starts + reloads each. So: re-exec, then check it, and check again after the install
+docker exec "$name" systemctl daemon-reexec || fail "the machine's systemd did not re-exec"
+docker exec "$name" timeout "$BOOT_SECONDS" systemctl is-system-running --wait >/dev/null \
+  || fail "the machine's systemd is not 'running' after its re-exec"
+root_controllers() { # the machine's root cgroup enables cpu, memory and pids for its children, or fails naming when
+  local sub
+  sub=$(docker exec "$name" cat /sys/fs/cgroup/cgroup.subtree_control) || fail "could not read the machine's root cgroup ($1)"
+  for c in cpu memory pids; do
+    [[ " $sub " == *" $c "* ]] || fail "the machine's root cgroup does not enable $c $1 (subtree_control: [$sub])"
+  done
+}
+root_controllers "after systemd's re-exec"
+uid=$(docker exec "$name" id -u ci)
+docker exec "$name" timeout 60 sh -c "until [ -S /run/user/$uid/bus ] && docker info >/dev/null 2>&1; do sleep 1; done" \
+  || fail "the machine's user manager (/run/user/$uid/bus) or its Docker daemon did not come up in 60 s"
+# the machine's dockerd pulls Docker Hub images through CI_REGISTRY_MIRROR (card #573: every install-test pulled the
+# stack's base images straight from Docker Hub, two machines per build, and parallel builds spent the host's anonymous
+# pulls → 429). Required, no default: a CI host's pull-through cache URL (e.g. set in its agent's environment), or
+# `none` for a host that has none (checked against the daemon running the machine, above). Merged into the image's
+# daemon.json (jq), never written over it
+case "$mirror" in
+  none) ;;
+  *)
+    docker exec -e MIRROR="$mirror" "$name" sh -euc '
+      f=/etc/docker/daemon.json
+      [ -f "$f" ] || echo "{}" > "$f"
+      jq --arg m "$MIRROR" ". + {\"registry-mirrors\": [\$m]}" "$f" > "$f.new"
+      mv "$f.new" "$f"
+      systemctl restart docker' || fail "could not give the machine's dockerd the registry mirror $mirror"
+    docker exec "$name" timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done' \
+      || fail "the machine's Docker daemon did not come back in 60 s after taking the registry mirror"
+    got=$(docker exec "$name" docker info --format '{{json .RegistryConfig.Mirrors}}')
+    [[ "$got" == *"\"${mirror%/}/\""* ]] || fail "the machine's dockerd reports mirrors $got, not $mirror"
+    ;;
+esac
+# read after the mirror step (it restarts the dockerd): the daemon that runs the install is the one checked
+driver=$(docker exec "$name" docker info --format '{{.CgroupDriver}}') || fail "the machine's dockerd did not answer docker info"
+[ "$driver" = cgroupfs ] || fail "the machine's dockerd runs the $driver cgroup driver, machine/Dockerfile sets cgroupfs"
+echo "machine-run: $name up — systemd $(docker exec "$name" systemctl --version | sed -n '1s/^systemd \([0-9]*\).*/\1/p'), $(docker exec "$name" docker version --format 'docker {{.Server.Version}}') ($driver), mirror $mirror, user ci ($uid) lingering"
+
+docker cp -q "$bundle" "$name:/home/ci/change.bundle"
+docker exec "$name" sh -c "chown ci:ci /home/ci/change.bundle && su ci -c 'git clone -q /home/ci/change.bundle /home/ci/src && git -C /home/ci/src checkout -q --detach $head'"
+
+# install-test as `ci` in a login session (pam_systemd: its own session scope, the user manager's bus) — what a reader
+# who logged in runs, bounded by RUN_SECONDS
+status=0
+docker exec -e CI_UPDATE_FROM="${CI_UPDATE_FROM:-}" "$name" \
+  timeout "$RUN_SECONDS" systemd-run -q --pipe --wait --collect -p User=ci -p PAMName=login -p WorkingDirectory=/home/ci \
+    -E BUSYYAKS_DISPOSABLE_HOST=1 -E CI_ARTIFACTS=/home/ci/artifacts -E CI_UPDATE_FROM \
+    -E XDG_RUNTIME_DIR="/run/user/$uid" -E DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+    /home/ci/src/scripts/ci/install-test "$mode" /home/ci/src "$adapter" &
+child=$!
+wait "$child" || status=$?
+child=
+[ "$status" -ne 124 ] || echo "machine-run: install-test did not finish in ${RUN_SECONDS}s" >&2
+
+# a run always writes artifacts (a pass: its screenshots; a failure: its logs): none is a failure of its own
+if ! docker cp -q "$name:/home/ci/artifacts/." "$art/"; then
+  echo "machine-run: no artifacts could be copied out of the machine" >&2
+  [ "$status" -ne 0 ] || status=1
+fi
+# still there after the install (systemd started and reloaded units all along; read once its artifacts are out)
+[ "$status" -ne 0 ] || root_controllers "after install-test"
+if [ "$status" -ne 0 ]; then
+  # the machine's own side of a failure, as its root sees it (install-test, as `ci`, reads only its own units): the
+  # system journal and the cgroup controllers each level enables — what a container that would not start needed
+  docker exec "$name" journalctl -b --no-pager -n 2000 > "$art/machine-journal.txt" 2>&1 \
+    || echo "machine-run: could not read the machine's journal" >&2
+  docker exec "$name" sh -c 'for d in /sys/fs/cgroup /sys/fs/cgroup/system.slice /sys/fs/cgroup/user.slice; do
+      echo "$d: controllers=[$(cat "$d/cgroup.controllers")] subtree=[$(cat "$d/cgroup.subtree_control")]"; done
+      systemctl --failed --no-pager' > "$art/machine-cgroups.txt" 2>&1 \
+    || echo "machine-run: could not read the machine's cgroups" >&2
+  fail "install-test $mode $adapter failed in the machine (exit $status) — artifacts in $art"
+fi
+echo "machine-run: install-test $mode $adapter ok — artifacts in $art"

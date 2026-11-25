@@ -1,6 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+# every file this program reads is UTF-8 (.env, config/*.yml, skills, screens), never the locale's encoding: on a host
+# with no UTF-8 locale (LANG unset → US-ASCII) it broke on the first non-ASCII byte (scripts/ci/host-distros)
+Encoding.default_external = Encoding::UTF_8
+
 # yaks: the busyyaks command line (cli/yaks.rb; `yaks help`). Reached through a symlink on PATH; __dir__ is
 # the REAL path of this file, so the checkout it runs is the one the symlink points into.
 require_relative "../cli/yaks"

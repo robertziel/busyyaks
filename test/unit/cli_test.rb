@@ -4,6 +4,8 @@
 # supports (scripts/ci/test.sh host).
 require "minitest/autorun"
 require "minitest/mock"
+require "open3"
+require "rbconfig"
 require "fileutils"
 require "json"
 require "yaml"
@@ -111,6 +113,23 @@ class CliTest < Minitest::Test
   end
 
   def compose(*args) = ["docker", "compose", "--project-directory", @home, "-f", "#{@home}/docker-compose.yml", *args]
+
+  # bin/yaks's own process loads only what cli/yaks.rb requires: a Time#iso8601 it calls needs `require "time"` there.
+  # In-process the test runner has loaded it already, so this asks a fresh Ruby (card #573: `yaks update --check` raised
+  # NoMethodError on a reader's host; the suite never saw it)
+  # Each file that calls it is asked alone (cli/yaks loads them all, so one require would hide another's missing one).
+  # Ruby 3.4 has Time#iso8601 in core, so the host stage's oldest Ruby (3.2) is where this bites.
+  def test_bin_yaks_loads_the_stdlib_it_calls
+    %w[cli/yaks cli/yaks/update lib/busyyaks/updates].each do |file|
+      out, st = Open3.capture2e(RbConfig.ruby, "-e", <<~RUBY)
+        require #{File.expand_path("../../#{file}", __dir__).dump}
+        t = Time.at(0).utc
+        puts [t.iso8601, Time.iso8601("1970-01-01T00:00:00Z").to_i].join(" ")
+      RUBY
+      assert st.success?, "#{file}: #{out}"
+      assert_equal "1970-01-01T00:00:00Z 0\n", out, file
+    end
+  end
 
   def test_help_lists_every_command
     code, out, = yaks("help")
@@ -741,7 +760,9 @@ class CliTest < Minitest::Test
 
   # the CI gate that runs the host-side tests uses MIN_RUBY's own version (scripts/ci/test.sh HOST_RUBY_IMAGE)
   def test_the_host_gate_runs_min_ruby
-    image = File.read(File.expand_path("../../scripts/ci/test.sh", __dir__))[/^HOST_RUBY_IMAGE=ruby:(\S+)-slim/, 1]
+    # read as UTF-8 whatever the locale: a distro container has none (LANG unset → US-ASCII; scripts/ci/host-distros)
+    script = File.read(File.expand_path("../../scripts/ci/test.sh", __dir__), encoding: "UTF-8")
+    image = script[/^HOST_RUBY_IMAGE=ruby:(\S+)-slim/, 1]
     assert_equal CLI::MIN_RUBY, image.split(".").first(2).join(".")
   end
 

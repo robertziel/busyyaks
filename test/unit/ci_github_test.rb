@@ -84,6 +84,47 @@ class CiGithubTest < Minitest::Test
     assert_equal "local\n", out
   end
 
+  def test_branch_head_prints_the_sha_the_branch_points_at
+    out, _e, status = run_github("branch-head", "local", body: { "name" => "local", "commit" => { "sha" => SHA } }.to_json)
+
+    assert_predicate status, :success?
+    assert_equal "#{SHA}\n", out
+    assert_includes File.read(File.join(@dir, "curl-argv")), "https://api.github.com/repos/owner/repo/branches/local"
+    assert_equal "Authorization: Bearer #{TOKEN}", header.strip
+  end
+
+  def test_branch_head_with_no_commit_sha_says_so
+    _o, err, status = run_github("branch-head", "local", body: { "name" => "local" }.to_json)
+
+    refute_predicate status, :success?
+    assert_match(/branch local holds no commit sha/, err)
+  end
+
+  def test_branch_head_refused_by_github_names_the_code
+    _o, err, status = run_github("branch-head", "local", body: { "message" => "Branch not found" }.to_json, code: 404)
+
+    refute_predicate status, :success?
+    assert_match(/HTTP 404 reading owner\/repo's branch local \(Branch not found\)/, err)
+  end
+
+  def test_branch_head_refuses_dot_segments_and_empty_components
+    ["../x", "a/../b", "a//b", "a/", "/a", ".x", "a/.x"].each do |name|
+      _o, err, status = run_github("branch-head", name)
+
+      refute_predicate status, :success?, name
+      assert_match(/is not a branch name/, err, name)
+    end
+    refute_path_exists File.join(@dir, "curl-argv")
+  end
+
+  def test_branch_head_refuses_a_name_that_is_not_a_branch
+    _o, err, status = run_github("branch-head", "-x;rm")
+
+    refute_predicate status, :success?
+    assert_match(/'-x;rm' is not a branch name/, err)
+    refute_path_exists File.join(@dir, "curl-argv")
+  end
+
   def test_default_branch_missing_says_so
     _o, err, status = run_github("default-branch", body: { "id" => 1 }.to_json)
 

@@ -24,13 +24,25 @@
 #                                 (scripts/ci/quickstart-test, in the docker CLI image)
 #                                 on the OLDEST host Ruby they support (HOST_RUBY_IMAGE = Busyyaks::CLI::MIN_RUBY):
 #                                 a construct newer than that passes the suite's Ruby 3.4 and breaks on the host
+#   scripts/ci/test.sh distros    the host-side tests on Ubuntu 24.04 · Debian 13 · Fedora 42 · Alpine 3.22, each distro's
+#                                 own packaged Ruby and /bin/sh, no locale set (scripts/ci/host-distros)
+#   scripts/ci/test.sh install    busyyaks installed FOR REAL on SQLite (install-pg: PostgreSQL) on a disposable machine
+#                                 made for the stage (scripts/ci/machine-run → scripts/ci/install-test install): the README
+#                                 Quickstart, the image built, the stack up, /up + MCP, the systemd --user units
+#                                 (collector, launcher, daily timer), yaks doctor / server status, the XDG desktop entry
+#                                 and the chooser in Chrome under Xvfb. ROOTLESS Docker only (the machine is privileged)
+#   scripts/ci/test.sh update     the same machine with the change's BASE installed (merge-base of HEAD and CI_BASE_REF),
+#                                 data written, a dirty checkout + a release that does not build refused, then its own
+#                                 `yaks update` to HEAD: migrations, a backup, the data kept (update-pg: on PostgreSQL)
+#                                 The four need CI_ARTIFACTS (screenshots, logs) and no credential.
+#   scripts/ci/test.sh machine-image   builds the machines' image once, before they run in parallel
 #   scripts/ci/test.sh flake      the flake gate: every test file the change touches (vs CI_BASE_REF), plus
 #                                 the tests that name a lib/bin/cli file it touches, each run CI_FLAKE_REPEATS times,
 #                                 CI_RUNNER_CPUS runs at a time (rake test:repeat); any other changed or deleted path
 #                                 repeats the whole suite; one red run of a file fails it:
 #                                 "flaky: <file> failed k/N". CI_BASE_REF (env, required: a commit this checkout has) =
 #                                 what the change is measured against — the PR's base, or the previous commit of a push
-#   scripts/ci/test.sh all        lint, ruby, ruby-pg, frontend, flake, audit, secrets and host at once, each into its own
+#   scripts/ci/test.sh all        lint … distros (every stage above but the four machines) at once, each into its own
 #                                 log, printed one after the other once all have finished; fails if any fails
 #   scripts/ci/test.sh A B …      each named stage, one after the other in that order (every one runs, a red one too),
 #                                 then `ci: A exit 0 · B exit 1`; fails naming each red stage. An unknown name, or `all`
@@ -63,14 +75,16 @@ SRC=$PWD
 
 # The stages, in `all`'s order. The arguments are checked here, before any Docker call: every one must be a stage
 # (`all` only alone) — a name that is not one never runs a subset quietly.
-STAGES=(lint ruby ruby-pg frontend flake audit secrets host)
-usage() { echo "usage: $0 all | STAGE... (stages: ${STAGES[*]}; several run one after the other)" >&2; exit 2; }
+STAGES=(lint ruby ruby-pg frontend flake audit secrets host distros)
+# the install / update machines: by name only, never in `all` — each needs a ROOTLESS daemon (scripts/ci/machine-run)
+MACHINE_STAGES=(machine-image install install-pg update update-pg)
+usage() { echo "usage: $0 all | STAGE... (stages: ${STAGES[*]} ${MACHINE_STAGES[*]}; several run one after the other)" >&2; exit 2; }
 [ "$#" -gt 0 ] || usage
 for arg in "$@"; do
   if [ "$arg" = all ]; then
     [ "$#" -eq 1 ] || { echo "ci: 'all' runs every stage: name it alone" >&2; usage; }
   else
-    case " ${STAGES[*]} " in *" $arg "*) ;; *) echo "ci: unknown stage '$arg'" >&2; usage ;; esac
+    case " ${STAGES[*]} ${MACHINE_STAGES[*]} " in *" $arg "*) ;; *) echo "ci: unknown stage '$arg'" >&2; usage ;; esac
   fi
 done
 
@@ -94,12 +108,12 @@ COMPOSE_IMAGE=docker:28.5.2-cli      # carries the compose plugin (the Jenkins c
 NODE_IMAGE=node:22-bookworm-slim     # the Dockerfile's frontend stage
 GITLEAKS_IMAGE=zricethezav/gitleaks:v8.30.1
 HOST_RUBY_IMAGE=ruby:3.2.3-slim      # Busyyaks::CLI::MIN_RUBY's version (test/unit/cli_test.rb asserts they agree)
-# the standalone tests of what runs on the host (none requires test_helper: no app, no gems)
-HOST_TESTS=(test/unit/cli_test.rb test/unit/cli_remote_test.rb test/unit/cli_chooser_test.rb test/integration/yaks_test.rb test/unit/env_file_test.rb
-            test/unit/launcher_rules_test.rb test/unit/deploy_template_test.rb test/unit/install_launcher_test.rb test/unit/deploy_units_test.rb
-            test/unit/collector_test.rb test/unit/install_collector_test.rb test/integration/collector_test.rb
-            test/unit/setup_test.rb test/unit/ci_stages_test.rb test/unit/ci_settings_test.rb
-            test/unit/skills_test.rb test/unit/no_global_skill_test.rb)
+# the standalone tests of what runs on the host (none requires test_helper: no app, no gems): scripts/ci/host-tests, the
+# one list (scripts/ci/host-distros runs the same files on each distro's own Ruby)
+HOST_TESTS_FILE=scripts/ci/host-tests
+[ -f "$HOST_TESTS_FILE" ] || { echo "ci: $HOST_TESTS_FILE is missing — the host stage's test files" >&2; exit 1; }
+mapfile -t HOST_TESTS < <(sed -e '/^#/d' -e '/^$/d' "$HOST_TESTS_FILE")
+[ "${#HOST_TESTS[@]}" -gt 0 ] || { echo "ci: $HOST_TESTS_FILE names no test file" >&2; exit 1; }
 
 # Bind mounts are resolved by the Docker DAEMON. Under Jenkins this script runs inside the controller's container,
 # talking to the host's daemon, so it needs the checkout's path on the HOST: the source of the container mount that
@@ -154,7 +168,9 @@ chown_back() {
 # the others (lint, audit, secrets, host) use no quota and run on any host. The runner's CPUs must exist on the daemon's
 # host: fewer → refused, never a smaller pin. And the daemon must APPLY the quota: a rootless dockerd whose user manager was not delegated the cpu controller drops
 # --cpus with only a warning and runs unlimited. Asked once per stage that limits, before it starts anything. The probe's
-# image is pulled first (a fresh image cache printed its pull progress where cpu.max was read), and
+# image is pulled first when it is missing (a fresh image cache printed its pull progress where cpu.max was read) — only
+# then: a pull of an image already here still asks Docker Hub, once per limited stage of every build, and many builds at
+# once spent the host's anonymous pulls — and
 # only the run's STDOUT is the measurement: exactly `<quota> <period>` (or `max <period>`), else "could not read".
 require_pin() {
   local got err cpus
@@ -164,7 +180,7 @@ require_pin() {
     return 1
   fi
   err=$(mktemp)
-  if ! docker pull -q "$COMPOSE_IMAGE" > /dev/null 2> "$err"; then
+  if ! docker image inspect "$COMPOSE_IMAGE" > /dev/null 2>&1 && ! docker pull -q "$COMPOSE_IMAGE" > /dev/null 2> "$err"; then
     echo "ci: could not pull $COMPOSE_IMAGE for the CPU-quota probe: $(cat "$err")" >&2
     rm -f "$err"; return 1
   fi
@@ -457,6 +473,31 @@ host_suite() {
   # HOME: a dir of that user's whose ancestors no one else can write (LAUNCHER_RUN_DIR goes under it; /tmp is refused)
   docker run --rm -u 1000:1000 --tmpfs /home/you:exec,uid=1000,gid=1000,mode=0755 -e HOME=/home/you -v "$HOST_SRC:/src:ro" \
     "$COMPOSE_IMAGE" sh /src/scripts/ci/quickstart-test /src
+}
+
+# The host-side tests on each distro's own packaged Ruby and /bin/sh, no locale set (scripts/ci/host-distros)
+# $SRC is read here (MIN_RUBY); $HOST_SRC is what the daemon mounts (the path on ITS host, as every other stage)
+distros_suite() { scripts/ci/host-distros "$SRC" "$HOST_SRC" all; }
+
+# Install and update FOR REAL (scripts/ci/install-test) on a disposable machine made per stage (scripts/ci/machine-run:
+# systemd + a user manager + its own Docker daemon, in a privileged container of a ROOTLESS daemon — refused on a
+# rootful one). The README Quickstart → the image built, the stack up → the systemd --user units → yaks doctor → the
+# desktop entry; `update` installs CI_BASE_REF (the change's base) and runs its own `yaks update` to HEAD. Env:
+# CI_ARTIFACTS (screenshots, a failure's logs). No credential goes into a machine: it runs the change's code as root.
+machine_suite() {
+  local mode=$1 adapter=$2
+  [ -n "${CI_ARTIFACTS:-}" ] || { echo "ci: $mode $adapter: CI_ARTIFACTS is empty" >&2; return 1; }
+  CI_ARTIFACTS=$CI_ARTIFACTS/$mode-$adapter scripts/ci/machine-run "$mode" "$SRC" "$adapter"
+}
+machine-image_suite() { scripts/ci/machine-run image; }
+install_suite() { machine_suite install sqlite; }
+install-pg_suite() { machine_suite install postgresql; }
+update_suite() { local from; from=$(update_from) || return; CI_UPDATE_FROM=$from machine_suite update sqlite; }
+update-pg_suite() { local from; from=$(update_from) || return; CI_UPDATE_FROM=$from machine_suite update postgresql; }
+# what an install before this change is at: where HEAD left CI_BASE_REF (the PR's target, the push's previous commit)
+update_from() {
+  [ -n "${CI_BASE_REF:-}" ] || { echo "ci: update: CI_BASE_REF is empty — the commit the change is measured against" >&2; return 1; }
+  git merge-base HEAD "$CI_BASE_REF" || { echo "ci: update: HEAD and CI_BASE_REF $CI_BASE_REF share no commit" >&2; return 1; }
 }
 
 # The given suites at once. Each one's output goes to its own log (interleaved lines would be unreadable), printed

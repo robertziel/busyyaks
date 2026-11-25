@@ -1,6 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+# every file this program reads is UTF-8 (.env, config/*.yml, skills, screens), never the locale's encoding: on a host
+# with no UTF-8 locale (LANG unset → US-ASCII) it broke on the first non-ASCII byte (scripts/ci/host-distros)
+Encoding.default_external = Encoding::UTF_8
+
 # Host-side launcher (systemd --user, deploy/busyyaks-launcher.service). The web container cannot
 # reach the host's tmux, so it asks this process over a unix socket in .env LAUNCHER_RUN_DIR (bind-mounted
 # into the web, mcp and notifier containers only — never under ./data, which every container mounts). One JSON request per connection:
@@ -60,7 +64,7 @@ require "time"
 require "tmpdir"
 require "pty"
 require "io/console"
-require "base64"
+# base64 = pack("m0"), never the base64 library: Ruby 3.4 made it a bundled gem a distro's ruby may lack (Alpine's)
 require_relative "../lib/busyyaks/clock"
 # the engine files the host side loads: the dialog parser (the same the container runs, so both compute the same
 # dialog hash) and the host config + Launch (how a session is started — config/kanban.yml's launchers and agent types)
@@ -1419,7 +1423,7 @@ def attach_op(io, req)
                       "-t", "=#{name}", in: slave, out: slave, err: slave, pgroup: true)
   slave.close
   io.puts(JSON.generate(ok: true, session: name, cols: cols, rows: rows,
-                        screen: Base64.strict_encode64(screen.to_s.gsub(/\r?\n/, "\r\n"))))
+                        screen: [screen.to_s.gsub(/\r?\n/, "\r\n")].pack("m0")))
   puts "#{Busyyaks::Clock.now.iso8601} attach #{name}: opened (read-only)"
   out = Thread.new { attach_output(io, master, base, name, [cols, rows], tty) }
   attach_input(io, base, name)
@@ -1602,10 +1606,10 @@ def projects_root_op(req)
   when "plan" then { ok: true, plan: projects_root_plan(req["path"]) }
   when "apply" then projects_root_apply(req)
   when "status"
-    running = APPLY[:lock].synchronize { APPLY[:running] }
+    # the flag and the record read together: an apply ends by writing its record and clearing the flag under this lock
+    running, last = APPLY[:lock].synchronize { [APPLY[:running], Busyyaks::ProjectsRoot.state(STATE_DIR)] }
     { ok: true, current: PROJECTS_ROOT, applying: running,
-      last: Busyyaks::ProjectsRoot.settled(Busyyaks::ProjectsRoot.state(STATE_DIR), current: PROJECTS_ROOT,
-                                           running: running), }
+      last: Busyyaks::ProjectsRoot.settled(last, current: PROJECTS_ROOT, running: running), }
   else { ok: false, error: "step must be plan, apply or status", status: 400 }
   end
 rescue Busyyaks::ProjectsRoot::Invalid, Busyyaks::LaunchTrust::Invalid => e
@@ -1621,28 +1625,31 @@ def projects_root_apply(req)
     return { ok: false, error: "the plan changed since it was checked: check again", status: 409 }
   end
 
-  APPLY[:lock].synchronize do
+  env = File.join(ROOT, ".env")
+  # the flag and the "applying" record set in one step under APPLY's lock (as the failure record and the flag's end
+  # are): a status never reads a running apply beside the last one's record
+  rec = APPLY[:lock].synchronize do
     return { ok: false, error: "a projects dir change is already running", status: 409 } if APPLY[:running]
 
-    APPLY[:running] = true
+    projects_root_start(plan, env).tap { APPLY[:running] = true }
   end
-  env = File.join(ROOT, ".env")
-  backup = nil
-  begin
-    stamp = Busyyaks::Clock.now.utc.strftime("%Y%m%dT%H%M%SZ")
-    backup = Busyyaks::ProjectsRoot.write_env!(env, plan[:to], stamp: stamp, backup_dir: STATE_DIR)
-    rec = { "state" => "applying", "from" => plan[:from], "to" => plan[:to], "at" => Busyyaks::Clock.now.iso8601,
-            "backup" => backup, "env" => "new", "log" => File.join(STATE_DIR, "projects-root-#{stamp}.log"), }
-    Busyyaks::ProjectsRoot.record!(STATE_DIR, rec)
-  rescue StandardError
-    # nothing started: a .env already rewritten goes back before the refusal
-    Busyyaks::ProjectsRoot.restore_env!(env, backup) if backup
-    APPLY[:lock].synchronize { APPLY[:running] = false }
-    raise
-  end
-  puts "#{Busyyaks::Clock.now.iso8601} projects dir #{plan[:from]} → #{plan[:to]}: .env rewritten (backup #{backup}), compose up"
-  Thread.new { projects_root_compose(rec, env, backup) }
+  puts "#{Busyyaks::Clock.now.iso8601} projects dir #{plan[:from]} → #{plan[:to]}: .env rewritten (backup #{rec['backup']}), compose up"
+  Thread.new { projects_root_compose(rec, env, rec["backup"]) }
   { ok: true, state: rec }
+end
+
+# .env rewritten (its backup kept) and the "applying" record written; on a failure nothing started: a .env already
+# rewritten goes back before the refusal
+def projects_root_start(plan, env)
+  stamp = Busyyaks::Clock.now.utc.strftime("%Y%m%dT%H%M%SZ")
+  backup = Busyyaks::ProjectsRoot.write_env!(env, plan[:to], stamp: stamp, backup_dir: STATE_DIR)
+  rec = { "state" => "applying", "from" => plan[:from], "to" => plan[:to], "at" => Busyyaks::Clock.now.iso8601,
+          "backup" => backup, "env" => "new", "log" => File.join(STATE_DIR, "projects-root-#{stamp}.log"), }
+  Busyyaks::ProjectsRoot.record!(STATE_DIR, rec)
+  rec
+rescue StandardError
+  Busyyaks::ProjectsRoot.restore_env!(env, backup) if backup
+  raise
 end
 
 # rec["env"] says which .env is in place at every record: "new" until a failed compose puts the old one back
@@ -1687,9 +1694,15 @@ def projects_root_done(rec)
   Process.kill("TERM", Process.pid)
 end
 
+# the failure record and the end of the apply in one step under APPLY's lock: a status never reads "failed" while
+# the apply still counts as running
 def projects_root_failed(rec, why, extra = {})
-  Busyyaks::ProjectsRoot.record!(STATE_DIR, rec.merge("state" => "failed", "error" => why,
-                                                      "done_at" => Busyyaks::Clock.now.iso8601).merge(extra))
+  APPLY[:lock].synchronize do
+    Busyyaks::ProjectsRoot.record!(STATE_DIR, rec.merge("state" => "failed", "error" => why,
+                                                        "done_at" => Busyyaks::Clock.now.iso8601).merge(extra))
+  ensure
+    APPLY[:running] = false
+  end
 rescue StandardError => e
   puts "#{Busyyaks::Clock.now.iso8601} projects dir #{rec['to']}: failure record NOT written (#{e.class}: #{e.message})"
 end

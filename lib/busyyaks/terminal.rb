@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
-require "base64"
 require "json"
+
+# base64 through pack("m0") / unpack1("m0"), never the base64 library: bin/launcher loads this file on the host, and
+# Ruby 3.4 moved base64 to a bundled gem that a distro's ruby may not carry (Alpine's: scripts/ci/host-distros)
 
 module Busyyaks
   # The live terminal of an agent session: the operator sees an agent's tmux pane in the browser and, after
@@ -66,7 +68,7 @@ module Busyyaks
       raise Invalid, "a frame is a JSON object" unless f.is_a?(Hash) && f.size == 1
 
       if f.key?("i")
-        bytes = Base64.strict_decode64(f["i"].to_s)
+        bytes = f["i"].to_s.unpack1("m0")
         raise Invalid, "input frame over #{MAX_INPUT} bytes" if bytes.bytesize > MAX_INPUT
 
         [:input, bytes]
@@ -82,7 +84,7 @@ module Busyyaks
     end
 
     def line(hash) = "#{JSON.generate(hash)}\n"
-    def output(bytes) = line(o: Base64.strict_encode64(bytes))
+    def output(bytes) = line(o: [bytes].pack("m0"))
     def refused(why) = line(refused: why)
   end
 end

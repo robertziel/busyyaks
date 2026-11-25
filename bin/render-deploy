@@ -1,6 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+# every file this program reads is UTF-8 (.env, config/*.yml, the templates), never the locale's encoding: on a host
+# with no UTF-8 locale (LANG unset → US-ASCII) it broke on the first non-ASCII byte (scripts/ci/host-distros)
+Encoding.default_external = Encoding::UTF_8
+
 # Renders deploy/*.template from .env (and config/busyyaks.yml, for the values derived from it) into deploy/rendered/ (gitignored, kept out of images by .dockerignore): the
 # reverse-proxy files for THIS deployment (docs/DEPLOY.md). A placeholder with no value in .env → exit 1 with its
 # name; nothing is written.

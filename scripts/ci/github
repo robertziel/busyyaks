@@ -2,6 +2,9 @@
 # The Jenkinsfile's GitHub calls, with the token (GH_TOKEN, credential github-pat) never on a command line.
 #
 #   scripts/ci/github default-branch           GH_REPO → prints the repo's default branch (GET /repos/:repo)
+#   scripts/ci/github branch-head <branch>     GH_REPO → prints the sha <branch> points at now (GET /repos/:repo/branches/:b;
+#                                              card #573: builds of the default branch overlap — only the head's build
+#                                              publishes the README badges)
 #   scripts/ci/github status <state> <text>    GH_REPO GIT_SHA BUILD_URL → commit status, context jenkins/ci
 #                                              (POST /repos/:repo/statuses/:sha; state pending|success|failure|error)
 #   scripts/ci/github fetch-base <branch>      a pull request's base branch → refs/remotes/origin/<branch>, the flake
@@ -29,6 +32,13 @@ gh_message() {
     print substr($j->{message}, 0, 200) if ref $j eq "HASH" && defined $j->{message} && !ref $j->{message}' < "$1"
 }
 
+# a branch name as it may reach a URL path or a refspec: git's own refname rules that matter there — no `..`, no empty
+# component (`//`, a leading or trailing `/`), no component starting with `.`
+valid_branch() {
+  [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || return 1
+  [[ "$1" != *..* && "$1" != *//* && "$1" != */ && "$1" != */.* ]]
+}
+
 default_branch() {
   need GH_REPO
   need_json
@@ -44,6 +54,24 @@ default_branch() {
     print $j->{default_branch}' < "$resp") || die "GitHub's answer for $GH_REPO holds no default_branch"
   [ -n "$branch" ] || die "GitHub's answer for $GH_REPO holds an empty default_branch"
   printf '%s\n' "$branch"
+}
+
+branch_head() {
+  local branch=$1 code sha
+  valid_branch "$branch" || die "branch-head: '$branch' is not a branch name"
+  need GH_REPO
+  need_json
+  gh_token_ok GH_TOKEN "check credential github-pat" || exit 1
+  resp=$(mktemp); trap 'rm -f "$resp"' EXIT   # global: the EXIT trap reads it
+  code=$(gh_curl GH_TOKEN -sSL -o "$resp" -w '%{http_code}' "https://api.github.com/repos/$GH_REPO/branches/$branch") ||
+    die "cannot reach GitHub to read $GH_REPO's branch $branch — check the network"
+  [ "$code" = 200 ] ||
+    die "GitHub answered HTTP $code reading $GH_REPO's branch $branch ($(gh_message "$resp")) — check credential github-pat"
+  sha=$(perl -MJSON::PP -e 'local $/; my $j = eval { decode_json(<STDIN>) } or exit 3;
+    exit 4 unless ref $j eq "HASH" && ref $j->{commit} eq "HASH" && defined $j->{commit}{sha} && !ref $j->{commit}{sha};
+    print $j->{commit}{sha}' < "$resp") || die "GitHub's answer for $GH_REPO's branch $branch holds no commit sha"
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "GitHub's answer for $GH_REPO's branch $branch holds no commit sha"
+  printf '%s\n' "$sha"
 }
 
 status() {
@@ -67,7 +95,7 @@ status() {
 
 fetch_base() {
   local branch=$1
-  [[ "$branch" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ ]] || die "fetch-base: '$branch' is not a branch name"
+  valid_branch "$branch" || die "fetch-base: '$branch' is not a branch name"
   gh_token_ok GH_TOKEN "check credential github-pat" || exit 1
   # git asks GIT_ASKPASS for the credential: a throwaway script that prints GH_TOKEN from its env — argv never holds it
   askpass=$(mktemp); trap 'rm -f "$askpass"' EXIT   # global: the EXIT trap reads it
@@ -117,8 +145,9 @@ alert() {
 
 case "${1:-}" in
   default-branch) [ "$#" -eq 1 ] || die "usage: $0 default-branch"; default_branch ;;
+  branch-head) [ "$#" -eq 2 ] || die "usage: $0 branch-head <branch>"; branch_head "$2" ;;
   status) [ "$#" -eq 3 ] || die "usage: $0 status <state> <description>"; status "$2" "$3" ;;
   fetch-base) [ "$#" -eq 2 ] || die "usage: $0 fetch-base <branch>"; fetch_base "$2" ;;
   alert) [ "$#" -eq 3 ] || die "usage: $0 alert <title> <text>"; alert "$2" "$3" ;;
-  *) echo "usage: $0 default-branch | status <state> <description> | fetch-base <branch> | alert <title> <text>" >&2; exit 2 ;;
+  *) echo "usage: $0 default-branch | branch-head <branch> | status <state> <description> | fetch-base <branch> | alert <title> <text>" >&2; exit 2 ;;
 esac

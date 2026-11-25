@@ -13,7 +13,11 @@
 name: busyyaks
 
 x-app: &app
-  build: .
+  # one image, built by `web` alone (below): six services each building this tag made compose export and unpack it six
+  # times at once, and containerd failed `up --build` now and then ("parent snapshot … does not exist", card #573).
+  # Every other service waits for web, so it is built before they start. `never`: no registry is ever asked (a stand-in
+  # image of that name must not run); web still builds it when it is missing, and a plain `up` does not rebuild it.
+  pull_policy: never
   # The host has no free address pools for a per-project network; nothing here talks to a sibling.
   network_mode: bridge
   image: busyyaks:local
@@ -121,6 +125,7 @@ x-launcher-volumes: &launcher_volumes
 services:
   web:
     <<: *app
+    build: .
     mem_limit: ${SERVICE_MEM_LIMIT:?}   # the container's ceiling over its git-read children's own GIT_READ_MEMORY_BYTES
     volumes: *launcher_volumes   # x-app's + the launcher socket dir
     environment: { <<: *env, HANAMI_PORT: "${WEB_CONTAINER_PORT:?}", LOG_LEVEL: info,

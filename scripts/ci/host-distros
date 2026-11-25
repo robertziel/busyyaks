@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# The host-side programs (bin/setup, bin/yaks, bin/launcher's rules, bin/collector, the installers) on the Linux
+# distributions people run them on, each with ITS OWN packaged Ruby and /bin/sh (dash on Debian / Ubuntu, bash on
+# Fedora, busybox on Alpine) — scripts/ci/test.sh host runs the same files on one image only (ruby:<MIN_RUBY>-slim).
+#
+#   scripts/ci/host-distros <checkout> <mount source> all | DISTRO...     (distros: the DISTROS table below)
+#
+# <checkout> is read here (MIN_RUBY); <mount source> is the same checkout as the Docker daemon's host sees it (the
+# daemon mounts it: under a containerised agent the two differ — scripts/ci/test.sh passes HOST_SRC). Both required.
+#
+# Each distro: its image, its package manager installs ruby + minitest + the tools the tests run (git, tmux, …), then
+# every file of scripts/ci/host-tests runs on it, the checkout mounted read-only. The test process reads as UTF-8
+# (`ruby -E UTF-8`: that process only); the programs it starts get no locale, as on a distro with none set.
+# A distro whose packaged Ruby is older than Busyyaks::CLI::MIN_RUBY fails, naming both: that distro cannot run
+# busyyaks's host side as packaged. Needs a Docker daemon (a Jenkins agent's, or any); nothing else on the host.
+set -euo pipefail
+
+usage="usage: scripts/ci/host-distros <checkout> <mount source> all | DISTRO..."
+if [ "$#" -lt 3 ] || [ -z "$1" ] || [ -z "$2" ]; then echo "$usage" >&2; exit 2; fi
+src=$(cd "$1" && pwd)
+mount=$2
+shift 2
+
+# distro → "image|install command" (images pinned by release tag + the multi-arch index digest: amd64 + arm64 agents)
+declare -A DISTROS=(
+  [ubuntu-24.04]="ubuntu:24.04@sha256:562111b88caa79c71391c0c4d3c2114a7d5c35915c20561fd893cb1e07929e6b|apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ruby ruby-minitest git tmux procps ca-certificates >/dev/null"
+  [debian-13]="debian:13@sha256:3cda3ca472ce45507a5109c6a3907093e24d9ae67d55954c9a07a45665dafba2|apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ruby ruby-minitest git tmux procps ca-certificates >/dev/null"
+  [fedora-42]="fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814|dnf install -y -q ruby rubygem-minitest rubygem-json git-core tmux procps-ng findutils diffutils hostname >/dev/null"
+  [alpine-3.22]="alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f|apk add --no-cache -q ruby ruby-minitest git tmux bash procps coreutils >/dev/null"
+)
+ORDER=(ubuntu-24.04 debian-13 fedora-42 alpine-3.22)
+
+if [ "$#" -eq 1 ] && [ "$1" = all ]; then set -- "${ORDER[@]}"; fi
+for d in "$@"; do
+  [ -n "${DISTROS[$d]:-}" ] || { echo "host-distros: unknown distro '$d' (known: ${ORDER[*]})" >&2; exit 2; }
+done
+
+min_ruby=$(sed -n 's/^ *MIN_RUBY = "\([0-9.]*\)".*/\1/p' "$src/cli/yaks.rb")
+[ -n "$min_ruby" ] || { echo "host-distros: no MIN_RUBY = \"x.y\" line in cli/yaks.rb" >&2; exit 1; }
+
+failed=()
+for d in "$@"; do
+  image=${DISTROS[$d]%%|*}
+  install=${DISTROS[$d]#*|}
+  echo "════ $d ($image) ════"
+  if docker run --rm -v "$mount:/src:ro" -w /src -e MIN_RUBY="$min_ruby" "$image" sh -euc "
+      $install
+      echo \"ruby: \$(ruby -v) · sh: \$(readlink -f /bin/sh)\"
+      ruby -e 'exit(Gem::Version.new(RUBY_VERSION) >= Gem::Version.new(ENV.fetch(\"MIN_RUBY\")))' \
+        || { echo \"$d packages ruby \$(ruby -e 'print RUBY_VERSION'), older than MIN_RUBY \$MIN_RUBY\" >&2; exit 1; }
+      bad=''
+      for f in \$(sed -e '/^#/d' -e '/^\$/d' scripts/ci/host-tests); do
+        echo \"== \$f\"; ruby -E UTF-8 -Ilib -Itest \"\$f\" || bad=\"\$bad \$f\"
+      done
+      [ -z \"\$bad\" ] || { echo \"$d: failed:\$bad\" >&2; exit 1; }"; then
+    echo "$d: ok"
+  else
+    echo "$d: FAILED" >&2; failed+=("$d")
+  fi
+done
+[ "${#failed[@]}" -eq 0 ] || { echo "host-distros: failed on ${failed[*]}" >&2; exit 1; }
+echo "host-distros: ok on $*"

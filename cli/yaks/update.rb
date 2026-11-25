@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "time" # Time#iso8601 (the update record)
 require_relative "../../lib/busyyaks/updates"
 
 module Busyyaks

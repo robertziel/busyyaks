@@ -2,7 +2,6 @@
 
 # Standalone (no test_helper, no app), like cli_test.rb: runs on the oldest host Ruby too (scripts/ci/test.sh host).
 require "minitest/autorun"
-require "base64"
 require "fileutils"
 require "json"
 require "socket"
@@ -215,7 +214,7 @@ class CliRemoteTest < Minitest::Test
       loop do
         l = c.gets or break
         got << l
-        c.write("#{JSON.generate(o: Base64.strict_encode64("echo #{l.strip}"))}\n")
+        c.write("#{JSON.generate(o: ["echo #{l.strip}"].pack("m0"))}\n")
       end
       c.close
     end
@@ -233,7 +232,7 @@ class CliRemoteTest < Minitest::Test
     assert_equal [%({"op":"attach","session":"s1","socket":"default"}\n), %({"control":true}\n)], got
     lines = out.lines.map { JSON.parse(_1) }
     assert_equal true, lines.first["ok"]
-    assert_equal "echo {\"control\":true}", Base64.decode64(lines[1]["o"])
+    assert_equal "echo {\"control\":true}", lines[1]["o"].unpack1("m")
   ensure
     server&.close
   end
@@ -272,8 +271,8 @@ class CliRemoteTest < Minitest::Test
   def test_attach_shows_the_screen_and_the_stream_over_ssh
     yaks("remote", "add", "box")
     w = StringIO.new
-    r = frames({ ok: true, session: "s1", cols: 80, rows: 24, screen: Base64.strict_encode64("SCREEN") },
-               { o: Base64.strict_encode64("more") }, { refused: "nope" }, { exit: "the session is gone" })
+    r = frames({ ok: true, session: "s1", cols: 80, rows: 24, screen: ["SCREEN"].pack("m0") },
+               { o: ["more"].pack("m0") }, { refused: "nope" }, { exit: "the session is gone" })
     keys, = IO.pipe
     @runner = FakeRunner.new(stream: [w, r])
     code, out, err = yaks("remote", "attach", "box", "s1", stdin: keys)
@@ -316,7 +315,7 @@ class CliRemoteTest < Minitest::Test
     b = CLI::Remote::Attach.new(ctx2, w2, StringIO.new, "box")
     b.frame("control" => true)
     b.read_keys
-    assert_equal({ "i" => Base64.strict_encode64("x") }, JSON.parse(w2.string.lines.first))
+    assert_equal({ "i" => ["x"].pack("m0") }, JSON.parse(w2.string.lines.first))
   end
 
   # a terminal: keys go raw (no line buffering), so Ctrl-] t / q act at once
@@ -334,7 +333,7 @@ class CliRemoteTest < Minitest::Test
   def test_attach_puts_a_terminal_in_raw_mode
     stdin = TtyIn.new("")
     ctx = Struct.new(:stdin, :out, :err).new(stdin, StringIO.new, StringIO.new)
-    hello = frames({ ok: true, session: "s1", cols: 80, rows: 24, screen: Base64.strict_encode64("$ ") })
+    hello = frames({ ok: true, session: "s1", cols: 80, rows: 24, screen: ["$ "].pack("m0") })
     assert_equal 0, CLI::Remote::Attach.new(ctx, StringIO.new, hello, "box").run
     assert_equal 1, stdin.raws
     assert_respond_to $stdin, :raw, "io/console is loaded"

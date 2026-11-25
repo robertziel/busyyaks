@@ -28,7 +28,7 @@ module Busyyaks
     def read(path)
       raise Invalid, "no .env at #{path} (cp .env.example .env)" unless File.file?(path)
 
-      parse(File.read(path), path: path)
+      parse(File.read(path, encoding: "UTF-8"), path: path)
     end
 
     # → { "KEY" => "value" }

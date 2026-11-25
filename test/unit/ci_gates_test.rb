@@ -16,6 +16,9 @@ class CiGatesTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
   TEST_SH = File.join(ROOT, "scripts/ci/test.sh")
   RUNNER_ENV = File.join(ROOT, "scripts/ci/runner.env")
+  HOST_TESTS = File.join(ROOT, "scripts/ci/host-tests")
+  HOST_DISTROS = File.join(ROOT, "scripts/ci/host-distros")
+  MACHINE_RUN = File.join(ROOT, "scripts/ci/machine-run")
   HOOKS_RUN = File.join(ROOT, "scripts/hooks/run")
 
   STUB_DOCKER = <<~SH
@@ -24,10 +27,14 @@ class CiGatesTest < Minitest::Test
     # a run's compose override (the runner's pin, the flake repeats), kept for the test: the script removes it after
     for a; do case "$a" in */compose.ci.yml) cat "$a" >> "$DOCKER_LOG.yml" ;; esac; done
     case "$1" in
-      inspect) printf '%s|%s\\n' "$STUB_MOUNT" "$STUB_MOUNT" ;;
-      info) case "$*" in *NCPU*) echo "$STUB_NCPU" ;; esac ;;
-      image) exit 0 ;;
+      inspect) printf '%s|%s\\n' "$STUB_MOUNT" "$STUB_MOUNT_SOURCE" ;;
+      info) case "$*" in *NCPU*) echo "$STUB_NCPU" ;; *SecurityOptions*) echo "$STUB_SECURITY" ;;
+              *RegistryConfig*) echo "$STUB_MIRRORS" ;; esac ;;
+      image) case "$*" in "image inspect "*) [ -z "$STUB_IMAGE_MISSING" ] || exit 1 ;; esac; exit 0 ;;
       pull) printf '%s\\n' "$STUB_PULL_NOISE" >&2; [ -z "$STUB_PULL_FAIL" ] || exit 1; exit 0 ;;
+      # machine-run's machine: booted, and what its root cgroup enables for its children
+      exec) case "$*" in *is-system-running*) echo running ;; *cgroup.subtree_control*) echo "$STUB_SUBTREE" ;;
+              *CgroupDriver*) echo "$STUB_CGROUP_DRIVER" ;; esac ;;
       *) # the quota probe: what cpu.max says in a container given --cpus (stdout), docker's own noise
          # (a pull's progress, a warning) on stderr
          case "$*" in "run "*" cat /sys/fs/cgroup/cpu.max") printf '%s\\n' "$STUB_PIN_ERR" >&2; printf '%s\\n' "$STUB_PIN"; exit 0 ;; esac
@@ -56,12 +63,16 @@ class CiGatesTest < Minitest::Test
   # what a pull prints on a fresh image cache
   PULL_NOISE = "Unable to find image 'docker:28.5.2-cli' locally\n28.5.2-cli: Pulling from library/docker"
 
-  def env(path: "#{@bin}:#{ENV.fetch('PATH')}", fail: nil, code: 1, mount: @dir, ncpu: 32, base: "HEAD~1",
-          read_token: "ghs_#{'s' * 36}", pin: "400000 100000", pin_err: "", pull_fail: nil)
-    { "PATH" => path, "DOCKER_LOG" => @log, "STUB_MOUNT" => mount, "DOCKER_FAIL" => fail.to_s, "DOCKER_EXIT" => code.to_s,
+  def env(path: "#{@bin}:#{ENV.fetch('PATH')}", fail: nil, code: 1, mount: @dir, mount_source: mount, ncpu: 32,
+          base: "HEAD~1", read_token: "ghs_#{'s' * 36}", pin: "400000 100000", pin_err: "", pull_fail: nil,
+          image_missing: nil, security: "", mirrors: "[]", registry_mirror: nil)
+    { "PATH" => path, "DOCKER_LOG" => @log, "STUB_MOUNT" => mount, "STUB_MOUNT_SOURCE" => mount_source,
+      "DOCKER_FAIL" => fail.to_s, "DOCKER_EXIT" => code.to_s,
       "STUB_NCPU" => ncpu.to_s, "STUB_PIN" => pin, "STUB_PIN_ERR" => pin_err, "STUB_PULL_FAIL" => pull_fail,
-      "STUB_PULL_NOISE" => PULL_NOISE, "CI_BASE_REF" => base, "CI_GITHUB_READ_TOKEN" => read_token,
-      "CI_GITHUB_CACHE_DIR" => File.join(@dir, "cache"),
+      "STUB_IMAGE_MISSING" => image_missing, "STUB_SECURITY" => security, "STUB_MIRRORS" => mirrors,
+      "CI_REGISTRY_MIRROR" => registry_mirror, "STUB_PULL_NOISE" => PULL_NOISE, "CI_BASE_REF" => base,
+      "CI_GITHUB_READ_TOKEN" => read_token,
+      "CI_GITHUB_CACHE_DIR" => File.join(@dir, "cache"), "CI_ARTIFACTS" => File.join(@dir, "artifacts"),
       "GIT_AUTHOR_NAME" => "ci", "GIT_AUTHOR_EMAIL" => "ci@example.invalid",
       "GIT_COMMITTER_NAME" => "ci", "GIT_COMMITTER_EMAIL" => "ci@example.invalid",
       "GIT_CONFIG_GLOBAL" => "/dev/null", "GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_INDEX_FILE" => nil,
@@ -114,7 +125,9 @@ class CiGatesTest < Minitest::Test
     dir
   end
 
-  def ci_scripts = { "scripts/ci/test.sh" => TEST_SH, "scripts/ci/runner.env" => RUNNER_ENV }
+  def ci_scripts = { "scripts/ci/test.sh" => TEST_SH, "scripts/ci/runner.env" => RUNNER_ENV,
+                     "scripts/ci/host-tests" => HOST_TESTS, "scripts/ci/host-distros" => HOST_DISTROS,
+                     "scripts/ci/machine-run" => MACHINE_RUN, }
 
   def ci_repo(extra = {}) = repo("ci", ci_scripts, extra)
 
@@ -124,10 +137,149 @@ class CiGatesTest < Minitest::Test
   # a test file (the flake stage repeats the whole suite for an unmapped change)
   def full_ci_repo
     stubs = %w[scripts/lint/image scripts/lint/rubocop scripts/lint/shellcheck].to_h { [_1, STUB_OK] }
-    repo("full", ci_scripts.merge(stubs), ".env.example" => "SOME_KEY=\n", "test/unit/some_test.rb" => "x\n")
+    # cli/yaks.rb: the distros stage reads MIN_RUBY from it
+    repo("full", ci_scripts.merge(stubs), ".env.example" => "SOME_KEY=\n", "test/unit/some_test.rb" => "x\n",
+                                          "cli/yaks.rb" => "  MIN_RUBY = \"3.2\"\n")
   end
 
   def hooks_repo = repo("hooks", { "scripts/hooks/run" => HOOKS_RUN, "scripts/hooks/image" => STUB_IMAGE })
+
+  # ── the install / update machines (card #573) ──
+
+  # card #573: the machine's dockerd pulls through CI_REGISTRY_MIRROR — required (a URL or `none`), and the daemon
+  # running the machine must agree; every refusal comes before any image is built or container started
+  def test_a_machine_stage_refuses_a_registry_mirror_it_cannot_trust
+    rootless = '["name=seccomp,profile=builtin","name=rootless","name=cgroupns"]'
+    used = '["http://172.17.0.1:5000/"]'
+    alike = ": set them alike"
+    cases = [
+      [nil, used, "CI_REGISTRY_MIRROR is empty: the CI host's registry mirror URL, or none"],
+      ["172.17.0.1:5000", used, "CI_REGISTRY_MIRROR is '172.17.0.1:5000': a http(s):// URL or none"],
+      ["http://10.0.0.9:5000", used, "is http://10.0.0.9:5000, but the daemon running the machine uses #{used}#{alike}"],
+      ["http://172.17.0.1:5000", "[]", "is http://172.17.0.1:5000, but the daemon running the machine uses []#{alike}"],
+      ["none", used, "CI_REGISTRY_MIRROR is none, but the daemon running the machine uses #{used}#{alike}"],
+    ]
+    cases.each do |given, outer, refusal|
+      FileUtils.rm_f(@log)
+      _out, err, status = run_in(ci_repo, "scripts/ci/test.sh", "install", base: "HEAD~1", security: rootless,
+                                                                           mirrors: outer, registry_mirror: given)
+      assert_equal 1, status.exitstatus, given.inspect
+      assert_match refusal, err, given.inspect
+      assert_empty docker_calls.grep(/\A(build|run|create|volume|exec) /), "#{given.inspect} started nothing"
+    end
+  end
+
+  # card #573: nested, the machine's systemd boots with its root cgroup enabling no controller; machine-run re-execs it
+  # and refuses a machine whose root still lacks cpu, memory or pids — before the install, naming the one missing
+  def test_a_machine_whose_root_cgroup_lacks_a_controller_is_refused_after_the_reexec
+    rootless = '["name=seccomp,profile=builtin","name=rootless","name=cgroupns"]'
+    stub = { "STUB_SUBTREE" => "cpu memory" }
+    _out, err, status = Open3.capture3(env(security: rootless, mirrors: "[]", registry_mirror: "none").merge(stub),
+                                       MACHINE_RUN, "install", ci_repo, "sqlite", chdir: @dir)
+    assert_equal 1, status.exitstatus, err
+    assert_match "machine-run: the machine's root cgroup does not enable pids after systemd's re-exec " \
+                 "(subtree_control: [cpu memory])", err
+    execs = docker_calls.grep(/\Aexec /)
+    reexec = execs.index { _1.end_with?("systemctl daemon-reexec") }
+    read = execs.index { _1.end_with?("cat /sys/fs/cgroup/cgroup.subtree_control") }
+    assert reexec, execs.inspect
+    assert_operator reexec, :<, read, "re-exec, then read: #{execs}"
+    assert_empty execs.grep(/id -u ci|install-test/), "nothing after the refusal: #{execs}"
+  end
+
+  def test_a_machine_whose_root_cgroup_enables_cpu_memory_and_pids_goes_on
+    rootless = '["name=seccomp,profile=builtin","name=rootless","name=cgroupns"]'
+    stub = { "STUB_SUBTREE" => "cpu memory pids", "STUB_CGROUP_DRIVER" => "cgroupfs" }
+    out, err, status = Open3.capture3(env(security: rootless, mirrors: "[]", registry_mirror: "none").merge(stub),
+                                      MACHINE_RUN, "install", ci_repo, "sqlite", chdir: @dir)
+    assert_equal 0, status.exitstatus, err
+    refute_match "root cgroup", err
+    assert_match "(cgroupfs), mirror none", out
+    assert_match "machine-run: install-test install sqlite ok", out
+    execs = docker_calls.grep(/\Aexec /)
+    assert_equal 2, execs.count { _1.end_with?("cat /sys/fs/cgroup/cgroup.subtree_control") }, "read at start + after"
+    assert execs.any? { _1.include?("scripts/ci/install-test install /home/ci/src sqlite") }, execs.inspect
+  end
+
+  # a machine's dockerd on another cgroup driver than the image sets is refused before the install
+  def test_a_machine_whose_dockerd_runs_another_cgroup_driver_is_refused
+    rootless = '["name=seccomp,profile=builtin","name=rootless","name=cgroupns"]'
+    stub = { "STUB_SUBTREE" => "cpu memory pids", "STUB_CGROUP_DRIVER" => "systemd" }
+    _out, err, status = Open3.capture3(env(security: rootless, mirrors: "[]", registry_mirror: "none").merge(stub),
+                                       MACHINE_RUN, "install", ci_repo, "sqlite", chdir: @dir)
+    assert_equal 1, status.exitstatus, err
+    assert_match "machine-run: the machine's dockerd runs the systemd cgroup driver", err
+    assert_empty docker_calls.grep(/install-test/), "nothing installed"
+  end
+
+  # privileged on a rootful daemon = host root: refused before any image is built or container started
+  def test_a_machine_stage_refuses_a_rootful_daemon_before_building_anything
+    %w[machine-image install install-pg update update-pg].each do |stage|
+      FileUtils.rm_f(@log)
+      _out, err, status = run_in(ci_repo, "scripts/ci/test.sh", stage, base: "HEAD~1")
+      assert_equal 1, status.exitstatus, stage
+      assert_match "machine-run: the Docker daemon is not rootless", err, stage
+      assert_empty docker_calls.grep(/\A(build|run|create|volume) /), "#{stage} started nothing"
+    end
+  end
+
+  def test_update_names_a_missing_base_and_starts_nothing
+    _out, err, status = run_in(ci_repo, "scripts/ci/test.sh", "update", base: "")
+    assert_equal 1, status.exitstatus
+    assert_match "ci: update: CI_BASE_REF is empty", err
+    assert_empty docker_runs
+  end
+
+  # card #573: builds of one branch overlap (a push never queues behind the build before it); the README badges are
+  # published only by the build of the branch's current head
+  def test_the_jenkinsfile_lets_builds_overlap_and_only_the_head_publishes_badges
+    jf = File.read(File.join(ROOT, "Jenkinsfile")).gsub(%r{^\s*//.*$}, "")
+    refute_match(/disableConcurrentBuilds/, jf)
+    badges = jf[jf.index("stage('Badges')")..]
+    assert_match(/branchHead\(env\.BRANCH_NAME\)/, badges)
+    assert_operator badges.index('[ "$BADGES_FROM_HEAD" = true ] || exit 0'), :<, badges.index("scripts/ci/badges publish")
+  end
+
+  # the Jenkinsfile's wiring: the machines come after every gate and after their image, in two waves, and no credential
+  # is bound to them (each runs the change's own code as its root)
+  def test_the_jenkinsfile_runs_the_machines_after_the_gates_with_no_credential
+    jf = File.read(File.join(ROOT, "Jenkinsfile")).gsub(%r{^\s*//.*$}, "")
+    order = ["stage('Gates')", "stage('Machine image')", "stage('Install')", "stage('Badges')"]
+    at = order.map { jf.index(_1) }
+    refute_includes at, nil, "stages: #{order.zip(at).to_h}"
+    assert_equal at.sort, at, "Gates → Machine image → Install → Badges"
+    machines = jf[at[1]...at[3]]
+    { "machine-image" => 1, "install" => 2, "install-pg" => 2 }.each do |suite, wave|
+      i = jf.index("gate('#{suite}')", at[1])
+      assert i, "#{suite} is a gate of the machine stages"
+      assert_operator at[wave], :<, i, "#{suite} runs in its wave (#{order[wave]})"
+      assert_operator i, :<, at[wave + 1], "#{suite} runs in its wave (#{order[wave]}), not the next"
+    end
+    refute_match(/withCredentials|credentialsId/, machines, "no credential reaches a machine")
+  end
+
+  # the distros' containers mount the checkout as the DAEMON's host sees it (HOST_SRC), never the path inside this
+  # container; MIN_RUBY is still read from the checkout here
+  def test_distros_mounts_the_checkout_by_its_host_path
+    dir = ci_repo("cli/yaks.rb" => "  MIN_RUBY = \"3.2\"\n")
+    _out, err, status = run_in(dir, "scripts/ci/test.sh", "distros", mount: @dir, mount_source: "/on/the/host")
+    assert_equal 0, status.exitstatus, err
+    runs = docker_runs
+    assert_equal 4, runs.size, runs.inspect
+    host = "/on/the/host#{dir.delete_prefix(@dir)}"
+    runs.each { assert_includes _1, "-v #{host}:/src:ro", "the host path, not #{dir}" }
+  end
+
+  def test_host_distros_refuses_without_its_mount_source
+    _out, err, status = Open3.capture3(env, HOST_DISTROS, ci_repo, "all", chdir: @dir)
+    assert_equal 2, status.exitstatus
+    assert_match "usage: scripts/ci/host-distros <checkout> <mount source> all | DISTRO...", err
+    assert_empty docker_calls
+  end
+
+  def test_the_machine_stages_are_not_in_all
+    assert_empty STAGES & %w[machine-image install install-pg update update-pg]
+  end
 
   # ── scripts/ci/test.sh secrets ──
 
@@ -340,7 +492,7 @@ class CiGatesTest < Minitest::Test
   # the run's stdout is read, and anything that is not `<quota> <period>` is "could not read", never "not limited"
   def test_the_quota_probe_reads_only_cpu_max
     dir = full_ci_repo
-    _out, err, status = run_in(dir, "scripts/ci/test.sh", "frontend", pin_err: PULL_NOISE)
+    _out, err, status = run_in(dir, "scripts/ci/test.sh", "frontend", pin_err: PULL_NOISE, image_missing: "1")
     assert_predicate status, :success?, err
     assert_includes docker_calls, "pull -q docker:28.5.2-cli"
     assert_operator docker_calls.index("pull -q docker:28.5.2-cli"), :<, docker_calls.index { _1.end_with?(PROBE) }
@@ -355,11 +507,22 @@ class CiGatesTest < Minitest::Test
     end
 
     FileUtils.rm_f(@log)
-    _out, err, status = run_in(dir, "scripts/ci/test.sh", "frontend", pull_fail: "1")
+    _out, err, status = run_in(dir, "scripts/ci/test.sh", "frontend", pull_fail: "1", image_missing: "1")
     assert_equal 1, status.exitstatus
     assert_match "ci: could not pull docker:28.5.2-cli for the CPU-quota probe: Unable to find image", err
     assert_empty pin_probes, "no probe without its image"
     assert_empty docker_runs
+  end
+
+  # card #573: a pull of an image already here still asks Docker Hub — once per limited stage of every build, which
+  # spent the host's anonymous pulls with many builds at once (429). The probe's image is pulled only when missing
+  def test_the_quota_probe_pulls_its_image_only_when_it_is_missing
+    dir = full_ci_repo
+    _out, err, status = run_in(dir, "scripts/ci/test.sh", "frontend")
+    assert_predicate status, :success?, err
+    assert_includes docker_calls, "image inspect docker:28.5.2-cli"
+    refute(docker_calls.any? { _1.start_with?("pull") }, "no pull of an image already here: #{docker_calls}")
+    refute_empty pin_probes
   end
 
   # ── scripts/ci/test.sh flake ──

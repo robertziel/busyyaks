@@ -757,6 +757,22 @@ skips it — no minutes spent — unless its repository variable `CI_ON_PRIVATE`
 private the check shows as skipped, and a skipped check satisfies a required one: there, require `gates` only with
 `CI_ON_PRIVATE` set.
 
+**Install and update, for real** (Jenkins stage *Install* on every build after the gates; `update` · `update-pg` run by name with `scripts/ci/test.sh`, their Jenkins stage follows once this code is the base they install): what a reader runs,
+with no stub, on a disposable Linux machine made for each check (`scripts/ci/machine-run`: systemd, a user manager and
+a Docker daemon of its own, in a privileged container of the agent's rootless Docker) —
+
+| stage | what it does |
+|---|---|
+| `install` · `install-pg` | the Quickstart block as written → the image built, the stack up, `/up` + MCP → the collector, launcher and daily-timer installers against the real `systemctl --user` → `yaks doctor`, `yaks server status` → the desktop entry validated and the chooser opened in Chrome under Xvfb (`scripts/ci/install-test install`) |
+| `update` · `update-pg` | the change's base installed, a note and a report written → `yaks update` refused on a dirty checkout and on a release that does not build (checkout back, the stack untouched) → that code's own `yaks update` to HEAD: the data kept, a backup taken (`scripts/ci/install-test update`) |
+| `distros` (Ubuntu 24.04 · Debian 13 · Fedora 42 · Alpine 3.22) | the host-side tests on each distro's packaged Ruby and `/bin/sh`, with no locale set (`scripts/ci/host-distros`; a gate, in `all`) |
+
+Each machine stage archives its screenshots (the dashboard, the chooser window) and, when it fails, the stack's logs
+with the build. `scripts/ci/machine-run` refuses a rootful Docker daemon (privileged there is host root);
+`install-test` itself refuses to run outside a machine unless `BUSYYAKS_DISPOSABLE_HOST=1`.
+
+macOS: `yaks desktop` is covered only by `cli_test` with Darwin faked on Linux, never on a real Mac (no macOS CI node).
+
 **Docker access = root.** `scripts/ci/test.sh` starts containers on the Docker daemon, and the Ruby stage mounts the
 daemon's socket (`/var/run/docker.sock`) into a container (compose) that builds and runs the checkout's code as root.
 Whoever controls that code controls the host: run it on a disposable machine (a GitHub-hosted runner) or on a CI host

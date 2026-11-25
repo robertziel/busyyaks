@@ -17,6 +17,17 @@ class ComposeTest < Minitest::Test
     assert_equal live.sort, Busyyaks::CLI::SERVICES.sort
   end
 
+  # six services building one tag at once raced in containerd's unpack: `up --build` failed now and then (card #573)
+  def test_only_web_builds_the_live_image_and_the_others_wait_for_it
+    services = YAML.safe_load_file(File.expand_path("../../docker-compose.yml", __dir__), aliases: true).fetch("services")
+    live = services.slice("web", "mcp", "scanner", "github", "notifier", "writer")
+    assert_equal %w[web], live.select { |_, s| s.key?("build") }.keys
+    live.each { |name, s| assert_equal "never", s["pull_policy"], "#{name}: no registry is asked for the local image" }
+    live.except("web").each do |name, s|
+      assert_equal "service_healthy", s.dig("depends_on", "web", "condition"), "#{name} starts after web built the image"
+    end
+  end
+
   def test_the_test_service_never_tags_the_live_image
     services = COMPOSE.fetch("services")
     test = services.fetch("test")
