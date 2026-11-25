@@ -1,12 +1,18 @@
 <!-- Read CONTRIBUTING.md first. A security fix: report it privately (SECURITY.md) before opening a PR. -->
 
-## What and why
+## What
 
-<!-- What changes for a user or an operator, and why. Link the issue: Fixes #… -->
+<!-- 1-3 short sentences: what changes for a user or an operator. Link the issue: Fixes #… -->
 
-## How it was tested
+## Why
 
-<!-- The tests added or changed, and anything run by hand. -->
+<!-- The real case behind it: what someone did and what went wrong. A security fix: the advisory. -->
+
+## Verified
+
+<!-- At this head: what ran, where (tests, a running stack), and the result. -->
+
+- Not verified: <!-- what, and why; or "nothing" -->
 
 - [ ] `scripts/ci/test.sh all` is green (lint · ruby · ruby-pg · frontend · flake · audit · secrets · host; the env it
       needs: CONTRIBUTING.md § Tests)
@@ -17,6 +23,8 @@
 - [ ] no deployment value (host, port, path, model) in code, compose, tests or examples
 - [ ] README, `docs/`, example config and `CHANGELOG.md` (`Unreleased`) updated where users would notice
 
-## Screenshots
+## Visual
 
-<!-- Any visible change: before and after, desktop and phone width. Otherwise: "no UI change". -->
+<!-- Only if it helps: a visible change before and after (desktop and phone width), a mermaid diagram or a benchmark
+     table. Pictures come from a demo or test stack, never from a live deployment: they show its hosts, people and
+     data. No video. Nothing visual: delete this section. -->
