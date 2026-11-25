@@ -15,6 +15,10 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 - Live pages (the board, the waiting widget, Today): a refresh that fails after a change is retried on the next poll and shown as "live · error" until it lands — a card moved on the server no longer stays in its old column under a green live mark.
 
+### Changed
+
+- Only you move a card out of Backlog: no agent takes a card out of a parked column (Backlog) or works one there, whatever the workflow says. A workflow giving agents a way out of a parked column is refused naming the transition; the upgrade's migration makes every stored board's way out (Prioritise) yours, and the writer writes each board back to its `.busyyaks/workflow.yml`. A board whose own column is typed parked for agent work (e.g. a `Waiting` column) needs that column retyped to `queued`.
+
 ## [0.1.0] - 2026-11-25
 
 ### Added

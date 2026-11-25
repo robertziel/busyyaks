@@ -27,7 +27,7 @@ class PrAssignHostTest < Minitest::Test
                             pr_remote: "git@github.com:o/p.git", own: true, commits_window: 0, mine_window: 0, dirty: 0,
                             scanned_at: 0)
     @kb = Busyyaks::Kanban.store(@conn)
-    @id = @kb.create(slug: "o-r", title: "ship", by: "lead")
+    @id = @kb.create(slug: "o-r", title: "ship", by: "lead", column: "todo")
   end
 
   def assign(url, role, id: @id) = @kb.assign_pr(id, url: url, role: role, by: "lead")
@@ -144,7 +144,7 @@ class PrAssignHostTest < Minitest::Test
     assert_match(/metadata prs is written only by kanban_pr_assign/, e.message, "no way around the checks")
     assign(LOCAL, "local")
     assert_equal "qa", @kb.move(@id, column: "qa", by: "lead", agent: true)[:column]
-    plain = @kb.create(slug: "plain", title: "p", by: "lead")
+    plain = @kb.create(slug: "plain", title: "p", by: "lead", column: "todo")
     @kb.move(plain, column: "doing", by: "lead", agent: true)
     assert_equal "qa", @kb.move(plain, column: "qa", by: "lead", agent: true)[:column], "a plain project requires none"
   end

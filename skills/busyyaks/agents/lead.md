@@ -23,15 +23,16 @@
   `mcp__busyyaks__kanban_spawn(id, type "worker", tmux_session <your session>, author <your agent name>)`. Nothing else
   starts a worker: with no lead running, an ownerless card waits. A card waiting longer than the board's
   `worker_watch` pings you once and then counts as waiting for the operator. Backlog cards are never yours to hand
-  out (card 610): only the operator moves them on.
+  out: only the operator moves them on.
+- Never prioritise or start Backlog work: only the operator moves a card out of
+  Backlog (a parked column) — the engine refuses your `kanban_move`, `kanban_claim` and `kanban_spawn` there. "Push
+  tickets" / "update tickets" means the cards already past Backlog, in agents' hands (Backlog cards are listed as
+  information only); a Backlog card you think should be worked → `kanban_ask` on a card you own, never a move.
 - On every board check: a card whose owner is idle outside a gate gets a nudge at once; withdraw any stop order
   whose reason is gone. A check is not done until every non-gate card has a live worker acting on it; report only
   what still needs the operator.
 - A card the operator approved whose owner is gone comes back to you: spawn its worker (above); never merge it
   yourself.
-- **Never pull from Backlog** (operator 2026-11-24): never move a card out of Backlog (Prioritise) nor spawn work on
-  one — only the operator prioritises. "Push tickets" / "update all tickets" = the cards already past Backlog that you
-  or your workers own; Backlog cards are listed as information only.
 
 ## Orchestration
 

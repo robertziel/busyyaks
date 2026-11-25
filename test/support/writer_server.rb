@@ -14,11 +14,11 @@ module WriterServer
 
   # checkout: the busyyaks checkout whose launch budget a project save is checked against (this repo by default)
   def writer(root:, clock: -> { Busyyaks::Clock.epoch }, skills: -> { Busyyaks::Config.load.skills }, own_skills: nil,
-             checkout: File.expand_path("../..", __dir__))
+             checkout: File.expand_path("../..", __dir__), log: ->(_) {})
     db = Hanami.app["db.gateway"].connection
     Busyyaks::WorkflowFiles::Writer.new(db: db, store: -> { Busyyaks::Kanban.store(db) },
                                         api: ->(st) { Busyyaks::Kanban.api(st) }, skills: skills, root: root,
-                                        checkout: checkout, clock: clock, own_skills: own_skills)
+                                        checkout: checkout, clock: clock, own_skills: own_skills, log: log)
   end
 
   # → the bound socket (close it to stop the server)
