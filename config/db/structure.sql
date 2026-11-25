@@ -561,4 +561,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261225000000_team_lead_label.rb'),
 ('20261225100000_launch_bar_keys.rb'),
 ('20261225612000_lead_never_assignee.rb'),
-('20261225613000_comment_actions.rb');
+('20261225613000_comment_actions.rb'),
+('20261226610000_parked_exits_operator_only.rb');

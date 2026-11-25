@@ -39,6 +39,14 @@ class McpKanbanTest < Minitest::Test
   end
 
   def tool(name, args = {}) = rpc("tools/call", { name: name, arguments: args })["result"]
+  # a card the operator put in the work flow (an agent's own card starts in Backlog); owner = a session
+  def op_card(column, title, owner: nil)
+    kb = Busyyaks::Kanban.default
+    id = kb.create(slug: "g/r", title: title, by: "operator", column: column)
+    kb.set_owner(id, session: owner, by: "test") if owner
+    id
+  end
+
   def ok(name, args = {})
     r = tool(name, args)
     assert_equal false, r["isError"], r["content"][0]["text"]
@@ -98,7 +106,16 @@ class McpKanbanTest < Minitest::Test
     c = ok("kanban_create", project: "g/r", title: "Fix login", author: "agent-a", tmux_session: "tl_g_r", labels: ["auth"],
                             priority: "high", description: "**why**")
     assert_equal ["backlog", 0, ["auth"]], [c["column"], c["position"], c["labels"]]
-    ok("kanban_create", project: "g/r", title: "Other", author: "agent-a", tmux_session: "tl_g_r", column: "todo")
+    # an agent's card starts in Backlog, never straight in the work flow
+    assert_match(/agents create cards only in Backlog/,
+                 err("kanban_create", project: "g/r", title: "Other", author: "agent-a", tmux_session: "tl_g_r",
+                                      column: "todo"))
+    # Backlog is the operator's to leave — the agent neither moves nor claims its own card out of it
+    assert_match(/sits in Backlog: only the operator moves a card out of it/,
+                 err("kanban_move", id: c["id"], column: "todo", author: "tl_g_r"))
+    assert_match(/no agent claims a parked card/,
+                 err("kanban_claim", id: c["id"], assignee: "tl_g_r", tmux_session: "tl_g_r"))
+    Busyyaks::Kanban.default.move(c["id"], transition: "Prioritise", by: "operator")
     assert_equal "tl_g_r", ok("kanban_claim", id: c["id"], assignee: "tl_g_r", tmux_session: "tl_g_r")["assignee"]
     moved = ok("kanban_move", id: c["id"], column: "todo", position: 0, author: "tl_g_r")
     assert_equal ["todo", 0], [moved["column"], moved["position"]]
@@ -124,7 +141,7 @@ class McpKanbanTest < Minitest::Test
     assert_equal %w[backlog todo doing qa human_check ready merged], board["columns"].map { |col| col["column"] }
     assert_equal ["Fix login flow"], board["columns"][4]["cards"].map { |x| x["title"] }
     assert_nil board["backlog_md"]
-    assert_equal ["Other"], ok("kanban_board", project: "g/r", column: "todo")["columns"][0]["cards"].map { |x| x["title"] }
+    assert_equal [], ok("kanban_board", project: "g/r", column: "todo")["columns"][0]["cards"].map { |x| x["title"] }
 
     card = ok("kanban_card", id: c["id"])
     assert_equal "**why**", card["card"]["description"]
@@ -149,7 +166,7 @@ class McpKanbanTest < Minitest::Test
     assert_match(/only the operator/, err("kanban_move", id: c["id"], column: "qa", author: "a"))
     assert_match(/agents cannot create cards in Merged/,
                  err("kanban_create", project: "g/r", title: "y", author: "a", tmux_session: "tl_g_r", column: "merged"))
-    d = ok("kanban_create", project: "g/r", title: "z", author: "a", tmux_session: "tl_g_r")
+    d = { "id" => op_card("todo", "z") }
     assert_match(/Merged/, err("kanban_move", id: d["id"], column: "merged", author: "a"))
   end
 
@@ -250,10 +267,7 @@ class McpKanbanTest < Minitest::Test
   end
 
   def test_claim_requires_a_live_tmux_session
-    c = ok("kanban_create", project: "g/r", title: "T", author: "a", tmux_session: "tl_g_r")
-    # an ownerless, unassigned card (the operator cleared it)
-    Busyyaks::Kanban.default.set_owner(c["id"], session: "", by: "test")
-    Busyyaks::Kanban.default.update(c["id"], { "assignee" => "" }, by: "test")
+    c = { "id" => op_card("todo", "T") } # an ownerless, unassigned card
     claim = rpc("tools/list").dig("result", "tools").find { |t| t["name"] == "kanban_claim" }
     assert_includes claim["inputSchema"]["required"], "tmux_session"
     assert_match(/subagent/, claim["description"])
@@ -272,8 +286,7 @@ class McpKanbanTest < Minitest::Test
 
   # ── needs_operator: kanban_ask FLAGS a card with a question (it keeps its column); the operator's answer clears it ──
   def test_ask_flags_the_card_with_a_question_and_options
-    c = ok("kanban_create", project: "g/r", title: "Security triage", author: "lead", tmux_session: "tl_g_r", column: "doing")
-    Busyyaks::Kanban.default.set_owner(c["id"], session: "", by: "test")
+    c = { "id" => op_card("doing", "Security triage") } # ownerless
     assert_match(/no owner session.*kanban_claim/, err("kanban_ask", id: c["id"], question: "Which first?", author: "lead"))
     ok("kanban_claim", id: c["id"], assignee: "lead", tmux_session: "lead_1")
     assert_match(/question is required/, err("kanban_ask", id: c["id"], question: " ", author: "lead"))
@@ -302,7 +315,7 @@ err("kanban_move", id: c["id"], column: "qa", author: "lead"))
   end
 
   def test_block_and_unblock_flag_a_card_blocked_external
-    c = ok("kanban_create", project: "g/r", title: "ci", author: "lead", tmux_session: "tl_g_r", column: "doing")
+    c = { "id" => op_card("doing", "ci", owner: "tl_g_r") }
     assert_match(/url is required/, err("kanban_block", id: c["id"], reason: "CI down", author: "lead"))
     assert_match(/http\(s\) URL/, err("kanban_block", id: c["id"], reason: "CI down", url: "jenkins", author: "lead"))
     b = ok("kanban_block", id: c["id"], reason: "CI runner down", url: "https://ci.example.com/job/x/3/", author: "lead")

@@ -111,6 +111,35 @@ class WorkflowFilesTest < Minitest::Test
     assert_equal "Ideas", doc["columns"].first["label"]
   end
 
+  # the file holds the bytes last applied, which a newer engine rule refuses (an agent way out of a parked
+  # column), while that engine's migration rewrote the stored board → the stored board is written back, not refused
+  def test_applied_bytes_a_newer_rule_refuses_are_replaced_by_the_migrated_board
+    @w.sync(project)
+    old = doc
+    exit_by_agent = { "name" => "Prioritise", "from" => "backlog", "to" => "todo", "by" => "any" }
+    old["transitions"] = [exit_by_agent] + old["transitions"].reject { |t| t["name"] == "Prioritise" }
+    File.write(file, old.to_yaml)
+    db[:workflow_files].where(project_slug: "g/r").update(applied_sha: WF.sha(File.binread(file)))
+    assert_raises(AgentsKanban::Invalid) { AgentsKanban::Board.new(old, host: kb.config) }
+
+    logs = []
+    w = WriterServer.writer(root: @root, clock: -> { @now }, log: ->(line) { logs << line })
+    assert_equal "exported", w.sync(project)
+    assert_nil row[:error]
+    assert_equal kb.board_of("g/r").to_h, doc
+    prioritise = doc["transitions"].find { |t| t["name"] == "Prioritise" }
+    assert_equal "operator", prioritise["by"]
+    assert(logs.any? { |l| l.include?("which the engine now refuses") && l.include?("Prioritise") }, logs.inspect)
+    assert_equal "unchanged", w.sync(project)
+
+    # the same refused shape as a hand edit (a sha the writer never applied): refused, the file left as it is
+    hand = "#{old.to_yaml}# a hand edit\n"
+    File.write(file, hand)
+    assert_match(/\Arefused: .*only the operator moves a card out of a parked column/, w.sync(project))
+    assert_equal hand, File.read(file)
+    assert_equal "operator", kb.board_of("g/r").to_h["transitions"].find { |t| t["name"] == "Prioritise" }["by"]
+  end
+
   def test_a_file_git_would_keep_is_refused
     @w.sync(project)
     git("add", "-f", ".busyyaks/workflow.yml")

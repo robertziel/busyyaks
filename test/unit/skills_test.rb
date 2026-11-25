@@ -68,14 +68,14 @@ class SkillsTest < Minitest::Test
   end
 
   # card 612: the lead skill carries the rule — never a card's assignee; each card waiting for a worker goes to an
-  # idle worker (kanban_assign_worker) or a new one (kanban_spawn); Backlog is not the lead's to hand out (card 610)
+  # idle worker (kanban_assign_worker) or a new one (kanban_spawn); Backlog is not the lead's to hand out
   def test_the_lead_skill_says_the_lead_is_never_an_assignee_and_how_it_dispatches
     lead = File.read(File.join(ROOT, "skills/busyyaks/agents/lead.md"))
     assert_includes lead, "**You are never a card's assignee** (card 612)"
     assert_match(/IDLE worker of the board first — `mcp__busyyaks__kanban_assign_worker\(id,\s+worker_session/, lead)
     assert_match(/else a new one with\s+`mcp__busyyaks__kanban_spawn\(id, type "worker"/, lead)
     assert_includes lead, "`dispatch.idle_workers`"
-    assert_match(/Backlog cards are never yours to hand\s+out \(card 610\)/, lead)
+    assert_match(/Backlog cards are never yours to hand\s+out: only the operator moves them on/, lead)
     refute_match(/never owns or works a card itself/, lead, "the old wording (it owns, for routing) is gone")
   end
 
@@ -486,6 +486,15 @@ class SkillsTest < Minitest::Test
     FileUtils.rm_f(File.join(dir, "core/more.md"))
     agent(dir, "lead", "fine\n!`id`\n")
     refused(%r{agents/lead.md:2: }) { load_own }
+  end
+
+  # the lead's skill forbids Backlog work (the engine refuses it too) and reads "push tickets" as the cards
+  # already past Backlog; it reaches every lead's entry skill
+  def test_the_lead_never_prioritises_backlog_work
+    lead = File.read(File.join(ROOT, "skills/busyyaks/agents/lead.md"))
+    assert_match(/Never prioritise or start Backlog work/, lead)
+    assert_match(/"Push\s+tickets" \/ "update tickets" means the cards already past Backlog/, lead)
+    assert_match(/`kanban_move`, `kanban_claim` and `kanban_spawn`/, lead)
   end
 
   def test_the_repos_own_skills_hold_no_shell_inline

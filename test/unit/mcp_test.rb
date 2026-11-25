@@ -195,7 +195,7 @@ out.dig("config", "runner"))
   def test_claim_with_tmux_session_sets_the_owner
     store.upsert_project(slug: "p", path: "/p", remote: nil, branch: "main", own: true, last_commit_at: 1, commits_window: 0,
                          mine_window: 0, dirty: 0, unpushed: nil, scanned_at: 1)
-    id = Busyyaks::Kanban.default.create(slug: "p", title: "t", by: "me")
+    id = Busyyaks::Kanban.default.create(slug: "p", title: "t", by: "me", column: "todo")
     res = tool("kanban_claim", id: id, assignee: "agent-x", tmux_session: "proj_2")
     assert_equal false, res["isError"], res["content"][0]["text"]
     c = Busyyaks::Kanban.default.card(id)

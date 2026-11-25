@@ -411,7 +411,7 @@ module Busyyaks
         sha = WorkflowFiles.sha(bytes)
         if row && row[:applied_sha] == sha
           board = st.board_of(project[:slug])
-          if board.to_h == normal(WorkflowFiles.parse(bytes), st)
+          if same_board?(project, board, bytes, st)
             ignored!(project) # committed after it was applied, or a new `!` rule: refused, the board keeps its shape
             return checked(project)
           end
@@ -432,6 +432,20 @@ module Busyyaks
         "changed" # a hand edit landed while writing: the next pass applies it
       rescue Refused, SystemCallError, GitRead::Failed, AgentsKanban::Invalid => e
         refused(project, e.message)
+      end
+
+      # The file holds the bytes last applied: does the stored board still have their shape? Bytes refused today were
+      # valid when applied, so what validates them changed since: a newer engine rule (its host migration reshaped the
+      # stored board — Schema v19 made every way out of a parked column the operator's) or the host config
+      # (`config/kanban.yml`, the agent settings) → not the same, logged with the refusal: the stored board, which the
+      # engine loaded, is written back. The refused bytes are never applied (a hand edit has another sha: sync_one
+      # applies it through the engine, which refuses it).
+      def same_board?(project, board, bytes, st)
+        board.to_h == normal(WorkflowFiles.parse(bytes), st)
+      rescue AgentsKanban::Invalid => e
+        @log.call("#{project[:slug]}: #{REL} holds the bytes last applied, which the engine now refuses " \
+                  "(#{e.message}): the stored board replaces them")
+        false
       end
 
       # the engine's own form of a hash (defaults filled in), to compare with the stored board

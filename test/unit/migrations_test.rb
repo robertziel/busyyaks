@@ -34,6 +34,7 @@ class MigrationsTest < Minitest::Test
   BEFORE_LAUNCH_BAR = 20_261_225_000_000 # the last migration before the Launch bar's keys (launchable, launch_label)
   BEFORE_LEAD_UNASSIGNABLE = 20_261_225_100_000 # the last migration before v17 (card 612: a lead is never an assignee)
   BEFORE_COMMENT_ACTIONS = 20_261_225_612_000 # the last migration before v18 (comment actions)
+  BEFORE_PARKED = 20_261_225_613_000 # the last migration before v19 (parked exits are the operator's)
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -462,7 +463,9 @@ class MigrationsTest < Minitest::Test
                   %w[ready gate], %w[merged done],], cols.("")
     assert_equal cols.(""), cols.("plain")
     assert_equal v3["columns"].map { |c| [c["key"], c["type"]] }, cols.("m/p")
-    assert_equal %w[Approve Merge Move], @db[:board_transitions].where(project_slug: "plain").order(:position).select_map(:name)
+    # the catch-all "Move" split v19-safe: agents everywhere but Backlog, the operator from Backlog
+    assert_equal %w[Approve Merge Move Move],
+                 @db[:board_transitions].where(project_slug: "plain").order(:position).select_map(:name)
     rows = @db[:cards].to_h { |c| [c[:id], c] }
     assert_equal ["doing", 50, "Which?"], rows[asked].values_at(:column, :asked_at, :question), "returned, flag kept"
     assert_equal ["qa", nil, nil], rows[stale].values_at(:column, :asked_at, :question), "an answered question loses its flag"
@@ -699,6 +702,31 @@ class MigrationsTest < Minitest::Test
     assert_equal "worker-p", @db[:cards].where(id: worker).get(:assignee), "a worker stays the assignee"
     assert_nil @db[:cards].where(id: lead).get(:assignee)
     assert_equal 1, @db[:card_activity].where(card_id: lead, author: "migration").count, "cleared once"
+  end
+
+  # v19 makes every stored way out of a parked column the operator's (the template and each project's board),
+  # splits a "*" catch-all, writes nothing on a board that has none, and its rollback leaves the boards as they are
+  def test_v19_makes_the_ways_out_of_backlog_the_operators
+    migrate(BEFORE_PARKED)
+    project("p")
+    store.board_of("p") # the project's own rows, from the template
+    @db[:board_transitions].where(name: "Prioritise").update(by: "any")
+    @db[:board_transitions].where(name: "Move", by: "operator").delete
+    @db[:board_transitions].where(name: "Move").update(by: "any", from_keys: JSON.generate("*"))
+    @db[:boards].where(project_slug: "").update(updated_by: "op", updated_at: 7)
+    migrate
+    ["p", ""].each do |slug|
+      t = transitions_of(slug)
+      assert_equal %w[Prioritise backlog todo operator], t.find { |x| x[0] == "Prioritise" }
+      moves = t.select { |x| x[0] == "Move" }
+      assert_equal [["Move", %w[todo doing qa human_check ready merged], "*", "any"], ["Move", "backlog", "*", "operator"]],
+                   moves
+    end
+    assert_equal "migration", @db[:boards].where(project_slug: "").get(:updated_by)
+    assert_empty store.board_of("p").workflow.from("backlog", actor: :agent), "the stored board loads, no agent way out"
+    before = transitions_of("p")
+    migrate(BEFORE_PARKED)
+    assert_equal before, transitions_of("p"), "the rollback changes nothing"
   end
 
   # v14 turns each card's prs {role => url} into a list (by / at from its own "PR <role>: <url>" line);
