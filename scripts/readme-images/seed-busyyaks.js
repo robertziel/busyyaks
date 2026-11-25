@@ -7,16 +7,16 @@
 // Added: labels on the cards, a question with options,
 // a session dialog (the sub team's permission prompt), a checklist part done, due dates (one overdue), a sub-card, a
 // cover, the review loop's `unresolved` label, a short review thread on the README card, and a daily report. Every word
-// written here is synthetic. Run by scripts/readme-images/build; env WEB, MCP, MCP_TOKEN, CARD (the README card);
+// written here is synthetic. Run by scripts/readme-images/build; env WEB, MCP, MCP_BOARD_TOKEN, CARD (the README card);
 // prints one JSON line: the sessions launched and the card whose dialog becomes a question.
 "use strict";
 
 const WEB = process.env.WEB;
 const MCP = process.env.MCP;
-const TOKEN = process.env.MCP_TOKEN;
+const TOKEN = process.env.MCP_BOARD_TOKEN;
 const CARD = Number(process.env.CARD);
 const SLUG = "busyyaks";
-if (!WEB || !MCP || !TOKEN || !CARD) throw new Error("seed-busyyaks: WEB, MCP, MCP_TOKEN and CARD are required");
+if (!WEB || !MCP || !TOKEN || !CARD) throw new Error("seed-busyyaks: WEB, MCP, MCP_BOARD_TOKEN and CARD are required");
 
 let rpcId = 0;
 async function tool(name, args) {

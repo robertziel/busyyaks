@@ -1,0 +1,108 @@
+/* A project's Settings tab (components/ProjectRules.tsx): its bar and Save row. The cards — one full-width card per
+   file, one column — are styles/agent-rules.css (components/RuleCard.tsx). Skin tokens only
+   (lib/projectRulesCss.test.ts): Light, Dark and any skin file hold. */
+.pr-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+}
+.pr-bar h2 {
+  margin: 0;
+}
+.pr-dir {
+  font-size: 12.5px;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.pr-scope {
+  margin-left: auto;
+  max-width: 100%;
+  font-size: 12px;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-chip);
+  overflow-wrap: anywhere;
+  color: var(--ink-dim);
+  background: var(--mat-fill);
+}
+.pr-scope.ok {
+  color: var(--ok);
+  background: rgba(var(--ok-rgb), 0.12);
+}
+.pr-scope.warn {
+  color: var(--warn);
+  background: rgba(var(--warn-rgb), 0.14);
+}
+.pr-scope.bad {
+  color: var(--bad);
+  background: rgba(var(--bad-rgb), 0.12);
+}
+.pr-global {
+  font-size: 12.5px;
+  color: var(--ink-dim);
+}
+.pr-global a {
+  color: var(--accent);
+}
+.pr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.pr-actions [role="status"] {
+  flex: 1 1 14rem;
+  min-width: 0;
+  font-size: 13px;
+}
+.pr-status.muted {
+  color: var(--ink-faint);
+}
+.pr-status.ok {
+  color: var(--ok);
+}
+.pr-status.bad {
+  color: var(--bad);
+  overflow-wrap: anywhere;
+}
+/* the tab's two groups (per agent type · on-demand skills), a skill's head, the new-file rows, a file's actions */
+.pr-group {
+  margin: 18px 0 4px;
+  font-size: 14px;
+  color: var(--ink-dim);
+}
+.pr-skill {
+  display: grid;
+  gap: 8px;
+}
+.pr-skill-head {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.pr-new {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 6px 0;
+}
+.pr-new input {
+  min-width: 0;
+  flex: 0 1 18rem;
+}
+.pr-mode,
+.pr-file-actions {
+  margin: 4px 0;
+  font-size: 13px;
+}
+.pr-mode select {
+  max-width: 100%;
+}
+.rc-replaced {
+  color: var(--ink-faint);
+}
+.rc-replaced .mono {
+  text-decoration: line-through;
+}

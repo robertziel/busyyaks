@@ -62,12 +62,12 @@ class SkillsTest < Minitest::Test
     own = layers.first
     assert_equal "core", own.core.name
     assert_equal %w[lead team worker], own.agents.keys.sort
-    assert_equal %w[reviewer], own.skills.map(&:name)
+    assert_equal %w[critic qa reviewer], own.skills.map(&:name)
     TYPES.each { |t| S.check_selection!(S.select(layers, t), SET) }
     assert_empty S.select(layers, "plain").parts, "plain = core alone"
   end
 
-  # busyyaks's own repo layer (.busyyaks/skills, committed): only additions for agent types, nothing shadowing
+  # busyyaks's own repo layer (.busyyaks/skills, committed): only additions for agent types, nothing replaced
   def test_the_repos_own_project_layer_loads
     sel, status = S.plan!(checkout: ROOT, repo: ROOT, type: "worker", types: TYPES, settings: SET, trust_refusal: nil)
     assert_equal "loaded", status
@@ -170,7 +170,7 @@ class SkillsTest < Minitest::Test
   def local_set = S.settings!("max_bytes" => 65_536, "max_start_bytes" => 32_768, "project" => "allow",
                               "local_dir" => "skills-local")
 
-  def test_the_deployments_local_dir_adds_agents_and_skills_and_never_shadows
+  def test_the_deployments_local_dir_adds_agents_and_skills_and_replaces_by_the_same_rule
     own
     local = File.join(@co, "skills-local")
     skill(local, "local-repo")
@@ -180,11 +180,80 @@ class SkillsTest < Minitest::Test
     sel = S.select(layers, "worker")
     assert_equal [%w[worker busyyaks], %w[worker deployment]], sel.parts.map { [_1.type, _1.source] }
     assert_equal [%w[reviewer busyyaks], %w[local-repo deployment]], sel.skills.map { [_1.name, _1.source] }
-    skill(local, "reviewer")
-    refused(/reviewer shadows a busyyaks skill/) { S.busyyaks!(@co, types: TYPES, settings: local_set) }
+    # the override rule is one for every later layer: a deployment skill of a busyyaks name replaces it
+    skill(local, "reviewer", "the deployment's review brief\n")
+    sel = S.select(S.busyyaks!(@co, types: TYPES, settings: local_set), "worker")
+    assert_equal [%w[reviewer deployment busyyaks], %w[local-repo deployment] + [nil]],
+                 sel.skills.map { [_1.name, _1.source, _1.replaces] }
+    assert_equal [{ kind: "skill", path: "skills/busyyaks/reviewer", source: "busyyaks", by: "deployment" }], sel.replaced
     FileUtils.rm_rf(File.join(local, "reviewer"))
     skill(local, "core")
-    refused(/core is busyyaks's core skill/) { S.busyyaks!(@co, types: TYPES, settings: local_set) }
+    refused(/core is busyyaks's core skill, not replaceable by a layer — edit it for every session/) do
+      S.busyyaks!(@co, types: TYPES, settings: local_set)
+    end
+  end
+
+  # --- the override rule (Skills.select) ---------------------------------------------------------------------------
+
+  def test_an_agents_file_adds_by_default_and_replaces_with_mode_replace
+    own
+    agent(pdir, "lead", "project lead rule\n")
+    sel, = plan
+    assert_equal [%w[busyyaks add], %w[project add]], sel.parts.map { [_1.source, _1.mode] }
+    assert_empty sel.replaced
+    agent(pdir, "lead", "---\nmode: add\n---\nproject lead rule\n")
+    sel, = plan
+    assert_equal [%w[busyyaks add], %w[project add]], sel.parts.map { [_1.source, _1.mode] }
+    assert_equal "project lead rule\n", sel.parts.last.body, "the frontmatter is not part of the rule"
+    agent(pdir, "lead", "---\nmode: replace\n---\nONLY the project's lead rule\n")
+    sel, = plan
+    assert_equal [["project", "replace", ["busyyaks"]]], sel.parts.map { [_1.source, _1.mode, _1.replaces] }
+    assert_equal [{ kind: "agent", path: "skills/busyyaks/agents/lead.md", source: "busyyaks", by: "project" }],
+                 sel.replaced
+    entry = S.entry_body(sel, S::ClaudeCode.new)
+    assert_includes entry, "## Agent type lead (project, replaces busyyaks)\n\nONLY the project's lead rule"
+    refute_includes entry, "Do the lead things.", "busyyaks's lead.md is not staged"
+    assert_includes entry, "Body of core.", "core is never replaced"
+    sel, = plan(type: "worker")
+    assert_equal %w[busyyaks], sel.parts.map(&:source), "another type keeps busyyaks's rules"
+    # replacing with nothing is a file: the type then starts with core alone
+    agent(pdir, "lead", "---\nmode: replace\n---\n")
+    assert_equal [""], plan.first.parts.map(&:body)
+  end
+
+  def test_an_agents_files_frontmatter_is_mode_or_nothing_and_busyyaks_own_layer_replaces_nothing
+    own
+    agent(pdir, "lead", "---\nmode: swap\n---\nx\n")
+    refused(/agents\/lead.md: an agents file's frontmatter is exactly `mode: add` or `mode: replace`/) { plan }
+    agent(pdir, "lead", "---\nname: lead\n---\nx\n")
+    refused(/frontmatter is exactly `mode: add`/) { plan }
+    FileUtils.rm_rf(pdir)
+    agent(File.join(@co, "skills/busyyaks"), "lead", "---\nmode: replace\n---\nx\n")
+    refused(/mode: replace in busyyaks's own layer — there is no earlier layer to replace/) { plan }
+  end
+
+  def test_a_project_skill_of_a_busyyaks_name_replaces_it_and_a_chain_is_said_layer_by_layer
+    own
+    local = File.join(@co, "skills-local")
+    skill(local, "reviewer", "deployment's\n")
+    agent(local, "lead", "---\nmode: replace\n---\ndeployment lead\n")
+    skill(pdir, "reviewer", "project's\n")
+    agent(pdir, "lead", "---\nmode: replace\n---\nproject lead\n")
+    sel, = S.plan!(checkout: @co, repo: @repo, type: "lead", types: TYPES, settings: local_set, trust_refusal: nil)
+    assert_equal [%w[reviewer project deployment]], sel.skills.map { [_1.name, _1.source, _1.replaces] }
+    assert_equal "project's\n", sel.skills.first.body
+    assert_equal [%w[project deployment]], sel.parts.map { [_1.source, *_1.replaces] }
+    assert_equal [%w[agent busyyaks deployment], %w[skill busyyaks deployment], %w[agent deployment project],
+                  %w[skill deployment project],], sel.replaced.map { _1.values_at(:kind, :source, :by) }
+    layers = S.busyyaks!(@co, types: TYPES, settings: local_set) + [S.project(@repo, types: TYPES, settings: local_set)]
+    comp = S.composition(layers, "lead")
+    assert_equal [["skills/busyyaks/core/SKILL.md", nil], ["skills/busyyaks/agents/lead.md", "deployment"],
+                  ["skills-local/agents/lead.md", "project"], [".busyyaks/skills/agents/lead.md", nil],],
+                 comp[:start].map { _1.values_at(:path, :replaced_by) }
+    assert_equal [["busyyaks", "deployment", nil], ["deployment", "project", nil], ["project", nil, "deployment"]],
+                 comp[:on_demand].map { _1.values_at(:source, :replaced_by, :replaces) }
+    entry = S.entry_body(sel, S::ClaudeCode.new)
+    assert_includes entry, "- `busyyaks:reviewer` (project, replaces deployment's): about reviewer"
   end
 
   # --- the project layer + trust -----------------------------------------------------------------------------------
@@ -245,11 +314,8 @@ class SkillsTest < Minitest::Test
 
   def test_a_trusted_projects_bad_skills_refuse_the_launch
     own
-    skill(pdir, "reviewer")
-    refused(/reviewer shadows a busyyaks skill/) { plan }
-    FileUtils.rm_rf(File.join(pdir, "reviewer"))
     skill(pdir, "core")
-    refused(/core is busyyaks's core skill/) { plan }
+    refused(/core is busyyaks's core skill, not replaceable by a layer/) { plan }
     FileUtils.rm_rf(File.join(pdir, "core"))
     agent(pdir, "boss")
     refused(/boss is not an agent type/) { plan }
@@ -292,7 +358,8 @@ class SkillsTest < Minitest::Test
     assert_includes entry, "- `busyyaks:reviewer` (busyyaks): about reviewer"
     refute File.exist?(File.join(dest, "skills/core")), "core is the entry skill itself, not a second skill"
     assert_match(/\A---\nname: reviewer\n/, File.read(File.join(dest, "skills/reviewer/SKILL.md")))
-    assert_equal ["--plugin-dir", dest], d.extra(dest)
+    # --mcp-config first (variadic), --plugin-dir ends it before the prompt
+    assert_equal ["--mcp-config", File.join(dest, "mcp.json"), "--plugin-dir", dest], d.extra(dest)
     assert_equal "/busyyaks:session hi", d.prompt("hi")
     assert_equal "/busyyaks:session", d.prompt(nil)
     assert_empty d.env(dest)

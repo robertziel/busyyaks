@@ -2,6 +2,7 @@
 
 require "minitest/autorun"
 require_relative "../support/wait"
+require_relative "../support/auto_loaded"
 require_relative "../../lib/busyyaks/clock"
 require_relative "../../lib/busyyaks/hermes_board"
 require "tmpdir"
@@ -24,7 +25,8 @@ class LauncherTrustTest < Minitest::Test
   # a lead's start carries its key: bin/launcher keeps it in its state dir, never in the session
   LEAD_KEY = "ab" * 32
   MCP_TOKEN = "cd" * 32
-  # the host allowlist (launch.commands): the fixture's two launchers + a hermes one
+  BOARD_TOKEN = "ef" * 32
+  # the host allowlist (launch.commands): the fixture's by_two launchers + a hermes one
   INVOCATIONS = [*YAML.safe_load_file(File.expand_path("../fixtures/busyyaks.yml", __dir__)).dig("launch", "commands"),
                  { "kind" => "hermes", "command" => "hermes", "args" => ["chat"], "via_shell" => false },].freeze
   ROOT = File.expand_path("../..", __dir__)
@@ -59,6 +61,7 @@ class LauncherTrustTest < Minitest::Test
       MCP_HOST=127.0.0.1
       MCP_HOST_PORT=8081
       MCP_TOKEN=#{MCP_TOKEN}
+      MCP_BOARD_TOKEN=#{BOARD_TOKEN}
     ENV
     # tmux: records every call; the pane shows Claude Code's trust prompt until Enter is pressed on it. new-session
     # starts the pane's process: a `claude --remote-control <session>` (a copy of bash named claude, so /proc shows
@@ -98,6 +101,7 @@ class LauncherTrustTest < Minitest::Test
     @pane_hermes = File.join(@base, "pane-bin/hermes")
     @pane_hermes_ran = File.join(@base, "pane-hermes-ran")
     @noplugin = File.join(@base, "noplugin") # a launcher command that drops the extra flags
+    @nomcp = File.join(@base, "nomcp") # a launcher command that drops --mcp-config: no board MCP
     # hermes reads its skills from config.yaml skills.external_dirs: the inert line busyyaks's launch env fills
     @home = File.join(@base, "home") # the launcher's HOME: a launch writes nothing user-wide into it
     FileUtils.mkdir_p(@home)
@@ -114,23 +118,33 @@ class LauncherTrustTest < Minitest::Test
           # same --plugin-dir / BUSYYAKS_SKILLS_DIR the real one would (the launcher reads them off /proc)
           for a; do cmd=$a; done
           pd=$(printf '%s' "$cmd" | sed -nE 's/.*--plugin-dir ([^ ]+).*/\\1/p')
+          mc=$(printf '%s' "$cmd" | sed -nE 's/.*--mcp-config ([^ ]+).*/\\1/p')
           printf '%s\n' "$cmd" > #{@base}/command
           for a; do case "$a" in BUSYYAKS_SKILLS_DIR=*|HERMES_MANAGED_DIR=*|HERMES_LANGUAGE=*) export "$a" ;; esac; done
           while [ "$1" != -s ]; do shift; done
           # each pane its own process group (setsid): teardown ends the whole group, its `sleep`s too — a TERM to the
           # pane's shell alone left them running 300 s (the flake gate's repeats ran out of tasks)
-          if [ -e #{@pane} ]; then setsid sh #{@pane} "$2" "$pd" >/dev/null 2>&1 &
+          if [ -e #{@pane} ]; then setsid sh #{@pane} "$2" "$pd" "$mc" >/dev/null 2>&1 &
           elif [ -e #{@refuse} ]; then setsid sleep 300 >/dev/null 2>&1 &
           elif [ -e #{@pane_hermes} ]; then setsid #{@pane_hermes} chat >/dev/null 2>&1 &
           elif [ -e #{@hermes} ]; then setsid #{@bin}/hermes chat >/dev/null 2>&1 &
-          elif [ -e #{@noplugin} ]; then setsid #{@bin}/claude -c 'sleep 300; :' --remote-control "$2" >/dev/null 2>&1 &
-          else setsid #{@bin}/claude -c 'sleep 300; :' --plugin-dir "$pd" --remote-control "$2" >/dev/null 2>&1 & fi
-          echo $! >> #{@pids}; echo $! > #{@base}/pane.pid; date +%s.%N > #{@base}/started_at; exit 0 ;;
-        list-panes) [ -e #{@base}/pane.pid ] && cat #{@base}/pane.pid && exit 0; exit 1 ;;
+          elif [ -e #{@noplugin} ]; then setsid #{@bin}/claude -c 'sleep 300; :' --mcp-config "$mc" --remote-control "$2" >/dev/null 2>&1 &
+          elif [ -e #{@nomcp} ]; then setsid #{@bin}/claude -c 'sleep 300; :' --plugin-dir "$pd" --remote-control "$2" >/dev/null 2>&1 &
+          else setsid #{@bin}/claude -c 'sleep 300; :' --mcp-config "$mc" --plugin-dir "$pd" --remote-control "$2" >/dev/null 2>&1 & fi
+          echo $! >> #{@pids}; echo $! > #{@base}/pane.pid; echo "$2" > #{@base}/pane.name; date +%s.%N > #{@base}/started_at; exit 0 ;;
+        # `list-panes -a -F <name>\t<pid>` (the launch's record of its pane, launched?): the one pane's session + pid
+        list-panes) [ -e #{@base}/pane.pid ] || exit 1
+          if [ "$2" = -a ]; then printf '%s\t%s\n' "$(cat #{@base}/pane.name)" "$(cat #{@base}/pane.pid)"; else cat #{@base}/pane.pid; fi
+          exit 0 ;;
         kill-session) [ -e #{@base}/nokill ] && echo "server busy" >&2 && exit 1; exit 0 ;;
         has-session) grep -qx -- "$3" #{@base}/alive 2>/dev/null && exit 0
           [ -e #{@base}/nokill ] && [ -e #{@base}/pane.pid ] && exit 0; exit 1 ;;
-        ls) [ -e #{@base}/ls ] && cat #{@base}/ls && exit 0; [ -e #{@base}/ls_err ] && cat #{@base}/ls_err >&2; exit 1 ;;
+        # `ls`: the names in the ls file; the sessions op's tab-separated format gets each name a path outside the root
+        ls) if [ -e #{@base}/ls ]; then
+              case "$*" in *"$(printf '\\t')"*) sed 's|$|\\t/elsewhere\\t1\\t0|' #{@base}/ls ;; *) cat #{@base}/ls ;; esac
+              exit 0
+            fi
+            [ -e #{@base}/ls_err ] && cat #{@base}/ls_err >&2; exit 1 ;;
         display-message) exit 1 ;;
         capture-pane)
           if [ -e #{@dialog} ]; then printf '%s\\n' "Do you want to proceed?" "❯ 1. Yes" "Enter to confirm · Esc to cancel"
@@ -164,9 +178,10 @@ class LauncherTrustTest < Minitest::Test
     FileUtils.rm_rf(@base)
   end
 
-  def write_config(start_seconds)
+  # scopes: nil = no systemd user manager in the sandbox (card 463); a test of the scope sweep gives its own
+  def write_config(start_seconds, scopes: nil)
     launch = { "trusted_paths" => [], "commands" => INVOCATIONS, "start_seconds" => start_seconds }.compact
-    launch["scopes"] = nil # no systemd user manager in the sandbox
+    launch["scopes"] = scopes
     File.write(File.join(@co, "config/busyyaks.yml"), YAML.dump(
       "roots" => [{ "path" => "/projects", "prefix" => "" }], "search_depth" => 2,
       "owner_remotes" => ["github.com/you/"], "author_emails" => ["you@example.com"], "window_days" => 7,
@@ -178,11 +193,11 @@ class LauncherTrustTest < Minitest::Test
     ))
   end
 
-  def restart(start_seconds)
+  def restart(start_seconds, scopes: nil)
     Process.kill("TERM", @pid)
     Process.wait(@pid)
     @pid = nil
-    write_config(start_seconds)
+    write_config(start_seconds, scopes: scopes)
     start
   end
 
@@ -226,9 +241,9 @@ class LauncherTrustTest < Minitest::Test
   end
 
   def launch(name)
-    ask("op" => "launch", "path" => "/projects/#{name}", "session" => "#{name}_s", "type" => "lead",
+    ask("op" => "launch", "path" => "/projects/#{name}", "session" => "by_#{name}_s", "type" => "lead",
         "launcher" => "fullclaude", "lead_key" => LEAD_KEY, "settings" => { "id" => 1, "doc" => AGENTS },
-        "vars" => { "slug" => name, "session" => "#{name}_s", "agent" => "a", "type" => "lead", "cards" => "-" })
+        "vars" => { "slug" => name, "session" => "by_#{name}_s", "agent" => "a", "type" => "lead", "cards" => "-" })
   end
 
   def tmux_calls = File.exist?(@tmux_log) ? File.read(@tmux_log) : ""
@@ -238,7 +253,7 @@ class LauncherTrustTest < Minitest::Test
     ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
     r = launch("fresh")
     assert_equal "accepted", r["trust"], r.inspect
-    assert_match(/send-keys -t =fresh_s: Enter/, tmux_calls)
+    assert_match(/send-keys -t =by_fresh_s: Enter/, tmux_calls)
     FileUtils.rm_f(File.join(@base, "entered"))
     File.write(@tmux_log, "")
     Open3.capture3("git", "init", "-q", File.join(@projects, "planted"))
@@ -296,13 +311,13 @@ class LauncherTrustTest < Minitest::Test
     ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
     r = launch("fresh")
     assert r["ok"], r.inspect
-    stage = File.join(@base, "state/skills/fresh_s")
+    stage = File.join(@base, "state/skills/by_fresh_s")
     argv = Shellwords.split(File.read(File.join(@base, "command")).chomp.delete_suffix("; exec bash"))
     i = argv.index("--plugin-dir")
     assert_equal stage, argv[i + 1]
     assert argv[i + 2].start_with?("/busyyaks:session Test lead session for fresh"), argv.inspect
-    assert_equal ["--remote-control", "fresh_s"], argv.last(2)
-    assert_equal %w[core agents/lead reviewer session], r["skills"].map { |k| k["name"] }
+    assert_equal ["--remote-control", "by_fresh_s"], argv.last(2)
+    assert_equal %w[core agents/lead critic qa reviewer session], r["skills"].map { |k| k["name"] }
     assert_equal "none", r["project_skills"]
     assert_equal 0o700, File.stat(stage).mode & 0o777
     assert_equal({ "name" => "busyyaks" }, JSON.parse(File.read(File.join(stage, ".claude-plugin/plugin.json"))))
@@ -325,7 +340,7 @@ class LauncherTrustTest < Minitest::Test
     refute r["ok"], r.inspect
     assert_match(%r{\Askills: .*/skills/busyyaks/core/SKILL.md missing \(every session starts with it\)}, r["error"])
     refute_includes tmux_calls, "new-session", "nothing started"
-    refute File.exist?(File.join(@base, "state/skills/fresh_s"))
+    refute File.exist?(File.join(@base, "state/skills/by_fresh_s"))
   end
 
   # an agent that comes up WITHOUT the stage (a launcher function dropping the extra flags): refused, killed, stage gone
@@ -334,9 +349,36 @@ class LauncherTrustTest < Minitest::Test
     FileUtils.touch(@noplugin)
     r = launch("fresh")
     refute r["ok"], r.inspect
-    assert_match(/\Afresh_s did not start: the agent runs without its skills: no --plugin-dir /, r["error"])
-    assert_match(/kill-session -t =fresh_s/, tmux_calls)
-    refute File.exist?(File.join(@base, "state/skills/fresh_s"))
+    assert_match(/\Aby_fresh_s did not start: the agent runs without its skills: no --plugin-dir /, r["error"])
+    assert_match(/kill-session -t =by_fresh_s/, tmux_calls)
+    refute File.exist?(File.join(@base, "state/skills/by_fresh_s"))
+  end
+
+  # The board's MCP reaches a session busyyaks launches only through its own --mcp-config <stage>/mcp.json (MCP_BOARD_TOKEN,
+  # 0600 in the 0700 stage): an agent up without it would work the board with nothing — refused and killed
+  def test_an_agent_up_without_the_board_mcp_is_refused
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    FileUtils.touch(@nomcp)
+    r = launch("fresh")
+    refute r["ok"], r.inspect
+    assert_match(/\Aby_fresh_s did not start: the agent runs without the board's MCP: no --mcp-config /, r["error"])
+    assert_match(/kill-session -t =by_fresh_s/, tmux_calls)
+  end
+
+  # a session busyyaks launches gets the board token in its own stage file — never in an argv, a tmux call or a log
+  def test_a_claude_launch_carries_the_board_mcp_in_its_own_stage
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    r = launch("fresh")
+    assert r["ok"], r.inspect
+    path = File.join(@base, "state/skills/by_fresh_s/mcp.json")
+    assert_equal 0o600, File.stat(path).mode & 0o777
+    doc = JSON.parse(File.read(path))
+    want = { "type" => "http", "url" => "http://127.0.0.1:8081/mcp",
+             "headers" => { "Authorization" => "Bearer #{BOARD_TOKEN}" }, }
+    assert_equal(want,
+                 doc.dig("mcpServers", "busyyaks"))
+    [tmux_calls, File.read(@log)].each { |t| refute_includes t, BOARD_TOKEN }
+    refute_includes File.read(path), MCP_TOKEN
   end
 
   # a stage lives while its session does: the next launch removes the stage of a session tmux no longer lists
@@ -344,22 +386,22 @@ class LauncherTrustTest < Minitest::Test
     ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
     ask("op" => "create", "root" => "/projects", "name" => "two", "url" => "")
     assert launch("fresh")["ok"]
-    assert File.directory?(File.join(@base, "state/skills/fresh_s"))
-    File.write(File.join(@base, "ls"), "") # tmux ls: fresh_s is gone
+    assert File.directory?(File.join(@base, "state/skills/by_fresh_s"))
+    File.write(File.join(@base, "ls"), "") # tmux ls: by_fresh_s is gone
     FileUtils.rm_f(File.join(@base, "pane.pid"))
     assert launch("two")["ok"]
-    refute File.exist?(File.join(@base, "state/skills/fresh_s"))
-    assert File.directory?(File.join(@base, "state/skills/two_s"))
+    refute File.exist?(File.join(@base, "state/skills/by_fresh_s"))
+    assert File.directory?(File.join(@base, "state/skills/by_two_s"))
   end
 
   # the notifier's watch pass asks `sessions`: a stage goes within a pass of its session's end
   def test_the_sessions_op_removes_the_stage_of_an_ended_session
     ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
     assert launch("fresh")["ok"]
-    File.write(File.join(@base, "ls"), "") # tmux ls: fresh_s is gone
+    File.write(File.join(@base, "ls"), "") # tmux ls: by_fresh_s is gone
     assert ask("op" => "sessions")["ok"]
-    refute File.exist?(File.join(@base, "state/skills/fresh_s"))
-    assert_match(/skills sweep \(sessions\): removed fresh_s/, File.read(@log))
+    refute File.exist?(File.join(@base, "state/skills/by_fresh_s"))
+    assert_match(/skills sweep \(sessions\): removed by_fresh_s/, File.read(@log))
   end
 
   # tmux unreadable (ls fails, not "no server"): nothing removed, and the log says the sweep was skipped and why
@@ -368,7 +410,7 @@ class LauncherTrustTest < Minitest::Test
     assert launch("fresh")["ok"]
     FileUtils.rm_f(File.join(@base, "ls")) # the stub's ls exits 1, no output
     ask("op" => "sessions")
-    assert File.directory?(File.join(@base, "state/skills/fresh_s"))
+    assert File.directory?(File.join(@base, "state/skills/by_fresh_s"))
     assert_match(/skills sweep skipped \(sessions\): tmux ls failed: no output/, File.read(@log))
   end
 
@@ -377,7 +419,7 @@ class LauncherTrustTest < Minitest::Test
   def test_only_a_real_no_server_answer_counts_as_no_sessions
     ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
     assert launch("fresh")["ok"]
-    stage = File.join(@base, "state/skills/fresh_s")
+    stage = File.join(@base, "state/skills/by_fresh_s")
     FileUtils.rm_f(File.join(@base, "ls"))
     File.write(File.join(@base, "ls_err"), "error connecting to /tmp/tmux-1000/default (Permission denied)\n")
     ask("op" => "sessions")
@@ -411,10 +453,131 @@ File.read(@log))
     assert_equal "loaded", r["project_skills"]
     assert_equal [%w[agents/lead start], %w[deploy on_demand]], r["skills"].select { |k|
  k["source"] == "project" }.map { |k| k.values_at("name", "load") }
-    entry = File.read(File.join(@base, "state/skills/fresh_s/skills/session/SKILL.md"))
+    entry = File.read(File.join(@base, "state/skills/by_fresh_s/skills/session/SKILL.md"))
     assert_operator entry.index("## Agent type lead (busyyaks)"), :<,
 entry.index("## Agent type lead (project)\n\nRun make deploy.")
     assert_includes entry, "- `busyyaks:deploy` (project): how this repo deploys"
+  end
+
+  # --- the project's rules per agent type = its .busyyaks/skills/agents/<type>.md (the project page's Settings tab) ---
+
+  def rule_file(repo, type) = File.join(@projects, repo, ".busyyaks/skills/agents/#{type}.md")
+
+  # the file the Settings tab's Save writes (through the writer service)
+  def agent_rule(repo, type, text)
+    FileUtils.mkdir_p(File.dirname(rule_file(repo, type)))
+    File.write(rule_file(repo, type), text)
+  end
+
+  # every file of the sandbox (the repos, the launcher's HOME, hermes's home, its state + run dirs, its log, what tmux
+  # was asked to type) that holds `text`
+  def holding(text)
+    Dir.glob("**/*", File::FNM_DOTMATCH, base: @base).map { File.join(@base, _1) }.select do |path|
+      File.file?(path) && !File.symlink?(path) && File.binread(path).include?(text)
+    end.sort
+  end
+
+  # the operator: "a session busyyaks launches as <type> gets that type's rules for this project". The real
+  # bin/launcher, a Claude Code launcher: the repo's agents/lead.md is the type's last part of the entry skill of the
+  # plugin dir THIS session is started with (--plugin-dir); another type's file is not in it
+  def test_a_session_busyyaks_launches_as_lead_gets_that_types_rules_for_this_project
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    agent_rule("fresh", "lead", "Always run make e2e before a handoff.\n")
+    agent_rule("fresh", "worker", "Workers only: screenshots on the card.\n")
+    r = launch("fresh")
+    assert r["ok"], r.inspect
+    assert_equal %w[core agents/lead agents/lead critic qa reviewer session], r["skills"].map { |k| k["name"] }
+    assert_equal "project", r["skills"][2]["source"]
+    stage = File.join(@base, "state/skills/by_fresh_s")
+    assert_includes File.read(File.join(@base, "command")), "--plugin-dir #{stage}"
+    entry = File.read(File.join(stage, "skills/session/SKILL.md"))
+    assert_includes entry, "## Agent type lead (project)\n\nAlways run make e2e before a handoff."
+    assert_operator entry.index("## Agent type lead (busyyaks)"), :<, entry.index("## Agent type lead (project)")
+    refute_includes entry, "Workers only"
+  end
+
+  # the operator: "bound to the project, but that does NOT mean any session in the directory reads them … the
+  # busyyaks skill is loaded by the application when the web application starts the session, never from the terminal".
+  # The rule is a file of the repo under .busyyaks/, which no CLI reads on its own; a launch copies it into the
+  # session's staged skill (the launcher's state dir, 0700) and names that stage on the command line — the only way
+  # it reaches an agent. The launch writes nothing into the repo, and nothing user-wide.
+  def test_a_session_started_from_the_terminal_in_the_projects_directory_gets_none_of_the_projects_agent_rules
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    agent_rule("fresh", "lead", "Always run make e2e before a handoff.\n")
+    repo = File.join(@projects, "fresh")
+    before = Dir.glob("**/*", File::FNM_DOTMATCH, base: repo).sort
+    r = launch("fresh")
+    assert r["ok"], r.inspect
+    assert_equal before, Dir.glob("**/*", File::FNM_DOTMATCH, base: repo).sort, "the launch writes nothing into the repo"
+    assert_empty(AUTO_LOADED.select { File.exist?(File.join(repo, _1)) }, "no file a CLI reads on its own")
+    stage = File.join(@base, "state/skills/by_fresh_s")
+    assert_equal [File.join(stage, "skills/session/SKILL.md"), rule_file("fresh", "lead")].sort,
+                 holding("Always run make e2e before a handoff."),
+                 "the repo's .busyyaks file and the launched session's stage: no home dir, no log, no typed command"
+    assert_equal 0o700, File.stat(stage).mode & 0o777
+    assert_empty Dir.children(@home), "nothing user-wide: the launcher's HOME is untouched"
+    # what makes the launched session read it — and what a session typed in a terminal does not have
+    command = File.read(File.join(@base, "command"))
+    assert_includes command, "--plugin-dir #{stage}"
+    assert_includes command, "/busyyaks:session"
+  end
+
+  # the Settings tab asks the launcher what a launch does with the repo's layer (its own trust decision and checks),
+  # starting nothing: none · loaded · left: <why> · the refusal a launch would give
+  def test_the_launcher_says_what_a_launch_does_with_the_projects_layer
+    settings = { "id" => 1, "doc" => AGENTS }
+    op = ->(name) { ask("op" => "project_skills", "path" => "/projects/#{name}", "settings" => settings) }
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    r = op.("fresh")
+    assert_equal [true, "none", false], r.values_at("ok", "project_skills", "checkout")
+    assert_equal %w[lead plain team worker], r["budget"].keys.sort
+    room = r["budget"]["lead"]
+    assert_operator room, :<, 32_768, "max_start_bytes less busyyaks's own core + agents/lead.md"
+    agent_rule("fresh", "lead", "Run make e2e.\n")
+    assert_equal "loaded", op.("fresh")["project_skills"]
+    # a file that would push the lead's entry skill over max_start_bytes: that launch is refused, and the op says so
+    agent_rule("fresh", "lead", "x" * (room + 1))
+    r = op.("fresh")
+    assert_equal [false, 422], r.values_at("ok", "status")
+    assert_match(/\Askills: agent type lead: core \+ agents\/lead.md are \d+ bytes, over skills.max_start_bytes/, r["error"])
+    assert_match(/\Askills: agent type lead: /, launch("fresh")["error"])
+    agent_rule("fresh", "lead", "Run make e2e.\n")
+    planted("planted")
+    agent_rule("planted", "lead", "Run make e2e.\n")
+    assert_match(/\Aleft: .* is not in config\/busyyaks.yml launch.trusted_paths/, op.("planted")["project_skills"])
+    agent_rule("fresh", "boss", "x\n")
+    r = op.("fresh")
+    assert_equal false, r["ok"]
+    assert_match(%r{\Askills: .*agents/boss\.md: boss is not an agent type}, r["error"])
+    assert_match(/settings \{id, doc\} are required/, ask("op" => "project_skills", "path" => "/projects/fresh")["error"])
+    refute_includes tmux_calls, "new-session"
+    refute File.exist?(File.join(@base, "state/skills/by_fresh_s")), "nothing staged"
+  end
+
+  # Settings → Agent rules reads busyyaks's own layers from the launcher: the HOST checkout it launches from, read at
+  # every ask (an edit there shows at once), in the order a launch stages them, nothing started
+  def test_the_operator_reads_every_global_markdown_from_the_checkout_the_launcher_launches_from
+    settings = { "id" => 1, "doc" => AGENTS }
+    r = ask("op" => "skills_layers", "settings" => settings)
+    assert r["ok"], r.inspect
+    assert_equal %w[skills/busyyaks/core/SKILL.md skills/busyyaks/agents/lead.md], r.dig("types", "lead", "start")
+    assert_equal %w[critic qa reviewer], r.dig("types", "lead", "on_demand")
+    lead = r["files"].find { _1["path"] == "skills/busyyaks/agents/lead.md" }
+    assert_equal [File.read(File.join(@co, "skills/busyyaks/agents/lead.md")), "busyyaks", "agent", "start"],
+                 lead.values_at("text", "source", "kind", "load")
+    assert_includes r["creatable"], "skills/busyyaks/agents/plain.md"
+    # this sandbox's checkout is not under its PROJECTS_ROOT: the writer could not save there — said, never guessed
+    assert_nil r.dig("checkout", "mount")
+    assert_match(/is not under PROJECTS_ROOT #{Regexp.escape(@projects)}: the writer service cannot write it/,
+                 r.dig("checkout", "error"))
+    File.write(File.join(@co, "skills/busyyaks/agents/lead.md"), "# Lead\n\nEDITED ON THE HOST\n")
+    lead = ask("op" => "skills_layers", "settings" => settings)["files"].find { _1["path"].end_with?("agents/lead.md") }
+    assert_equal "# Lead\n\nEDITED ON THE HOST\n", lead["text"]
+    FileUtils.rm_rf(File.join(@co, "skills/busyyaks/core"))
+    r = ask("op" => "skills_layers", "settings" => settings)
+    assert_equal [false, 422], r.values_at("ok", "status")
+    assert_match(%r{\Askills: .*core/SKILL.md missing}, r["error"])
+    refute_includes tmux_calls, "new-session"
   end
 
   # an UNTRUSTED repo's .busyyaks skills are left (never read); the launch runs on busyyaks's and says why
@@ -442,14 +605,14 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
               "model" => t["model"].is_a?(Hash) ? t["model"].merge("hermes" => nil) : t["model"])
     end
     doc = AGENTS.merge("launchers" => AGENTS["launchers"] + [hermes], "agent_types" => types)
-    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "plain", "launcher" => "hermes",
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "by_fresh_s", "type" => "plain", "launcher" => "hermes",
             "settings" => { "id" => 3, "doc" => doc },
-            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "plain", "cards" => "-" })
+            "vars" => { "slug" => "fresh", "session" => "by_fresh_s", "agent" => "a", "type" => "plain", "cards" => "-" })
     refute r["ok"], r.inspect
     assert_match(/the agent runs without its skills: hermes does not list busyyaks-session-\h{12}: /, r["error"])
     assert_includes r["error"], "#{@hermes_home}/config.yaml needs `- ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills`"
-    assert_match(/kill-session -t =fresh_s/, tmux_calls)
-    refute File.exist?(File.join(@base, "state/skills/fresh_s"))
+    assert_match(/kill-session -t =by_fresh_s/, tmux_calls)
+    refute File.exist?(File.join(@base, "state/skills/by_fresh_s"))
   end
 
   # claude never came up (it refused to start; the pane is a bare shell): the launch is refused with the pane's last
@@ -460,9 +623,10 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
     r = launch("fresh")
     refute r["ok"], r.inspect
     assert_equal 422, r["status"]
-    assert_match(/\Afresh_s did not start: the command exited after \d+s, no claude --remote-control fresh_s: /, r["error"])
+    assert_match(/\Aby_fresh_s did not start: the command exited after \d+s, no claude --remote-control by_fresh_s: /,
+r["error"])
     assert_match(/: Temp directory .* owned by uid 0/, r["error"])
-    assert_match(/kill-session -t =fresh_s/, tmux_calls)
+    assert_match(/kill-session -t =by_fresh_s/, tmux_calls)
   end
 
   def test_a_refused_launch_whose_kill_failed_says_the_session_still_runs
@@ -471,13 +635,13 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
     File.write(File.join(@base, "nokill"), "")
     r = launch("fresh")
     assert_equal [false, 422], r.values_at("ok", "status"), r.inspect
-    assert_match(/kill-session failed \(server busy\): the tmux session fresh_s is still running\z/, r["error"])
+    assert_match(/kill-session failed \(server busy\): the tmux session by_fresh_s is still running\z/, r["error"])
   end
 
   def test_a_launch_with_claude_remote_control_up_is_ok_and_kept
     ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
     r = launch("fresh")
-    assert_equal [true, "on", "fresh_s"], r.values_at("ok", "remote_control", "remote_control_name"), r.inspect
+    assert_equal [true, "on", "by_fresh_s"], r.values_at("ok", "remote_control", "remote_control_name"), r.inspect
     refute_includes tmux_calls, "kill-session"
   end
 
@@ -499,32 +663,36 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
     ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
     launchers = AGENTS["launchers"].map { |l| l["key"] == "fullclaude" ? l.merge("command" => "bash") : l }
     doc = AGENTS.merge("launchers" => launchers)
-    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "lead", "launcher" => "fullclaude",
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "by_fresh_s", "type" => "lead",
+            "launcher" => "fullclaude",
             "lead_key" => LEAD_KEY,
             "settings" => { "id" => 7, "doc" => doc },
-            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
+            "vars" => { "slug" => "fresh", "session" => "by_fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
     refute r["ok"], r.inspect
     assert r["error"].start_with?("agent settings revision 7: launcher fullclaude " \
                                   "(claude_code: bash --permission-mode bypassPermissions): not an invocation on this " \
                                   "host's allowlist config/busyyaks.yml launch.commands"), r["error"]
-    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "lead", "launcher" => "fullclaude",
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "by_fresh_s", "type" => "lead",
+            "launcher" => "fullclaude",
             "lead_key" => LEAD_KEY,
-            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
+            "vars" => { "slug" => "fresh", "session" => "by_fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
     assert_match(/settings \{id, doc\} are required/, r["error"])
     # a prompt starting with "-" (an option of the allowlisted command) is refused before tmux too
     types = AGENTS["agent_types"].map { |t| t["key"] == "lead" ? t.merge("prompt" => "--mcp-config=/tmp/x {slug}") : t }
-    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "lead", "launcher" => "fullclaude",
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "by_fresh_s", "type" => "lead",
+            "launcher" => "fullclaude",
             "lead_key" => LEAD_KEY,
             "settings" => { "id" => 8, "doc" => AGENTS.merge("agent_types" => types) },
-            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
+            "vars" => { "slug" => "fresh", "session" => "by_fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
     assert_match(/agent settings revision 8: agent_types\[lead\].prompt must not start with "-"/, r["error"])
     refute_includes tmux_calls, "new-session", "nothing was started"
   end
 
-  # a hermes launcher (kind hermes): the prompt goes as -q, no trust prompt is answered (it is Claude Code's), and the
-  # start counts as up when the pane runs hermes — there is no remote control to wait for
-  def test_a_hermes_launch_is_up_when_its_pane_runs_hermes
+  # A lead of project "fresh" (made by the launcher: trusted) started on a hermes launcher → the launcher's answer.
+  # The block runs after the repo exists, before the launch (to put files into it).
+  def launch_hermes
     ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    yield if block_given?
     FileUtils.touch(@hermes)
     hermes = { "key" => "hermes", "label" => "hermes", "kind" => "hermes", "command" => "hermes", "args" => ["chat"],
                "via_shell" => false, }
@@ -535,34 +703,62 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
       t["key"] == "lead" ? n.merge("prompt" => "work on {slug}") : n
     end
     doc = AGENTS.merge("launchers" => AGENTS["launchers"] + [hermes], "agent_types" => types)
-    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "lead", "launcher" => "hermes",
-            "lead_key" => LEAD_KEY, "settings" => { "id" => 3, "doc" => doc },
-            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
+    ask("op" => "launch", "path" => "/projects/fresh", "session" => "by_fresh_s", "type" => "lead", "launcher" => "hermes",
+        "lead_key" => LEAD_KEY, "settings" => { "id" => 3, "doc" => doc },
+        "vars" => { "slug" => "fresh", "session" => "by_fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
+  end
+
+  # the operator: "ensure it works this way for every harness, not only Claude — also Hermes". The real bin/launcher
+  # on a hermes launcher: the project's rule is in the entry skill hermes is started with (-s busyyaks-session-<token>,
+  # found through this session's BUSYYAKS_SKILLS_DIR only)
+  def test_a_hermes_launch_gets_the_same_rules
+    r = launch_hermes { agent_rule("fresh", "lead", "Hermes too: run make e2e.\n") }
+    assert r["ok"], r.inspect
+    assert_equal "loaded", r["project_skills"]
+    assert_includes r["skills"].map { |k| k.values_at("name", "source") }, %w[agents/lead project]
+    started = tmux_calls.lines.find { |l| l.start_with?("new-session") }
+    token = started[/-s busyyaks-session-(\h{12}) /, 1]
+    stage = File.join(@base, "state/skills/by_fresh_s")
+    assert_includes started, "-e BUSYYAKS_SKILLS_DIR=#{stage} "
+    entry = File.join(stage, "busyyaks-skills/busyyaks-session-#{token}/SKILL.md")
+    assert_includes File.read(entry), "## Agent type lead (project)\n\nHermes too: run make e2e."
+    assert_equal [entry, rule_file("fresh", "lead")].sort, holding("Hermes too: run make e2e.")
+    assert_empty(AUTO_LOADED.select { File.exist?(File.join(@projects, "fresh", _1)) })
+    refute_includes File.read(File.join(@hermes_home, "config.yaml")), "Hermes too"
+  end
+
+  # a hermes launcher (kind hermes): the prompt goes as -q, no trust prompt is answered (it is Claude Code's), and the
+  # start counts as up when the pane runs hermes — there is no remote control to wait for
+  def test_a_hermes_launch_is_up_when_its_pane_runs_hermes
+    r = launch_hermes
     assert_equal [true, "hermes", "on", "hermes"], r.values_at("ok", "kind", "process", "process_name"), r.inspect
     refute r.key?("remote_control"), r.inspect
     started = tmux_calls.lines.find { |l| l.start_with?("new-session") }
     token = started[/-s busyyaks-session-(\h{12}) /, 1]
     refute_nil token, started
     assert_match(/hermes chat -s busyyaks-session-#{token} -q work\\ on\\ fresh/, started)
-    stage = File.join(@base, "state/skills/fresh_s")
+    stage = File.join(@base, "state/skills/by_fresh_s")
     assert_includes started, "-e BUSYYAKS_SKILLS_DIR=#{stage} ", "the stage reaches hermes through this session's env only"
     entry = File.join(stage, "busyyaks-skills/busyyaks-session-#{token}/SKILL.md")
     assert_match(/\A---\nname: busyyaks-session-#{token}\n/, File.read(entry))
     assert File.file?(File.join(stage, "busyyaks-skills/busyyaks-reviewer-#{token}/SKILL.md"))
     assert_includes File.read(entry), "## Agent type lead (busyyaks)"
-    assert_equal %w[core agents/lead reviewer session], r["skills"].map { |k|
- k["name"] }, "lead: core + its part + the entry skill"
+    assert_equal %w[core agents/lead critic qa reviewer session], r["skills"].map { |k|
+ k["name"] }, "lead: core + its part + the on-demand briefs + the entry skill"
     refute_match(/--remote-control/, started)
     refute_match(/send-keys/, tmux_calls, "no trust prompt answered for hermes")
     # the overlay reached it through this session's env, its token only in the 0600 file
     managed = File.join(stage, "hermes-managed")
     assert_includes started, "-e HERMES_MANAGED_DIR=#{managed} "
     assert_equal 0o600, File.stat(File.join(managed, "config.yaml")).mode & 0o777
-    assert_includes File.read(File.join(managed, "config.yaml")), "Bearer #{MCP_TOKEN}"
-    refute_includes tmux_calls, MCP_TOKEN
-    refute_includes File.read(@log), MCP_TOKEN
+    # the board token (MCP_BOARD_TOKEN) in this session's own overlay only — never the operator's MCP_TOKEN, never an
+    # argv or a log line
+    overlay = File.read(File.join(managed, "config.yaml"))
+    assert_includes overlay, "Bearer #{BOARD_TOKEN}"
+    refute_includes overlay, MCP_TOKEN
+    [tmux_calls, File.read(@log)].each { |t| refute_includes t, BOARD_TOKEN }
     refute_includes File.read(File.join(@hermes_home, "config.yaml")), "Bearer", "the operator's config is never written"
-    assert_equal ["fresh_s"], JSON.parse(File.read(File.join(@base, "state/hermes-board.json"))).map { _1["session"] }
+    assert_equal ["by_fresh_s"], JSON.parse(File.read(File.join(@base, "state/hermes-board.json"))).map { _1["session"] }
   end
 
   # the checks run the ALLOWLISTED command; a program a pane's process names is never executed
@@ -585,9 +781,9 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
               "model" => t["model"].is_a?(Hash) ? t["model"].merge("hermes" => nil) : t["model"])
     end
     doc = AGENTS.merge("launchers" => AGENTS["launchers"] + [hermes], "agent_types" => types)
-    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "plain", "launcher" => "hermes",
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "by_fresh_s", "type" => "plain", "launcher" => "hermes",
             "settings" => { "id" => 3, "doc" => doc },
-            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "plain", "cards" => "-" })
+            "vars" => { "slug" => "fresh", "session" => "by_fresh_s", "agent" => "a", "type" => "plain", "cards" => "-" })
     refute File.exist?(@pane_hermes_ran), "the launcher ran the pane's program"
     assert r["ok"], r.inspect
   end
@@ -608,14 +804,14 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
               "model" => t["model"].is_a?(Hash) ? t["model"].merge("hermes" => nil) : t["model"])
     end
     doc = AGENTS.merge("launchers" => AGENTS["launchers"] + [hermes], "agent_types" => types)
-    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "fresh_s", "type" => "plain", "launcher" => "hermes",
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "by_fresh_s", "type" => "plain", "launcher" => "hermes",
             "settings" => { "id" => 3, "doc" => doc },
-            "vars" => { "slug" => "fresh", "session" => "fresh_s", "agent" => "a", "type" => "plain", "cards" => "-" })
+            "vars" => { "slug" => "fresh", "session" => "by_fresh_s", "agent" => "a", "type" => "plain", "cards" => "-" })
     refute r["ok"], r.inspect
     assert_includes r["error"], "#{config} has no mcp_servers"
     assert_includes r["error"], Busyyaks::HermesBoard::INERT
-    assert_match(/kill-session -t =fresh_s/, tmux_calls)
-    refute File.exist?(File.join(@base, "state/skills/fresh_s")), "the stage (with the token) is gone"
+    assert_match(/kill-session -t =by_fresh_s/, tmux_calls)
+    refute File.exist?(File.join(@base, "state/skills/by_fresh_s")), "the stage (with the token) is gone"
     assert_equal before, File.read(config)
   end
 
@@ -647,9 +843,10 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
   # execs claude --remote-control: up, kept
   def test_a_slow_wrapper_that_then_starts_claude_is_ok
     planted("slow")
-    File.write(@pane, "sleep 13; exec #{@bin}/claude -c 'sleep 300; :' --plugin-dir \"$2\" --remote-control \"$1\"\n")
+    File.write(@pane,
+"sleep 13; exec #{@bin}/claude -c 'sleep 300; :' --mcp-config \"$3\" --plugin-dir \"$2\" --remote-control \"$1\"\n")
     r = Elapsed.at_least(12, "the wrapper's 13 s were waited out") { launch("slow") }
-    assert_equal [true, "on", "slow_s"], r.values_at("ok", "remote_control", "remote_control_name"), r.inspect
+    assert_equal [true, "on", "by_slow_s"], r.values_at("ok", "remote_control", "remote_control_name"), r.inspect
     refute_includes tmux_calls, "kill-session"
   end
 
@@ -657,9 +854,9 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
   def test_a_command_that_exits_at_once_is_refused_fast_with_the_pane_tail
     planted("gone")
     File.write(@refuse, "")
-    r = assert_refused_at_once("gone_s") { launch("gone") }
+    r = assert_refused_at_once("by_gone_s") { launch("gone") }
     assert_match(/: Temp directory/, r["error"])
-    assert_match(/kill-session -t =gone_s/, tmux_calls)
+    assert_match(/kill-session -t =by_gone_s/, tmux_calls)
   end
 
   # a command that keeps working and never starts claude: refused once launch.start_seconds passed
@@ -669,10 +866,12 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
     File.write(@pane, "sleep 30; :\n")
     r = Elapsed.at_least(4, "launch.start_seconds 4 waited out") { launch("stuck") }
     assert_equal [false, 422], r.values_at("ok", "status"), r.inspect
-    m = r["error"].match(/\Astuck_s did not start: no claude --remote-control stuck_s after (\d+)s \(launch.start_seconds 4\)/)
+    m = r["error"].match(
+      /\Aby_stuck_s did not start: no claude --remote-control by_stuck_s after (\d+)s \(launch.start_seconds 4\)/
+    )
     assert m, r["error"]
     assert_operator m[1].to_i, :>=, 4
-    assert_match(/kill-session -t =stuck_s/, tmux_calls)
+    assert_match(/kill-session -t =by_stuck_s/, tmux_calls)
   end
 
   # a pane that merely looks like a dialog, with no claude process: a failed start, never a kept session
@@ -682,9 +881,9 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
     File.write(@dialog, "")
     r = launch("dlg")
     assert_equal [false, 422], r.values_at("ok", "status"), r.inspect
-    assert_match(/\Adlg_s did not start: the command exited after \d+s, no claude --remote-control dlg_s: /, r["error"])
+    assert_match(/\Aby_dlg_s did not start: the command exited after \d+s, no claude --remote-control by_dlg_s: /, r["error"])
     assert_match(/: Do you want to proceed/, r["error"])
-    assert_match(/kill-session -t =dlg_s/, tmux_calls)
+    assert_match(/kill-session -t =by_dlg_s/, tmux_calls)
   end
 
   # lead-first boards, checked by the launcher itself: a lead's key is kept in the launcher's state
@@ -698,12 +897,12 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
     refute_includes File.read(@log), LEAD_KEY, "never logged"
     refute_includes JSON.generate(r), LEAD_KEY, "never answered"
     leads = JSON.parse(File.read(File.join(@base, "state/leads.json")))
-    assert_equal [["fresh_s", "lead", File.realpath(File.join(@projects, "fresh")), LEAD_KEY]],
+    assert_equal [["by_fresh_s", "lead", File.realpath(File.join(@projects, "fresh")), LEAD_KEY]],
                  leads.map { |e| e.values_at("session", "type", "dir", "key") }
     assert_equal "600", format("%o", File.stat(File.join(@base, "state/leads.json")).mode & 0o777)
-    assert_match(/fresh_s: its tmux session is not running/, ask("op" => "lead_key", "session" => "fresh_s")["error"])
-    File.write(File.join(@base, "alive"), "=fresh_s\n")
-    assert_equal [true, LEAD_KEY], ask("op" => "lead_key", "session" => "fresh_s").values_at("ok", "key")
+    assert_match(/by_fresh_s: its tmux session is not running/, ask("op" => "lead_key", "session" => "by_fresh_s")["error"])
+    File.write(File.join(@base, "alive"), "=by_fresh_s\n")
+    assert_equal [true, LEAD_KEY], ask("op" => "lead_key", "session" => "by_fresh_s").values_at("ok", "key")
     assert_match(/nobody: no lead this launcher started/, ask("op" => "lead_key", "session" => "nobody")["error"])
     File.write(@tmux_log, "")
     vars = ->(dir, s, t) { { "slug" => dir, "session" => s, "agent" => "a", "type" => t, "cards" => "-" } }
@@ -711,20 +910,21 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
       ask({ "op" => "launch", "path" => "/projects/#{dir}", "launcher" => "fullclaude", "session" => s, "type" => t,
             "settings" => { "id" => 1, "doc" => AGENTS }, "vars" => vars.(dir, s, t), }.merge(over))
     end
-    assert_match(/needs its lead key/, req.("fresh", "l2", "lead")["error"])
-    assert_match(/needs its lead key/, req.("fresh", "l2", "lead", "lead_key" => "x")["error"])
-    assert_match(/runs under no lead/, req.("fresh", "l2", "lead", "lead_key" => LEAD_KEY, "lead" => "fresh_s")["error"])
-    assert_match(/runs under the board's lead: no lead session given/, req.("fresh", "w1", "worker")["error"])
-    assert_match(/gone_s is no lead this launcher started/, req.("fresh", "w1", "worker", "lead" => "gone_s")["error"])
-    assert_match(%r{fresh_s leads .*/fresh, not .*/other: a session runs under its own board's lead},
-                 req.("other", "w1", "worker", "lead" => "fresh_s")["error"])
-    assert_match(/a plain session gets no lead key/, req.("fresh", "p1", "plain", "lead_key" => LEAD_KEY)["error"])
+    assert_match(/needs its lead key/, req.("fresh", "by_l2", "lead")["error"])
+    assert_match(/needs its lead key/, req.("fresh", "by_l2", "lead", "lead_key" => "x")["error"])
+    assert_match(/runs under no lead/, req.("fresh", "by_l2", "lead", "lead_key" => LEAD_KEY, "lead" => "by_fresh_s")["error"])
+    assert_match(/runs under the board's lead: no lead session given/, req.("fresh", "by_w1", "worker")["error"])
+    assert_match(/by_gone_s is no lead this launcher started/, req.("fresh", "by_w1", "worker", "lead" => "by_gone_s")["error"])
+    assert_match(%r{by_fresh_s leads .*/fresh, not .*/other: a session runs under its own board's lead},
+                 req.("other", "by_w1", "worker", "lead" => "by_fresh_s")["error"])
+    assert_match(/a plain session gets no lead key/, req.("fresh", "by_p1", "plain", "lead_key" => LEAD_KEY)["error"])
     # a revision with a worker under no lead does not even load (review round 1, blocker)
-    leaderless = AGENTS.merge("agent_types" => AGENTS["agent_types"].map { |t| t["key"] == "worker" ? t.except("under") : t })
-    r = req.("fresh", "w1", "worker", "lead" => "fresh_s", "settings" => { "id" => 9, "doc" => leaderless })
+    unled = ->(t) { t["key"] == "worker" ? t.except("under", "launchable") : t }
+    leaderless = AGENTS.merge("agent_types" => AGENTS["agent_types"].map(&unled))
+    r = req.("fresh", "by_w1", "worker", "lead" => "by_fresh_s", "settings" => { "id" => 9, "doc" => leaderless })
     assert_match(/agent settings revision 9: .*agent_types\[worker\] runs without a lead/, r["error"])
     refute_includes tmux_calls, "new-session", "nothing was started"
-    r = req.("fresh", "w1", "worker", "lead" => "fresh_s")
+    r = req.("fresh", "by_w1", "worker", "lead" => "by_fresh_s")
     assert r["ok"], r.inspect
     refute_includes tmux_calls, LEAD_KEY
   end
@@ -749,7 +949,7 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
     ask("op" => "create", "root" => "/projects", "name" => "tgone", "url" => "")
     File.write(@refuse, "")
     # the trust wait (15 s) ended on the bare shell: refused on the exit, never on the trust wait's end
-    r = assert_refused_at_once("tgone_s") { launch("tgone") }
+    r = assert_refused_at_once("by_tgone_s") { launch("tgone") }
     refute_match(/trust/i, r["error"])
     refute_includes tmux_calls, "Enter", "nothing answered on a pane that is a bare shell"
   end
@@ -757,10 +957,114 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
   # a TRUSTED repo whose wrapper works longer than the trust wait, then starts claude: its prompt answered, up, kept
   def test_a_trusted_repo_with_a_slow_wrapper_is_ok
     ask("op" => "create", "root" => "/projects", "name" => "tslow", "url" => "")
-    File.write(@pane, "sleep 13; exec #{@bin}/claude -c 'sleep 300; :' --plugin-dir \"$2\" --remote-control \"$1\"\n")
+    File.write(@pane,
+"sleep 13; exec #{@bin}/claude -c 'sleep 300; :' --mcp-config \"$3\" --plugin-dir \"$2\" --remote-control \"$1\"\n")
     r = Elapsed.at_least(12, "the wrapper's 13 s were waited out") { launch("tslow") }
-    assert_equal [true, "accepted", "on", "tslow_s"], r.values_at("ok", "trust", "remote_control", "remote_control_name"),
+    assert_equal [true, "accepted", "on", "by_tslow_s"], r.values_at("ok", "trust", "remote_control", "remote_control_name"),
                  r.inspect
     refute_includes tmux_calls, "kill-session"
+  end
+
+  # --- docs/USE-CASES-session-isolation.md: the live run's checks, without a model or a real session -----------------
+
+  # the launched claude's own argv (what the stub tmux was asked to run), as a list of words
+  def started_argv = Shellwords.split(File.read(File.join(@base, "command")).chomp.delete_suffix("; exec bash"))
+
+  # U2, the operator: only sessions busyyaks starts get the busyyaks skill and the board. The live run read the argv of
+  # the web-launched lead and Sub team: each carries ITS stage as --plugin-dir and <stage>/mcp.json as --mcp-config,
+  # both BEFORE the prompt, the prompt opens with /busyyaks:session, and --remote-control <session> is last
+  # (the negative — a session started by hand gets none of it — is U1: no_global_skill_test, mcp_test, collector_test)
+  def test_a_session_busyyaks_starts_gets_its_skill_and_the_board_lead_and_sub_team_alike
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    assert launch("fresh")["ok"]
+    File.write(File.join(@base, "alive"), "=by_fresh_s\n") # the lead runs: its sub team may start under it
+    lead_argv = started_argv
+    team = "by_fresh_team"
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => team, "type" => "team", "launcher" => "fullclaude",
+            "lead" => "by_fresh_s", "settings" => { "id" => 1, "doc" => AGENTS },
+            "vars" => { "slug" => "fresh", "session" => team, "agent" => "a", "type" => "team", "cards" => "-" })
+    assert r["ok"], r.inspect
+    { "by_fresh_s" => [lead_argv, "lead"], team => [started_argv, "team"] }.each do |session, (argv, type)|
+      stage = File.join(@base, "state/skills", session)
+      prompt = argv.index { |w| w.start_with?("/busyyaks:session ") }
+      refute_nil prompt, "#{session}: a prompt opening with /busyyaks:session in #{argv.inspect}"
+      assert_equal "/busyyaks:session Test #{type} session for fresh", argv[prompt][/\A\S+ \S+ \S+ \S+ \S+ \S+/]
+      { "--plugin-dir" => stage, "--mcp-config" => File.join(stage, "mcp.json") }.each do |flag, value|
+        i = argv.index(flag)
+        refute_nil i, "#{session}: #{flag}"
+        assert_equal value, argv[i + 1], "#{session}: #{flag} names its own stage"
+        assert_operator i, :<, prompt, "#{session}: #{flag} before the prompt"
+      end
+      assert_equal ["--remote-control", session], argv.last(2)
+      assert_equal 0o600, File.stat(File.join(stage, "mcp.json")).mode & 0o777
+      assert_includes File.read(File.join(stage, "skills/session/SKILL.md")), "# busyyaks session (agent type #{type})"
+    end
+  end
+
+  # U3, the operator: "start with BY so we can easily identify and isolate them" — the launcher itself refuses to start
+  # a session whose name has no `by_` prefix (whatever the request says), before anything is staged or started
+  def test_the_launcher_starts_no_session_whose_name_does_not_start_with_by
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    File.write(@tmux_log, "")
+    %w[fresh_s BY_fresh_s by_].each do |name|
+      r = ask("op" => "launch", "path" => "/projects/fresh", "session" => name, "type" => "lead", "launcher" => "fullclaude",
+              "lead_key" => LEAD_KEY, "settings" => { "id" => 1, "doc" => AGENTS },
+              "vars" => { "slug" => "fresh", "session" => name, "agent" => "a", "type" => "lead", "cards" => "-" })
+      assert_equal [false, 400], r.values_at("ok", "status"), "#{name}: #{r.inspect}"
+      assert_equal "session #{name.inspect} has no \"by_\" prefix: every session busyyaks starts is named so " \
+                   "(agent settings session_name)", r["error"]
+      refute File.exist?(File.join(@base, "state/skills", name)), "#{name}: nothing staged"
+    end
+    refute_includes tmux_calls, "new-session", "nothing started"
+  end
+
+  # U8, the operator: "when a busyyaks session ends, what it left running in the background is cleaned up". The live
+  # run: a busyyaks-by_* scope with no tmux session, then the `sessions` op → stopped, its processes logged. Here a stub
+  # systemctl: the scope of the ended session is stopped; the running session's, a hand-run session's (no by_) and any
+  # other unit are left
+  def test_a_busyyaks_sessions_background_processes_are_stopped_once_the_session_ended
+    stub("systemctl", <<~SH)
+      echo "$*" >> #{@base}/systemctl.log
+      case "$2" in
+        list-units) printf '%s\\n' \
+          "busyyaks-by_gone_worker.scope loaded active running bash supervise.sh" \
+          "busyyaks-by_live_lead.scope loaded active running claude" \
+          "busyyaks-hand.scope loaded active running claude" \
+          "other.scope loaded active running x" ;;
+      esac
+      exit 0
+    SH
+    # tmux ls: by_gone_worker ended; `hand` is NOT listed either — its scope is kept only because it has no by_ prefix
+    File.write(File.join(@base, "ls"), "by_live_lead\n")
+    restart(START_SECONDS, scopes: { "lead_oomd" => "avoid", "session_memory_max" => "16G" })
+    File.write(File.join(@base, "systemctl.log"), "")
+    assert ask("op" => "sessions")["ok"]
+    stops = File.readlines(File.join(@base, "systemctl.log"), chomp: true).grep(/\A--user stop /)
+    assert_equal ["--user stop busyyaks-by_gone_worker.scope"], stops
+    assert_match(/scope sweep \(sessions\): busyyaks-by_gone_worker.scope stopped · no processes/, File.read(@log))
+    # systemctl unreadable: nothing stopped, the skip said — never read as "no scopes"
+    stub("systemctl", "echo \"$*\" >> #{@base}/systemctl.log; echo 'Failed to connect to bus' >&2; exit 1")
+    File.write(File.join(@base, "systemctl.log"), "")
+    ask("op" => "sessions")
+    refute_match(/ stop /, File.read(File.join(@base, "systemctl.log")))
+    assert_match(/scope sweep skipped \(sessions\): systemctl: Failed to connect to bus/, File.read(@log))
+  end
+
+  # U7, the operator: nothing busyyaks in any global harness setting. A hermes launch reads the operator's
+  # ~/.hermes/config.yaml and writes nothing into it, and a claude launch nothing into the launcher's HOME (no
+  # ~/.claude.json, ~/.claude/, ~/.codex): every file a session gets lives in its own stage
+  def test_a_launch_writes_nothing_into_any_harness_settings_of_the_user
+    files = lambda do |dir|
+      Dir.glob("**/*", File::FNM_DOTMATCH, base: dir).sort.to_h do |f|
+        [f, File.file?(File.join(dir, f)) && File.binread(File.join(dir, f))]
+      end
+    end
+    before = files.(@hermes_home)
+    assert launch_hermes["ok"]
+    assert_equal before, files.(@hermes_home), "the operator's hermes config: byte for byte"
+    FileUtils.rm_f(@hermes) # the next pane runs claude
+    ask("op" => "create", "root" => "/projects", "name" => "two", "url" => "")
+    assert launch("two")["ok"]
+    assert_empty Dir.children(@home), "no ~/.claude.json, ~/.claude, ~/.codex, ~/.hermes"
   end
 end

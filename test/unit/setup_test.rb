@@ -8,6 +8,7 @@ require "open3"
 require "tmpdir"
 require "etc"
 require_relative "../../lib/busyyaks/env_file"
+require_relative "../support/auto_loaded"
 
 # bin/setup in a copy of the checkout's files it reads: what it copies, writes, lists, creates and refuses.
 class SetupTest < Minitest::Test
@@ -108,6 +109,24 @@ class SetupTest < Minitest::Test
     assert File.directory?(File.join(@dir, "data"))
     assert_equal "compose config -q\n", File.read(File.join(@tmp, "docker.log"))
     assert_includes out, "Next: docker compose up -d --build --wait web mcp scanner github notifier writer"
+  end
+
+  # docs/USE-CASES-session-isolation.md U7, the operator: nothing busyyaks in any global harness setting. Installing
+  # (bin/setup, then its check) writes no harness config into the user's HOME (~/.claude*, ~/.hermes, ~/.codex, …), and
+  # no file a CLI loads by itself into the checkout or the projects dir
+  def test_installing_writes_nothing_into_any_harness_settings_or_a_projects_auto_loaded_files
+    FileUtils.mkdir_p(File.join(@tmp, "projects/app/.git"))
+    setup!
+    fill(filled)
+    code, _out, err = setup!("check")
+    assert_equal [0, ""], [code, err]
+    tree = ->(dir) { Dir.glob("**/*", File::FNM_DOTMATCH, base: dir).reject { _1.end_with?("/.") || _1 == "." } }
+    harness = %w[.claude .claude.json .hermes .codex .config/claude .local/share/claude]
+    assert_empty(tree.(@home).select { |f| harness.any? { |h| f == h || f.start_with?("#{h}/") } }, tree.(@home).inspect)
+    [@dir, File.join(@tmp, "projects")].each do |d|
+      assert_empty(tree.(d).select { |f| f.split("/").intersect?(AUTO_LOADED) }, d)
+    end
+    assert_equal [".git"], tree.(File.join(@tmp, "projects/app")), "the project untouched"
   end
 
   def test_check_refuses_what_compose_or_the_launcher_would_trip_on

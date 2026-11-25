@@ -116,17 +116,17 @@ describe("progress", () => {
     expect(progress(null)).toBeNull();
     expect(progress({ state: "running", step: "build" })).toEqual({
       step: "build",
-      index: 2,
-      total: 7,
+      index: 3,
+      total: 8,
       state: "running",
     });
     expect(progress({ state: "done", step: null })).toEqual({
       step: "done",
-      index: 7,
-      total: 7,
+      index: 8,
+      total: 8,
       state: "done",
     });
-    expect(progress({ state: "failed", step: "up", error: "x" })!.index).toBe(4);
+    expect(progress({ state: "failed", step: "up", error: "x" })!.index).toBe(5);
   });
 });
 

@@ -71,7 +71,7 @@ theme:
   --ak-face-type-lead: var(--vivid-blue)
   --ak-face-type-worker: color-mix(in srgb, var(--vivid-yellow) 70%, var(--ink))   # gold, off the needs-you purple and the team green (eyes ≥ 6.3:1 in both skins)
   --ak-face-type-team: var(--vivid-green)
-  --ak-face-type-plain: var(--vivid-orange)
+  --ak-face-type-critic: var(--vivid-orange)
   --ak-face-type-reviewer: var(--vivid-pink)
   --ak-face-type-qa: var(--vivid-teal)
 # CI idle watch (engine: Store#idle_watch_pass; PR checks come from the github service through lib/busyyaks/ci_checks.rb)
@@ -100,8 +100,9 @@ dependencies: false
 # the question quotes the agent's last comment on the card from the last 10 min, or says it gave no reason
 session_dialogs: { settle_seconds: 30, context_minutes: 10 }
 
-# SESSION BOARDS: an agent session's OWN board, attached to no project (any CLI in tmux: Claude Code,
-# Hermes, Codex …). The MCP tool kanban_session_board(tmux_session) opens `<slug_prefix><session>`; only that session
+# SESSION BOARDS: an agent session's OWN board, attached to no project — for a session BUSYYAKS LAUNCHED (a `by_`
+# session: only those get the board MCP, through their launch's own MCP config). The MCP tool
+# kanban_session_board(tmux_session) opens `<slug_prefix><session>`; only that session
 # may use it; after idle_hours with no activity its cards are archived and the board hidden (kept, never deleted) —
 # the session's next call brings it back. Read-only on /session-boards. board = its shape (no gate column). null = off.
 session_boards:
@@ -129,7 +130,7 @@ flags: { reminder_hours: 24 }
 review_loop: null
 # agent faces: a subagent comments under its own name ("reviewer-<agent>", "qa-<agent>"), which no session
 # registers — a name matching a role's glob wears that role's colour (--ak-face-type-<role> in theme above). null = off.
-face_roles: { reviewer: ["reviewer-*"], qa: ["qa-*"] }
+face_roles: { reviewer: ["reviewer-*"], qa: ["qa-*"], critic: ["critic-*"] }
 # a PERSON's picture: an https URL template with {sha256} of the trimmed, lower-cased email — Gravatar's scheme
 # (d=404: no picture on record → the initials). Its origin is added to the CSP's img-src at boot. null = initials only,
 # nothing leaves the page. e.g. "https://gravatar.com/avatar/{sha256}?s=80&d=404"

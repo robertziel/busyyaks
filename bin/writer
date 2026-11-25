@@ -2,13 +2,16 @@
 # frozen_string_literal: true
 
 # The writer service (card #429): the only container with the projects mounted read-write, and what it writes is each
-# project's `<repo>/.busyyaks/workflow.yml` (lib/busyyaks/workflow_files.rb) — nothing else. Every
+# project's `.busyyaks/`: `<repo>/.busyyaks/workflow.yml` (lib/busyyaks/workflow_files.rb) and, on the project Settings
+# tab's Save, `<repo>/.busyyaks/skills/agents/<type>.md` (lib/busyyaks/agent_rule_files.rb), and on Settings → Agent rules' Save busyyaks's
+# own skills files of its checkout (skills/busyyaks + skills.local_dir; lib/busyyaks/skill_files.rb) — nothing else. Every
 # writer_sync_seconds (Settings → Runtime, read each turn; card #523) it syncs every project's file with its board; on
 # WRITER_SOCKET it answers the workflow editor's Save / Reset (the web, lib/busyyaks/writer_client.rb): one JSON line
 # in, one out ({status, body}).
 require "hanami/prepare"
 require "fileutils"
 require "busyyaks/clock"
+require "busyyaks/config"
 require "busyyaks/kanban"
 require "busyyaks/private_socket"
 require "busyyaks/workflow_files"
@@ -19,6 +22,11 @@ $stdout.sync = true
 db = Busyyaks::Kanban.db
 writer = Busyyaks::WorkflowFiles::Writer.new(db: db, store: -> { Busyyaks::Kanban.store(db) },
                                              api: ->(st) { Busyyaks::Kanban.api(st) },
+                                             skills: -> { Busyyaks::Config.load.skills },
+                                             checkout: File.expand_path("..", __dir__),
+                                             # this checkout's ./skills, mounted read-only (compose): which scanned
+                                             # repo Settings → Agent rules may write (Writer#own_checkout)
+                                             own_skills: "/busyyaks/skills",
                                              log: ->(line) { puts "writer: #{line}" })
 
 FileUtils.mkdir_p(File.dirname(sock_path), mode: 0o700)

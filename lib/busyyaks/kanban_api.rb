@@ -218,7 +218,7 @@ module Busyyaks
       sessions = []
       error = nil
       begin
-        sessions = LauncherClient.sessions.select { |s| s["project_path"] == project[:path] }.map { |s| s["name"] }
+        sessions = LauncherClient.launched_sessions.select { |s| s["project_path"] == project[:path] }.map { |s| s["name"] }
       rescue LauncherClient::Unavailable, LauncherClient::Refused => e
         error = e.message
       end

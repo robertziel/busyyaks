@@ -86,7 +86,9 @@ describe("lanes", () => {
       agent("p_lead", "finished"),
       agent("elsewhere", "working"), // another project's session: not a tmux session here
     ];
-    const reg = [{ session: "p_lead", type: "lead", launcher: "fullclaude" } as RegisteredSession];
+    const reg = ["p_w1", "p_w2", "p_w3", "p_w4", "p_lead"].map(
+      (n) => ({ session: n, type: n === "p_lead" ? "lead" : "worker", launcher: "fullclaude" }) as RegisteredSession,
+    );
     const l = buildLanes(sessions, agents, reg);
     expect(l.you.map((x) => x.tmux.name)).toEqual(["p_w3", "p_w2"]);
     expect(l.working.map((x) => x.tmux.name)).toEqual(["p_w1"]);
@@ -95,10 +97,11 @@ describe("lanes", () => {
       ["p_w4", null], // no live state: quiet, never guessed
     ]);
     expect(regText(l.quiet[0]!.reg)).toBe(" · lead · fullclaude");
-    expect(regText(l.quiet[1]!.reg)).toBe(" · not registered");
+    expect(regText(l.quiet[1]!.reg)).toBe(" · worker · fullclaude");
     expect(l.quiet[0]!.short).toBe("lead");
   });
 
+  // not read: the list stands as the server sent it (only the sessions the launcher proves it started)
   it("an unread registry calls no session 'not registered': each says why it is unknown", () => {
     const l = buildLanes([tmux("p_a", 2), tmux("p_b", 1)], [], { unknown: "launcher down: ECONNREFUSED" });
     expect(l.quiet.map((x) => regText(x.reg))).toEqual([
@@ -186,7 +189,7 @@ describe("Quiet", () => {
     const q = buildLanes(
       Array.from({ length: 9 }, (_, i) => tmux(`p_${i}`, 100 - i)),
       [],
-      [],
+      Array.from({ length: 9 }, (_, i) => ({ session: `p_${i}`, type: "worker", launcher: "c" }) as RegisteredSession),
     ).quiet;
     expect(quietShown(q, false, null)).toMatchObject({ hidden: 3 });
     expect(quietShown(q, false, null).shown).toHaveLength(QUIET_LIMIT);
@@ -330,5 +333,39 @@ describe("triggerHidden", () => {
     expect(triggerHidden({ top: 40, bottom: 62 }, 56, 900)).toBe(false); // its bottom edge still shows
     expect(triggerHidden({ top: 900, bottom: 922 }, 56, 900)).toBe(true);
     expect(triggerHidden({ top: 300, bottom: 322 }, 56, 900)).toBe(false);
+  });
+});
+
+// A terminal `claude` started by hand in the repo's directory got a chip of its own on the project page: the page
+// shows only the sessions busyyaks runs.
+describe("the project page shows only sessions busyyaks runs", () => {
+  const tmux = (name: string, created: number) => ({ name, created }) as unknown as Parameters<typeof buildLanes>[0][0];
+  const ag = (name: string, state: string) =>
+    ({ name, state }) as unknown as NonNullable<Parameters<typeof buildLanes>[1]>[0];
+  const lead = { session: "acme_app_teamlead", type: "lead", launcher: "fullclaude" } as RegisteredSession;
+  const all = (l: ReturnType<typeof buildLanes>) => [...l.you, ...l.working, ...l.quiet].map((x) => x.tmux.name);
+
+  it("a session started from the terminal in the project's directory gets no chip, working or idle", () => {
+    const l = buildLanes(
+      [tmux("acme_app", 1), tmux("acme_app_fix", 2), tmux("acme_app_teamlead", 3)],
+      [ag("acme_app", "working"), ag("acme_app_fix", "idle"), ag("acme_app_teamlead", "idle")],
+      [lead],
+    );
+    expect(all(l)).toEqual(["acme_app_teamlead"]);
+  });
+
+  it("with only terminal sessions in the directory the lanes are empty", () => {
+    const l = buildLanes([tmux("acme_app", 1)], [ag("acme_app", "working")], []);
+    expect(all(l)).toEqual([]);
+  });
+
+  it("names are shortened only among busyyaks's own sessions: a terminal session never shows as 'app'", () => {
+    const worker = { session: "acme_app_worker_2", type: "worker", launcher: "fullclaude" } as RegisteredSession;
+    const l = buildLanes(
+      [tmux("acme_app", 1), tmux("acme_app_teamlead", 2), tmux("acme_app_worker_2", 3)],
+      [],
+      [lead, worker],
+    );
+    expect(l.quiet.map((x) => x.short).sort()).toEqual(["teamlead", "worker_2"]);
   });
 });

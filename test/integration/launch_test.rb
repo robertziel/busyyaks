@@ -5,6 +5,7 @@ require "minitest/mock"
 require "rack/test"
 require "socket"
 require "json"
+require "yaml"
 require_relative "../support/green_ci"
 
 # The launcher-backed API: projects tree + sessions, launch (with the Remote Control verdict), create, agents sidebar.
@@ -28,7 +29,7 @@ class LaunchTest < Minitest::Test
     assert_equal 200, sign_in
     get "/"
     @csrf = last_response.body[/name="csrf-token" content="([^"]+)"/, 1]
-    @remote_control = { remote_control: "on", remote_control_name: "group_repo_teamlead", trust: "accepted" }
+    @remote_control = { remote_control: "on", remote_control_name: "by_group_repo_teamlead", trust: "accepted" }
   end
 
   def teardown
@@ -81,7 +82,10 @@ class LaunchTest < Minitest::Test
       k ? { ok: true, key: k } : { ok: false, status: 422, error: "#{req['session']}: no lead this launcher started" }
     when "sessions"
       names = ["group_repo", *@live_extra]
-      { ok: true, sessions: names.map { |n| { name: n, project_path: "/projects/group/repo", created: 1, attached: false } } }
+      # hand: a claude started in the repo by hand — no skills stage, so the launcher says launched: false
+      row = { project_path: "/projects/group/repo", created: 1, attached: false }
+      { ok: true,
+        sessions: names.map { |n| row.merge(name: n, launched: true) } + [row.merge(name: "hand", launched: false)], }
     when "jobs"
       { ok: true, jobs: [{ url: "https://github.com/o/r.git", path: "/projects/r", status: "failed", exit: 128,
                            tail: ["fatal: nope"], }], }
@@ -108,7 +112,7 @@ mtime: Busyyaks::Clock.now.to_f, }],
       if req["hash"] == "h1"
         { ok: true, pressed: req["key"] }
       else
-        { ok: false, error: "asker: the dialog on its screen changed — nothing typed", status: 409 }
+        { ok: false, error: "by_asker: the dialog on its screen changed — nothing typed", status: 409 }
       end
     when "create"
       if req["url"].to_s.empty?
@@ -136,11 +140,11 @@ mtime: Busyyaks::Clock.now.to_f, }],
     dialog = { question: "Do you want to proceed?", command: "rm -rf build", escape: true, free_text: true, hash: "h1",
                answerable: true,
                options: [{ key: "1", label: "Yes", free: false }, { key: "3", label: "No, and tell Claude", free: true }], }
-    asker = { name: "asker", socket: "default", attached: 0, created: 1, activity: 2,
+    by_asker = { name: "by_asker", socket: "default", attached: 0, created: 1, activity: 2,
               panes: [{ target: "0.0", cwd: "/mnt/x/group/repo", project_path: "/projects/group/repo", engine: "claudeapi",
                         status: "idle", screen: { state: "blocked", rule: "bash_permission_prompt", dialog: dialog }, }], }
     { ok: true, generated_at: Busyyaks::Clock.now.to_f, age_s: 1.0, interval_s: 5, collector_error: nil,
-      sessions: [busy, unconfigured, asker], }
+      sessions: [busy, unconfigured, by_asker], }
   end
 
   def test_projects_is_a_folder_tree_with_launchers_sessions_and_jobs
@@ -153,8 +157,10 @@ mtime: Busyyaks::Clock.now.to_f, }],
     repo = folder["children"][0]
     assert_equal "group/repo", repo["project"]["slug"]
     assert_equal ["group_repo"], repo["project"]["sessions"].map { |s| s["name"] }
+    # the operator, 2026-11-24: a session busyyaks did not launch is never listed (nor stopped by Stop all, nor
+    # offered as an assignee) — hand runs in this repo and is left out
     # the board config's agent types (config/kanban.yml) with their launchers, and the cap state from the engine
-    assert_equal [["lead", "Launch", %w[fullclaude localclaude], true],
+    assert_equal [["lead", "Team lead", %w[fullclaude localclaude], true],
                   ["worker", "Worker", %w[fullclaude localclaude], true],
                   ["team", "Sub team", %w[fullclaude localclaude], true],
                   ["plain", "Plain", %w[fullclaude localclaude], false],],
@@ -182,7 +188,7 @@ mtime: Busyyaks::Clock.now.to_f, }],
     j = api(:get, "/api/agents")
     assert_equal ["idle", true, 1, 1],
                  [agent(j, "elsewhere")["state"], agent(j, "elsewhere")["unread"], j["totals"]["unread"], j["totals"]["you"]],
-                 "you = the blocked asker only: unread does not need the operator"
+                 "you = the blocked by_asker only: unread does not need the operator"
     assert_equal({ "key" => "default/elsewhere", "seen" => true }, api(:post, "/api/agents/seen", { key: "default/elsewhere" }))
     refute agent(api(:get, "/api/agents"), "elsewhere")["unread"]
     api(:post, "/api/agents/seen", { key: "" })
@@ -215,7 +221,7 @@ mtime: Busyyaks::Clock.now.to_f, }],
     j = api(:get, "/api/agents")
     assert_equal({ "tool" => "busyyaks · kanban_comment", "elapsed_s" => 65, "tokens" => "↓ 1.6k", "card" => TOOL_CARD },
                  agent(j, "group_repo")["live"])
-    assert_equal({ "tool" => nil, "elapsed_s" => nil, "tokens" => nil, "card" => nil }, agent(j, "asker")["live"])
+    assert_equal({ "tool" => nil, "elapsed_s" => nil, "tokens" => nil, "card" => nil }, agent(j, "by_asker")["live"])
   end
 
   # a card blocked on the world (another card, CI, a third party) is not the operator's to answer — its owner
@@ -327,14 +333,14 @@ mtime: Busyyaks::Clock.now.to_f, }],
   def test_a_dialog_is_answered_from_the_sidebar_only_while_it_is_on_the_screen
     fake_launcher
     assert_equal({ "pressed" => "1" },
-                 api(:post, "/api/agents/answer", { session: "asker", socket: "default", hash: "h1", key: "1" }))
-    assert_equal({ "op" => "answer", "session" => "asker", "socket" => "default", "hash" => "h1", "key" => "1" },
+                 api(:post, "/api/agents/answer", { session: "by_asker", socket: "default", hash: "h1", key: "1" }))
+    assert_equal({ "op" => "answer", "session" => "by_asker", "socket" => "default", "hash" => "h1", "key" => "1" },
                  @requests.find { |r| r["op"] == "answer" })
-    r = api(:post, "/api/agents/answer", { session: "asker", socket: "default", hash: "old", key: "1" })
-    assert_equal [422, "asker: the dialog on its screen changed — nothing typed"], [last_response.status, r["error"]]
-    api(:post, "/api/agents/answer", { session: "asker", socket: "default", hash: "h1" })
+    r = api(:post, "/api/agents/answer", { session: "by_asker", socket: "default", hash: "old", key: "1" })
+    assert_equal [422, "by_asker: the dialog on its screen changed — nothing typed"], [last_response.status, r["error"]]
+    api(:post, "/api/agents/answer", { session: "by_asker", socket: "default", hash: "h1" })
     assert_equal 400, last_response.status
-    api(:post, "/api/agents/answer", { session: "asker", socket: "default", hash: "h1", key: "1" }, csrf: nil)
+    api(:post, "/api/agents/answer", { session: "by_asker", socket: "default", hash: "h1", key: "1" }, csrf: nil)
     assert_equal 403, last_response.status
   end
 
@@ -358,7 +364,7 @@ mtime: Busyyaks::Clock.now.to_f, }],
     assert_equal %w[blocked idle], j["groups"].map { |g| g["state"] }, "a group shows its worst session"
     assert_equal "outside tracked repos", j["groups"][1]["label"]
     blocked, s = j["groups"][0]["sessions"]
-    assert_equal ["asker", "blocked", "screen: bash_permission_prompt"], blocked.values_at("name", "state", "state_by")
+    assert_equal ["by_asker", "blocked", "screen: bash_permission_prompt"], blocked.values_at("name", "state", "state_by")
     assert_equal [["h1", %w[1 3], true]],
                  blocked["dialogs"].map { |d| [d["hash"], d["options"].map { |o| o["key"] }, d["answerable"]] }
     assert_equal %w[working 3 default/group_repo], [s["state"], s["subagents"].to_s, s["key"]]
@@ -395,7 +401,7 @@ mtime: Busyyaks::Clock.now.to_f, }],
     id = k.create(slug: "group/repo", title: "t", by: "op", column: "doing")
     j = api(:get, "/api/cards/#{id}/live")
     assert_equal 200, last_response.status
-    assert_equal %w[asker group_repo], j["sessions"].keys.sort # "elsewhere" runs outside this project
+    assert_equal %w[by_asker group_repo], j["sessions"].keys.sort # "elsewhere" runs outside this project
     assert_equal({ "state" => "working", "state_by" => "screen: live_turn_working", "phase" => "tool", "elapsed_s" => 65,
                    "tokens" => "↓ 1.6k", "tool" => "busyyaks · kanban_comment", "card" => TOOL_CARD, "subagents" => 3, },
                  j["sessions"]["group_repo"])
@@ -404,12 +410,12 @@ mtime: Busyyaks::Clock.now.to_f, }],
     j["sessions"].each_value { |v| assert_equal fields, v.keys }
     assert_equal({ "state" => "blocked", "state_by" => "screen: bash_permission_prompt", "phase" => nil, "elapsed_s" => nil,
                    "tokens" => nil, "tool" => nil, "card" => nil, "subagents" => nil, },
-                 j["sessions"]["asker"])
+                 j["sessions"]["by_asker"])
 
     # the owner session counts wherever it runs
     other = k.create(slug: "group/repo", title: "t", by: "op", column: "doing")
     Hanami.app["db.gateway"].connection[:cards].where(id: other).update(owner_session: "elsewhere")
-    assert_equal %w[asker elsewhere group_repo], api(:get, "/api/cards/#{other}/live")["sessions"].keys.sort
+    assert_equal %w[by_asker elsewhere group_repo], api(:get, "/api/cards/#{other}/live")["sessions"].keys.sort
     assert_equal "idle", api(:get, "/api/cards/#{other}/live")["sessions"]["elsewhere"]["state"] # its collector says so
     api(:get, "/api/cards/999999/live")
     assert_equal 404, last_response.status
@@ -509,14 +515,14 @@ mtime: Busyyaks::Clock.now.to_f, }],
     end
     assert_equal 200, last_response.status
     assert_equal 1, asks.() # the sidebar and two board polls of a 4-card board: one launcher call
-    assert_equal %w[asker elsewhere group_repo], j["sessions"].keys.sort # "elsewhere" owns a card on this board
+    assert_equal %w[by_asker elsewhere group_repo], j["sessions"].keys.sort # "elsewhere" owns a card on this board
     assert_equal({ "state" => "working", "state_by" => "screen: live_turn_working", "phase" => "tool", "elapsed_s" => 65,
                    "tokens" => "↓ 1.6k", "tool" => "busyyaks · kanban_comment", "card" => 7, "subagents" => 3, },
                  j["sessions"]["group_repo"])
     assert_equal "idle", j["sessions"]["elsewhere"]["state"]
     Hanami.app["db.gateway"].connection[:cards].where(id: owned).update(owner_session: nil)
     Busyyaks::LauncherClient.forget_agents_snapshot!
-    assert_equal %w[asker group_repo], api(:get, "/api/projects/group/repo/board/live")["sessions"].keys.sort
+    assert_equal %w[by_asker group_repo], api(:get, "/api/projects/group/repo/board/live")["sessions"].keys.sort
     api(:get, "/api/projects/no/such/board/live")
     assert_equal 404, last_response.status
   end
@@ -533,16 +539,23 @@ mtime: Busyyaks::Clock.now.to_f, }],
     refute_includes j.keys, "sessions"
   end
 
+  def test_a_session_busyyaks_did_not_launch_is_never_an_assignee
+    fake_launcher
+    a = api(:get, "/api/projects/group/repo/board")["assignees"]
+    assert_includes a, "group_repo"
+    refute_includes a, "hand"
+  end
+
   def test_reap_preview_and_stop_go_through_the_launcher
     fake_launcher
     api(:get, "/api/agents/reap")
     body = JSON.parse(last_response.body)
     assert_equal "group/repo", body["candidates"].first["project"]
     api(:post, "/api/agents/reap",
-        { sessions: [{ name: "group_repo", socket: "default" }, { name: "busy_one", socket: "default" }] })
+        { sessions: [{ name: "group_repo", socket: "default" }, { name: "by_busy_one", socket: "default" }] })
     res = JSON.parse(last_response.body)["results"]
     assert_equal [true, false], res.map { |r| r["stopped"] }
-    assert_equal [{ "name" => "group_repo", "socket" => "default" }, { "name" => "busy_one", "socket" => "default" }],
+    assert_equal [{ "name" => "group_repo", "socket" => "default" }, { "name" => "by_busy_one", "socket" => "default" }],
                  @requests.find { |r| r["op"] == "reap" }["sessions"]
   end
 
@@ -561,15 +574,17 @@ mtime: Busyyaks::Clock.now.to_f, }],
     k = Busyyaks::Kanban.default
     api(:post, "/api/launch", { slug: "group/repo", type: "lead", launcher: "fullclaude" })
     assert_equal 201, last_response.status
-    assert k.open_session("group_repo_teamlead")
-    j = api(:post, "/api/projects/group/repo/stop", { sessions: %w[group_repo_teamlead group_repo other_project group_repo] })
+    assert k.open_session("by_group_repo_teamlead")
+    j = api(:post, "/api/projects/group/repo/stop",
+{ sessions: %w[by_group_repo_teamlead group_repo other_project group_repo] })
     assert_equal 200, last_response.status
-    assert_equal [["group_repo_teamlead", true, "ended"], ["group_repo", true, nil], ["other_project", false, nil]],
+    assert_equal [["by_group_repo_teamlead", true, "ended"], ["group_repo", true, nil], ["other_project", false, nil]],
                  j["results"].map { |r| r.values_at("name", "stopped", "registration") }
     assert_equal "not in this project (/projects/x)", j["results"][2]["reason"]
     req = @requests.find { |r| r["op"] == "stop" }
-    assert_equal ["/projects/group/repo", %w[group_repo_teamlead group_repo other_project]], req.values_at("path", "sessions")
-    assert_nil k.open_session("group_repo_teamlead"), "the stopped lead no longer holds a cap slot"
+    assert_equal ["/projects/group/repo", %w[by_group_repo_teamlead group_repo other_project]],
+req.values_at("path", "sessions")
+    assert_nil k.open_session("by_group_repo_teamlead"), "the stopped lead no longer holds a cap slot"
   end
 
   def test_stop_needs_a_project_names_and_csrf
@@ -602,22 +617,22 @@ mtime: Busyyaks::Clock.now.to_f, }],
     j = api(:post, "/api/launch", { slug: "group/repo", type: "lead", launcher: "localclaude" })
     assert_equal 201, last_response.status
     lead_body = last_response.body
-    assert_equal ["group_repo_teamlead", "lead", "localclaude", "claude-group_repo_teamlead", [orphan]],
+    assert_equal ["by_group_repo_teamlead", "lead", "localclaude", "claude-by_group_repo_teamlead", [orphan]],
                  j.values_at("session", "type", "launcher", "agent").push(j["adopted"].map { |c| c["id"] })
-    assert_equal({ "ok" => true, "session" => "group_repo_teamlead", "type" => "lead", "launcher" => "localclaude",
-                   "prompt" => true, "remote_control" => "on", "remote_control_name" => "group_repo_teamlead",
+    assert_equal({ "ok" => true, "session" => "by_group_repo_teamlead", "type" => "lead", "launcher" => "localclaude",
+                   "prompt" => true, "remote_control" => "on", "remote_control_name" => "by_group_repo_teamlead",
                    "trust" => "accepted", },
                  j["result"])
     assert_equal 1, j["concurrency"]["running"]
     req = @requests.find { |r| r["op"] == "launch" }
-    assert_equal ["/projects/group/repo", "group_repo_teamlead", "lead", "localclaude"],
+    assert_equal ["/projects/group/repo", "by_group_repo_teamlead", "lead", "localclaude"],
                  req.values_at("path", "session", "type", "launcher")
-    assert_equal ["bash", "-ic", "localclaude --remote-control group_repo_teamlead"], req["argv"]
-    assert_equal({ "slug" => "group/repo", "session" => "group_repo_teamlead", "agent" => "claude-group_repo_teamlead",
+    assert_equal ["bash", "-ic", "localclaude --remote-control by_group_repo_teamlead"], req["argv"]
+    assert_equal({ "slug" => "group/repo", "session" => "by_group_repo_teamlead", "agent" => "claude-by_group_repo_teamlead",
                    "type" => "lead", "cards" => "##{orphan}", },
                  req["vars"])
     assert_match(/\{dir\}/, req["prompt_template"])
-    assert_equal %w[claude-group_repo_teamlead group_repo_teamlead], k.card(orphan).values_at(:assignee, :owner_session),
+    assert_equal %w[claude-by_group_repo_teamlead by_group_repo_teamlead], k.card(orphan).values_at(:assignee, :owner_session),
                  "the lead owns the orphan by rule"
     j = api(:get, "/api/projects/group/repo")
     assert_equal ["group_repo"], j["project"]["sessions"].map { |s| s["name"] }
@@ -625,24 +640,24 @@ mtime: Busyyaks::Clock.now.to_f, }],
     # a second lead for the same board: refused (one lead per board), nothing started
     j = api(:post, "/api/launch", { slug: "group/repo", type: "lead" })
     assert_equal 422, last_response.status
-    assert_match(%r{1/1 lead session already runs for group/repo .*group_repo_teamlead \(lead, group/repo\)}, j["error"])
+    assert_match(%r{1/1 lead session already runs for group/repo .*by_group_repo_teamlead \(lead, group/repo\)}, j["error"])
     assert_equal 1, @requests.count { |r| r["op"] == "launch" }
     # the lead runs localclaude → a sub team and a worker for this board run it too, with no --model (it
     # would override the gateway's); the Launch bar locks the menu to it; another launcher asked for is refused
     l = api(:get, "/api/projects/group/repo")["launches"]
     assert_equal "lead", l["types"].find { |t| t["key"] == "team" }["under"]
-    assert_equal [%w[group_repo_teamlead lead localclaude group/repo]],
+    assert_equal [%w[by_group_repo_teamlead lead localclaude group/repo]],
                  l["concurrency"]["sessions"].map { |s| s.values_at("session", "type", "launcher", "project") },
                  "the page's sessions name the lead's launcher: the Launch bar locks the follower's menu to it (launchesFor)"
     j = api(:post, "/api/launch", { slug: "group/repo", type: "team", launcher: "fullclaude" })
     assert_equal 422, last_response.status
-    assert_match(/team sessions of group\/repo run localclaude, the launcher of their lead session group_repo_teamlead/,
+    assert_match(/team sessions of group\/repo run localclaude, the launcher of their lead session by_group_repo_teamlead/,
                  j["error"])
     j = api(:post, "/api/launch", { slug: "group/repo", type: "team", launcher: "localclaude" })
     assert_equal [201, "localclaude"], [last_response.status, j["launcher"]]
     team_req = @requests.reverse.find { |r| r["op"] == "launch" }
     assert_equal ["bash", "-ic", "localclaude --remote-control #{j['session']}"], team_req["argv"]
-    assert_equal [nil, "group_repo_teamlead"], team_req.values_at("lead_key", "lead"), "under the lead, no key"
+    assert_equal [nil, "by_group_repo_teamlead"], team_req.values_at("lead_key", "lead"), "under the lead, no key"
     # lead-first: the lead's key went to bin/launcher's start only (it keeps it) — never into an answer
     lead_req = @requests.find { |r| r["op"] == "launch" && r["type"] == "lead" }
     key = lead_req.fetch("lead_key")
@@ -651,19 +666,19 @@ mtime: Busyyaks::Clock.now.to_f, }],
     refute_includes lead_body, key
     # an ownerless To do card is the lead's; the lead starts its worker with kanban_spawn (nothing else starts one)
     todo = k.create(slug: "group/repo", title: "new work", by: "op", column: "todo")
-    @live_extra = %w[group_repo_teamlead]
+    @live_extra = %w[by_group_repo_teamlead]
     assert_equal [todo], Busyyaks::Kanban.default.adopt_ownerless(live: Busyyaks::LauncherClient.session_names, grace: 60)
-    assert_equal "group_repo_teamlead", k.card(todo)[:owner_session]
-    @lead_keys = { "group_repo_teamlead" => key } # what bin/launcher's lead_key op answers for the lead it started
-    spawn = { "id" => todo, "type" => "worker", "tmux_session" => "group_repo_teamlead",
-              "author" => "claude-group_repo_teamlead", }
+    assert_equal "by_group_repo_teamlead", k.card(todo)[:owner_session]
+    @lead_keys = { "by_group_repo_teamlead" => key } # what bin/launcher's lead_key op answers for the lead it started
+    spawn = { "id" => todo, "type" => "worker", "tmux_session" => "by_group_repo_teamlead",
+              "author" => "claude-by_group_repo_teamlead", }
     out = JSON.parse(Busyyaks::Kanban.tools.call("kanban_spawn", spawn))
     req = @requests.reverse.find { |r| r["op"] == "launch" }
-    assert_equal %w[worker localclaude group_repo_teamlead], req.values_at("type", "launcher", "lead")
+    assert_equal %w[worker localclaude by_group_repo_teamlead], req.values_at("type", "launcher", "lead")
     assert_equal ["bash", "-ic", "localclaude --remote-control #{req['session']}"], req["argv"]
     assert_equal [out["session"], nil], [k.card(todo)[:owner_session], req["lead_key"]]
     refute_includes JSON.generate(out), key, "the spawn answer carries no key"
-    @lead_keys = { "group_repo_teamlead" => "0" * 64 } # a key that is not the registration's
+    @lead_keys = { "by_group_repo_teamlead" => "0" * 64 } # a key that is not the registration's
     assert_raises(AgentsKanban::Denied) { Busyyaks::Kanban.tools.call("kanban_spawn", spawn.merge("id" => todo)) }
     @lead_keys = {}
     @live_extra = nil
@@ -673,13 +688,34 @@ mtime: Busyyaks::Clock.now.to_f, }],
     # claude never came up (bin/launcher refuses the launch and kills the session): 422 with the launcher's reason,
     # the registration ended — never a 201 with a registered owner nobody runs
     @launch_refused = { ok: false, status: 422,
-                        error: "group_repo did not start: no claude --remote-control group_repo after 12s " \
+                        error: "by_group_repo did not start: no claude --remote-control by_group_repo after 12s " \
                                "(Temp directory /tmp/claude-1000 is owned by uid 0)", }
     j = api(:post, "/api/launch", { slug: "group/repo", type: "plain", launcher: "fullclaude" })
     assert_equal [422, @launch_refused[:error]], [last_response.status, j["error"]]
-    reg = Busyyaks::Kanban.store.sessions_t.where(session: "group_repo").order(:id).last
+    reg = Busyyaks::Kanban.store.sessions_t.where(session: "by_group_repo").order(:id).last
     refute_nil reg[:ended_at], "the refused start's registration is ended"
 
+  end
+
+  # U3, the operator: "Add naming to the busyyaks sessions … start with BY so we can easily identify and isolate them".
+  # The live run's tmux names, from the web's Launch: the lead by_<slug>_teamlead, the Sub team by_<slug>_team, a plain
+  # session by_<slug> — each the name the launcher is asked to start, and the board's registration
+  def test_every_session_the_web_launches_is_named_by
+    fake_launcher
+    %w[lead team plain].each do |type|
+      j = api(:post, "/api/launch", { slug: "group/repo", type: type, launcher: "fullclaude" })
+      assert_equal 201, last_response.status, j.inspect
+    end
+    starts = @requests.select { |r| r["op"] == "launch" }
+    assert_equal [%w[lead by_group_repo_teamlead], %w[team by_group_repo_team], %w[plain by_group_repo]],
+                 starts.map { |r| r.values_at("type", "session") }
+    starts.each { |r| assert Busyyaks::LauncherRules.busyyaks_session?(r["session"]), r["session"] }
+    starts.each { |r| assert Busyyaks::Kanban.default.open_session(r["session"]), "#{r['session']} registered" }
+    # the shipped template (a new install's agent settings), not only this test's fixture: every session_name is by_…
+    template = YAML.safe_load_file(File.expand_path("../../config/agents.template.yml", __dir__))
+    template["agent_types"].each do |t|
+      assert Busyyaks::LauncherRules.busyyaks_session?(t["session_name"]), "#{t['key']}: #{t['session_name']}"
+    end
   end
 
   def test_launcher_down_is_reported_and_launch_is_503
@@ -719,7 +755,8 @@ mtime: Busyyaks::Clock.now.to_f, }],
   def test_a_stored_revision_with_a_type_under_no_lead_launches_nothing
     fake_launcher
     d = JSON.parse(JSON.generate(AgentSettingsFixture::DOC))
-    d["agent_types"].find { |t| t["key"] == "worker" }.delete("under")
+    w = d["agent_types"].find { |t| t["key"] == "worker" }
+    %w[under launchable].each { w.delete(_1) }
     Hanami.app["db.gateway"].connection[:agent_settings].insert(doc: JSON.generate(d), author: "by hand", created_at: 1)
     j = api(:post, "/api/launch", { slug: "group/repo", type: "worker", launcher: "fullclaude" })
     assert_equal 503, last_response.status
@@ -727,6 +764,22 @@ mtime: Busyyaks::Clock.now.to_f, }],
     assert_nil @requests.find { |r| r["op"] == "launch" }, "nothing reached the launcher"
   ensure
     AgentSettingsFixture.install!
+  end
+
+  # the operator, 2026-11-25: workers come only from the lead's kanban_spawn — the page's launches say the worker type
+  # is not launchable (the bar leaves it out), the lead's button says "Launch team lead", and a POST for a worker is
+  # refused before anything reaches the launcher, with a lead running too
+  def test_the_launch_bar_never_offers_worker
+    fake_launcher
+    j = api(:get, "/api/projects")
+    bar = j["launches"]["types"].to_h { |t| [t["key"], t.values_at("label", "launchable", "launch_label")] }
+    assert_equal({ "lead" => ["Team lead", true, "Launch team lead"], "worker" => ["Worker", false, nil],
+                   "team" => ["Sub team", true, nil], "plain" => ["Plain", true, nil], }, bar)
+    j = api(:post, "/api/launch", { slug: "group/repo", type: "worker", launcher: "fullclaude" })
+    assert_equal 422, last_response.status
+    assert_equal "Worker (worker) is not launched from the Launch bar: the board's lead starts one for a card " \
+                 "(kanban_spawn)", j["error"]
+    assert_nil @requests.find { |r| r["op"] == "launch" }, "nothing reached the launcher"
   end
 
   def test_launch_without_csrf_token_is_refused_and_signs_out

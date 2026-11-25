@@ -20,13 +20,15 @@ class HermesBoardTest < Minitest::Test
     H.refusal(path: "/h/config.yaml", user_config: user, url: URL, get: values.method(:[]))
   end
 
-  def test_mcp_comes_from_env_and_fails_loudly
-    env = { "MCP_HOST" => "127.0.0.1", "MCP_HOST_PORT" => "8081", "MCP_TOKEN" => "t" * 32 }
+  # the board's MCP reaches a Hermes board session with MCP_BOARD_TOKEN — never the operator's MCP_TOKEN, which has no
+  # board tool (a session started from a terminal knows nothing of the board)
+  def test_mcp_comes_from_env_with_the_board_token_and_fails_loudly
+    env = { "MCP_HOST" => "127.0.0.1", "MCP_HOST_PORT" => "8081", "MCP_TOKEN" => "o" * 32, "MCP_BOARD_TOKEN" => "t" * 32 }
     assert_equal({ url: URL, token: "t" * 32 }, H.mcp!(env))
-    %w[MCP_HOST MCP_HOST_PORT MCP_TOKEN].each do |k|
+    %w[MCP_HOST MCP_HOST_PORT MCP_BOARD_TOKEN].each do |k|
       assert_match(/#{k} missing in \.env/, assert_raises(H::Invalid) { H.mcp!(env.except(k)) }.message)
     end
-    assert_match(/MCP_TOKEN is empty/, assert_raises(H::Invalid) { H.mcp!(env.merge("MCP_TOKEN" => "")) }.message)
+    assert_match(/MCP_BOARD_TOKEN is empty/, assert_raises(H::Invalid) { H.mcp!(env.merge("MCP_BOARD_TOKEN" => "")) }.message)
   end
 
   def test_the_overlay_is_private_and_holds_the_settings

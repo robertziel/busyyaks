@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SetupData } from "../lib/hello";
-import { PlanCard, ReadyFacts, STEPS, Skin } from "./Hello";
+import { PlanCard, ReadyFacts, RestartBoth, STEPS, Skin } from "./Hello";
 
 const LABELS: Record<string, string> = { light: "Light", dark: "Dark", auto: "Auto", matrix: "Matrix" };
 function stub(choice: string) {
@@ -80,5 +80,14 @@ describe("the Projects plan card's buttons", () => {
     const html = render(true);
     expect(html.match(/aria-disabled="true"/g)).toHaveLength(2);
     expect(html).not.toMatch(/ disabled=""/);
+  });
+});
+
+// the audit's /hello Agents step: "deploy/install-launcher.shdocker compose restart web" — two commands read as one
+describe("the restart line", () => {
+  it("names its two commands apart: never run together as one word", () => {
+    const html = renderToStaticMarkup(createElement(RestartBoth));
+    const text = html.replace(/<[^>]+>/g, "");
+    expect(text).toBe("deploy/install-launcher.sh then docker compose restart web");
   });
 });

@@ -2,6 +2,7 @@
 
 require "open3"
 require "busyyaks/clock"
+require "busyyaks/config"
 require "busyyaks/kanban"
 require "busyyaks/private_socket"
 require "busyyaks/workflow_files"
@@ -11,18 +12,23 @@ require "busyyaks/workflow_files"
 module WriterServer
   module_function
 
-  def writer(root:, clock: -> { Busyyaks::Clock.epoch })
+  # checkout: the busyyaks checkout whose launch budget a project save is checked against (this repo by default)
+  def writer(root:, clock: -> { Busyyaks::Clock.epoch }, skills: -> { Busyyaks::Config.load.skills }, own_skills: nil,
+             checkout: File.expand_path("../..", __dir__))
     db = Hanami.app["db.gateway"].connection
     Busyyaks::WorkflowFiles::Writer.new(db: db, store: -> { Busyyaks::Kanban.store(db) },
-                                        api: ->(st) { Busyyaks::Kanban.api(st) }, root: root, clock: clock)
+                                        api: ->(st) { Busyyaks::Kanban.api(st) }, skills: skills, root: root,
+                                        checkout: checkout, clock: clock, own_skills: own_skills)
   end
 
   # → the bound socket (close it to stop the server)
-  def start(root:)
+  def start(root:, skills: -> { Busyyaks::Config.load.skills }, own_skills: nil,
+            checkout: File.expand_path("../..", __dir__))
     path = ENV.fetch("WRITER_SOCKET")
     File.unlink(path) if File.socket?(path)
     sock = Busyyaks::PrivateSocket.bind(path)
-    Busyyaks::WorkflowFiles::Server.new(writer(root: root), sock).start
+    w = writer(root: root, skills: skills, own_skills: own_skills, checkout: checkout)
+    Busyyaks::WorkflowFiles::Server.new(w, sock).start
     sock
   end
 

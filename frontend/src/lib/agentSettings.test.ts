@@ -63,6 +63,28 @@ describe("agent settings form", () => {
     expect(sameDoc(fromDraft(toDraft(doc)), doc)).toBe(true);
   });
 
+  it("a save keeps a spawn-only type off the Launch bar and the lead's button text (launchable, launch_label)", () => {
+    const spawned: AgentDoc = {
+      ...doc,
+      agent_types: [
+        { ...doc.agent_types[0]!, label: "Team lead", launch_label: "Launch team lead" },
+        { ...doc.agent_types[1]!, launchable: false },
+      ],
+    };
+    expect(fromDraft(toDraft(spawned))).toEqual(spawned);
+    const d = toDraft(spawned);
+    expect([d.types[0]!.launchable, d.types[0]!.launchLabel, d.types[1]!.launchable]).toEqual([
+      true,
+      "Launch team lead",
+      false,
+    ]);
+    d.types[0]!.launchLabel = "  ";
+    d.types[1]!.launchable = true;
+    const out = fromDraft(d).agent_types;
+    expect("launch_label" in out[0]!).toBe(false);
+    expect("launchable" in out[1]!).toBe(false);
+  });
+
   it("a model is null when no launcher sets one, else a map naming exactly the type's launchers", () => {
     const d = toDraft(doc);
     d.types[0]!.models.local = " sonnet ";

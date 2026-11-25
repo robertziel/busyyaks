@@ -36,6 +36,8 @@ module Busyyaks
     get "/api/projects/*slug/workflow", to: "api.workflow.show"
     post "/api/projects/*slug/workflow", to: "api.workflow.save"
     delete "/api/projects/*slug/workflow", to: "api.workflow.reset"
+    get "/api/projects/*slug/agent-rules", to: "api.project_agent_rules.show" # the project's Settings tab: rules per agent type
+    post "/api/projects/*slug/agent-rules", to: "api.project_agent_rules.save"
     post "/api/projects/*slug/stop", to: "api.projects.stop"   # operator: Stop / Stop all of a project's tmux sessions
     get "/api/projects/*slug", to: "api.projects.show"          # slugs of nested roots carry a "/" (acme/x)
     post "/api/notes", to: "api.projects.note"
@@ -107,6 +109,8 @@ module Busyyaks
     delete "/api/labels/:id", to: "api.labels.destroy"
     get "/api/settings/agents", to: "api.agent_settings.show"   # Settings → Agents & launchers
     post "/api/settings/agents", to: "api.agent_settings.save"
+    get "/api/settings/agent-rules", to: "api.agent_rules.show"   # Settings → Agent rules: busyyaks's own skills layers
+    post "/api/settings/agent-rules", to: "api.agent_rules.save"
     get "/api/settings/daily-report", to: "api.daily_report_settings.show"   # Settings → Daily report
     post "/api/settings/daily-report", to: "api.daily_report_settings.save"
     get "/api/settings/runtime", to: "api.runtime_settings.show"   # Settings → Runtime: the services' timing

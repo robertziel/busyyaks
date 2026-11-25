@@ -113,8 +113,8 @@ class CollectorTest < Minitest::Test
     process(41, 40, "hermes", ["hermes-lookalike"])
     record(11)
     socket("default")
-    FakeTmux.new("default" => row(10, "%1", "app lead") + row(20, "%2", "desk") + row(30, "%3", "shell") +
-                              row(40, "%4", "fake", win: 1) + "garbage line\n")
+    FakeTmux.new("default" => row(10, "%1", "by_app lead") + row(20, "%2", "by_desk") + row(30, "%3", "shell") +
+                              row(40, "%4", "by_fake", win: 1) + "garbage line\n")
   end
 
   def build(fake)
@@ -125,9 +125,9 @@ class CollectorTest < Minitest::Test
   def test_snapshot_lists_each_agent_pane_with_its_family_facts
     snap, targets = build(box)
     assert_equal [1, 42.0, "h", 5, nil], snap.values_at("version", "generated_at", "host", "interval_s", "error")
-    assert_equal ["app lead", "desk"], snap["sessions"].map { |s| s["name"] }, "no shell-only pane, no lookalike"
+    assert_equal ["by_app lead", "by_desk"], snap["sessions"].map { |s| s["name"] }, "no shell-only pane, no lookalike"
     lead = snap["sessions"].first
-    assert_equal({ "name" => "app lead", "socket" => "default", "attached" => 1, "created" => 1_700_000_000,
+    assert_equal({ "name" => "by_app lead", "socket" => "default", "attached" => 1, "created" => 1_700_000_000,
                    "activity" => 1_700_000_200, "windows" => 2, }, lead.except("panes"))
     pane = lead["panes"].then { one(_1) }
     assert_equal [%w[target 0.0], %w[pane_id %1], ["pid", 11], ["cwd", "/projects/app"], ["started", BOOT + 5.0],
@@ -142,10 +142,10 @@ class CollectorTest < Minitest::Test
     assert_equal ["hermes", 21, BOOT + 7.0], hermes.values_at("engine", "pid", "started")
     assert_equal C::FACTS.sort, hermes["unknown"].keys.sort, "Hermes: every fact unknown, with the reason"
     refute_match(/secret prompt/, JSON.generate(snap), "argv never leaves")
-    t = targets[["default", "app lead"]]
+    t = targets[["default", "by_app lead"]]
     assert_equal [11, 500, "claude", "%1"], [t.pid, t.start_ticks, t.family.name, t.pane_id]
-    assert_equal %w[default desk hermes], [targets[%w[default desk]].socket, targets[%w[default desk]].name,
-                                                 targets[%w[default desk]].family.name,]
+    assert_equal %w[default by_desk hermes], [targets[%w[default by_desk]].socket, targets[%w[default by_desk]].name,
+                                                    targets[%w[default by_desk]].family.name,]
   end
 
   # every pane carries every key the launcher allowlists (bin/launcher PANE_KEYS)
@@ -157,6 +157,21 @@ class CollectorTest < Minitest::Test
     refute f.claims?(1, procfs.new(["/v/bin/python", "/usr/local/bin/hermes", "gateway", "run"]))
   end
 
+  # The operator (2026-11-24): a session started from the terminal "should not be related to busyyaks in any way" — the
+  # collector never reads a pane of a session without the `by_` prefix: not listed, no process, screen or facts read
+  def test_a_session_started_from_the_terminal_is_never_read
+    process(10, 1, "bash", ["bash"])
+    process(11, 10, "claude", ["claude"])
+    record(11)
+    process(70, 1, "bash", ["bash"])
+    process(71, 70, "claude", ["claude"])
+    socket("default")
+    snap, targets = build(FakeTmux.new("default" => row(10, "%1", "by_app lead") + row(70, "%7", "acme_app") +
+                                                    row(70, "%8", "by_")))
+    assert_equal ["by_app lead"], snap["sessions"].map { |x| x["name"] }
+    assert_equal [["default", "by_app lead"]], targets.keys
+  end
+
   # `hermes gateway run` is Hermes's daemon (its bootstrap, then "gateway" after the -c script), never a session
   def test_the_hermes_gateway_is_no_session
     process(50, 1, "bash", ["bash"])
@@ -164,8 +179,8 @@ class CollectorTest < Minitest::Test
     process(60, 1, "bash", ["bash"])
     process(61, 60, "hermes", ["/h/python3", "-I", "-c", "import hermes_bootstrap", "chat"])
     socket("default")
-    snap, = build(FakeTmux.new("default" => row(50, "%5", "gw") + row(60, "%6", "chat")))
-    assert_equal ["chat"], snap["sessions"].map { |x| x["name"] }
+    snap, = build(FakeTmux.new("default" => row(50, "%5", "by_gw") + row(60, "%6", "by_chat")))
+    assert_equal ["by_chat"], snap["sessions"].map { |x| x["name"] }
   end
 
   # a cwd is bytes: one that is not UTF-8 shows U+FFFD and the snapshot still writes (no crash loop)
@@ -174,7 +189,7 @@ class CollectorTest < Minitest::Test
     process(11, 10, "claude", ["claude"], cwd: "/projects/caf\xE9".b)
     record(11)
     socket("default")
-    snap, = build(FakeTmux.new("default" => row(10, "%1", "app")))
+    snap, = build(FakeTmux.new("default" => row(10, "%1", "by_app")))
     cwd = snap["sessions"].first["panes"].first["cwd"]
     assert_equal "/projects/caf\uFFFD", cwd
     assert JSON.generate(snap)
@@ -314,7 +329,7 @@ class CollectorTest < Minitest::Test
     fake = box
     s = server(fake)
     text = "line one\n$(rm -rf ~); `x` ; \e[31mred\e[0m\r\nend\u0085"
-    assert_equal({ ok: true }, s.handle("op" => "send", "session" => "app lead", "socket" => "default", "text" => text,
+    assert_equal({ ok: true }, s.handle("op" => "send", "session" => "by_app lead", "socket" => "default", "text" => text,
                                         "pane" => "%2"))
     sent = inputs(fake)
     buf = sent.first[0][2]
@@ -323,13 +338,13 @@ class CollectorTest < Minitest::Test
                   [["paste-buffer", "-p", "-d", "-b", buf, "-t", "%1"], nil], [["send-keys", "-t", "%1", "Enter"], nil],],
                  sent, "the text only through stdin, control characters gone, the pane from the snapshot (not the request's)"
     assert_equal [C::Server::PASTE_SETTLE_S], @pauses
-    assert_match(/send \d+ chars → app lead \(%1\)\z/, @log.then { one(_1) })
+    assert_match(/send \d+ chars → by_app lead \(%1\)\z/, @log.then { one(_1) })
     refute_match(/line one/, @log.then { one(_1) }, "the log never carries the text")
   end
 
   def test_send_without_submit_presses_no_enter
     fake = box
-    r = server(fake).handle("op" => "send", "session" => "app lead", "text" => "draft", "submit" => false)
+    r = server(fake).handle("op" => "send", "session" => "by_app lead", "text" => "draft", "submit" => false)
     assert_equal({ ok: true }, r)
     assert_equal %w[load-buffer paste-buffer], inputs(fake).map { |a, _| a.first }
   end
@@ -339,17 +354,17 @@ class CollectorTest < Minitest::Test
     s = server(fake)
     refusals = {
       { "session" => "nobody", "text" => "x" } => "no_session",
-      { "session" => "app lead", "socket" => "../x", "text" => "x" } => "invalid_request",
-      { "session" => "app lead", "text" => " \u0007 " } => "invalid_request",
-      { "session" => "app lead", "text" => "x" * 16_001 } => "invalid_request",
-      { "session" => "app lead", "text" => "\xff".dup.force_encoding("UTF-8") } => "invalid_request",
-      { "session" => "desk", "text" => "x" } => "unsupported",
+      { "session" => "by_app lead", "socket" => "../x", "text" => "x" } => "invalid_request",
+      { "session" => "by_app lead", "text" => " \u0007 " } => "invalid_request",
+      { "session" => "by_app lead", "text" => "x" * 16_001 } => "invalid_request",
+      { "session" => "by_app lead", "text" => "\xff".dup.force_encoding("UTF-8") } => "invalid_request",
+      { "session" => "by_desk", "text" => "x" } => "unsupported",
     }
     refusals.each do |req, type|
       assert_equal type, s.handle(req.merge("op" => "send"))[:error][:type], req.inspect
     end
     fake.screen = "Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n"
-    r = s.handle("op" => "send", "session" => "app lead", "text" => "x")
+    r = s.handle("op" => "send", "session" => "by_app lead", "text" => "x")
     assert_equal "dialog", r[:error][:type], "a paste + Enter would answer the dialog"
     assert_empty inputs(fake)
   end
@@ -360,10 +375,10 @@ class CollectorTest < Minitest::Test
     s = server(fake)
     FileUtils.rm_rf(File.join(@proc, "11"))
     process(11, 10, "bash", ["bash"])
-    assert_equal "no_session", s.handle("op" => "send", "session" => "app lead", "text" => "ls")[:error][:type]
+    assert_equal "no_session", s.handle("op" => "send", "session" => "by_app lead", "text" => "ls")[:error][:type]
     FileUtils.rm_rf(File.join(@proc, "11"))
     process(11, 10, "claude", ["claude"], ticks: 900)
-    assert_equal "no_session", s.handle("op" => "send", "session" => "app lead", "text" => "ls")[:error][:type]
+    assert_equal "no_session", s.handle("op" => "send", "session" => "by_app lead", "text" => "ls")[:error][:type]
     assert_empty inputs(fake)
   end
 
@@ -371,26 +386,26 @@ class CollectorTest < Minitest::Test
   def test_hermes_is_typed_into_only_when_the_record_names_that_process
     fake = box
     asked = []
-    record = [%w[desk], 21, 700]
+    record = [%w[by_desk], 21, 700]
     proven = lambda do |engine, session, pid, ticks|
       asked << [engine, session, pid, ticks]
       [[session], pid, ticks] == record
     end
     s = server(fake, proven: proven, input_state: [EMPTY, OURS])
-    req = { "op" => "send", "session" => "desk", "text" => "ping" }
+    req = { "op" => "send", "session" => "by_desk", "text" => "ping" }
     record[1] = 99
     forged = req.merge("queue_proof" => { "pid" => 21, "start_ticks" => 700 })
     assert_equal "unsupported", s.handle(forged)[:error][:type], "a proof in the request counts for nothing"
     assert_empty inputs(fake)
     record[1] = 21
     assert_equal({ ok: true }, s.handle(req))
-    assert_equal ["hermes", "desk", 21, 700], asked.last
+    assert_equal ["hermes", "by_desk", 21, 700], asked.last
   end
 
   def enters(fake) = inputs(fake).count { |a, _| a.first == "send-keys" }
   def pastes(fake) = inputs(fake).count { |a, _| a.first == "paste-buffer" }
 
-  DESK = { "op" => "send", "session" => "desk", "text" => "ping" }.freeze
+  DESK = { "op" => "send", "session" => "by_desk", "text" => "ping" }.freeze
   YES = ->(_e, _s, _p, _t) { true }
   EMPTY = { state: :empty }.freeze
   OURS = { state: :ours }.freeze
@@ -504,20 +519,20 @@ class CollectorTest < Minitest::Test
   def test_send_tmux_failure_before_the_paste_is_retryable_after_it_unconfirmed
     fake = box
     fake.fail["load-buffer"] = "no server"
-    r = server(fake).handle("op" => "send", "session" => "app lead", "text" => "x")
+    r = server(fake).handle("op" => "send", "session" => "by_app lead", "text" => "x")
     assert_equal({ type: "tmux", message: "no server" }, r[:error])
     assert_equal %w[load-buffer], inputs(fake).map { |a, _| a.first }, "no paste after a failed load"
 
     fake.fail.clear
     fake.fail["paste-buffer"] = "can't find pane %1"
-    r = server(fake).handle("op" => "send", "session" => "app lead", "text" => "x")
+    r = server(fake).handle("op" => "send", "session" => "by_app lead", "text" => "x")
     assert_equal({ type: "unconfirmed", message: "the paste failed and may have been typed in part: can't find pane %1" },
                  r[:error])
     refute(inputs(fake).any? { |a, _| a.first == "send-keys" }, "no Enter after a failed paste")
 
     fake.fail.clear
     fake.fail["send-keys"] = "lost"
-    r = server(fake).handle("op" => "send", "session" => "app lead", "text" => "x")
+    r = server(fake).handle("op" => "send", "session" => "by_app lead", "text" => "x")
     assert_equal({ type: "unconfirmed", message: "pasted, then the Enter failed: lost" }, r[:error])
   end
 
@@ -525,24 +540,24 @@ class CollectorTest < Minitest::Test
     fake = box
     s = server(fake)
     fake.screen = "Bash command\n  rm x\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n"
-    r = s.handle("op" => "screen", "session" => "app lead")
+    r = s.handle("op" => "screen", "session" => "by_app lead")
     assert_equal [true, fake.screen, "claude"], r.values_at(:ok, :text, :engine)
     assert_match(/\ADo you want to proceed\?\z|\nDo you want to proceed\?\z/, r[:dialog][:question])
     fake.screen = "❯ \n"
-    assert_nil s.handle("op" => "screen", "session" => "desk")[:dialog]
+    assert_nil s.handle("op" => "screen", "session" => "by_desk")[:dialog]
     assert_equal({ ok: false, error: { type: "unsupported", message: C::Server::TASKS } },
-                 s.handle("op" => "tasks", "session" => "app lead"))
-    assert_equal "invalid_request", s.handle("op" => "key", "session" => "app lead")[:error][:type]
+                 s.handle("op" => "tasks", "session" => "by_app lead"))
+    assert_equal "invalid_request", s.handle("op" => "key", "session" => "by_app lead")[:error][:type]
     assert_equal "invalid_request", s.handle([1])[:error][:type]
     fake.fail["capture-pane"] = "no pane"
-    assert_equal({ type: "tmux", message: "no pane" }, s.handle("op" => "screen", "session" => "app lead")[:error])
+    assert_equal({ type: "tmux", message: "no pane" }, s.handle("op" => "screen", "session" => "by_app lead")[:error])
   end
 
   # SCREEN_MAX is bytes: a screen of multibyte characters over it is cut by bytes, the half character dropped
   def test_a_long_screen_is_cut_by_bytes
     fake = box
     fake.screen = "x" + ("❯" * (C::Server::SCREEN_MAX / 3 + 10))
-    r = server(fake).handle("op" => "screen", "session" => "app lead")
+    r = server(fake).handle("op" => "screen", "session" => "by_app lead")
     assert r[:ok], r.inspect
     assert r[:text].valid_encoding?
     assert_operator r[:text].bytesize, :<=, C::Server::SCREEN_MAX
@@ -553,7 +568,7 @@ class CollectorTest < Minitest::Test
   # the wire: one line in, one line out, over a real unix socket pair
   def test_serve_answers_one_json_line
     s = server(box)
-    [["{\"op\":\"tasks\",\"session\":\"app lead\"}\n", "unsupported"], ["nope\n", "invalid_request"],
+    [["{\"op\":\"tasks\",\"session\":\"by_app lead\"}\n", "unsupported"], ["nope\n", "invalid_request"],
      ["#{'x' * (C::Server::REQUEST_MAX + 10)}\n", "invalid_request"],].each do |line, type|
       a, b = UNIXSocket.pair
       a.write(line)
@@ -568,19 +583,19 @@ class CollectorTest < Minitest::Test
   def test_every_tmux_call_has_its_deadline_and_a_timeout_is_an_error_answer
     fake = box
     s = server(fake)
-    assert_equal true, s.handle("op" => "screen", "session" => "app lead")[:ok]
+    assert_equal true, s.handle("op" => "screen", "session" => "by_app lead")[:ok]
     assert(fake.calls.all? { |_, _, seconds| seconds == 3 }, fake.calls.inspect)
     assert_raises(ArgumentError) { C::Tmux.new(dir: @tmuxdir, uid: Process.uid, runner: fake, timeout: 0) }
     assert_raises(ArgumentError) { C::Tmux.new(dir: @tmuxdir, uid: Process.uid, runner: fake, timeout: nil) }
 
     fake.fail["load-buffer"] = C::Tmux.timed_out(3)
-    r = s.handle("op" => "send", "session" => "app lead", "text" => "x")
+    r = s.handle("op" => "send", "session" => "by_app lead", "text" => "x")
     assert_equal({ type: "tmux", message: "tmux did not answer within 3s (agents.collector.tmux_timeout_seconds): killed" },
                  r[:error])
     fake.fail.clear
-    assert_equal({ ok: true }, s.handle("op" => "send", "session" => "app lead", "text" => "y"), "the lock was released")
+    assert_equal({ ok: true }, s.handle("op" => "send", "session" => "by_app lead", "text" => "y"), "the lock was released")
     fake.fail["capture-pane"] = C::Tmux.timed_out(3)
-    assert_match(/did not answer within 3s/, s.handle("op" => "screen", "session" => "app lead")[:error][:message])
+    assert_match(/did not answer within 3s/, s.handle("op" => "screen", "session" => "by_app lead")[:error][:message])
   end
 
   # review round 1: a thread that dies ends the collector (logged with the reason, exit 1); one that ends is fine

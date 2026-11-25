@@ -16,7 +16,8 @@ this deployment provides one.
 | who you are | your tmux session (`tmux display -p '#S'`); the launch prompt names your agent name |
 | own a card | cards you create (`kanban_create` with `tmux_session`, or `author` = your agent name) are yours; a card you start that you do not own → `kanban_claim(id, assignee, tmux_session)` first |
 | new card | only with the operator's go-ahead (`kanban_ask` on the card you work); findings go as comments on that card, never as new cards |
-| scope | work ONLY on the cards you were started for / own |
+| scope | work ONLY on the cards you were started for / own. A card you create on ANOTHER project's board is left to that project's sessions (you cannot claim it) |
+| pings | comments, the operator's moves and answers on your cards are typed into the owner session |
 
 ## Talking to the operator
 
@@ -46,6 +47,14 @@ Only the Reviewer writes RESOLVED.
 
 Severity: blocker / major block the handoff; **minor / nit never block** — note them, file them for after the
 release when the operator agrees, move on.
+
+## PRs and handoff
+
+- Opened a pull request for a card → `kanban_pr_assign(id, pr_url, role, author)` at once — every PR, on every repo
+  the card changes (it adds). The board knows a card's PRs only from these assignments. A PR that is not the card's →
+  `kanban_pr_unassign(id, pr_url, author, reason)`.
+- Work done → `kanban_handoff` (how to check it, PR, CI, screenshots for a UI change): the only way into a gate. A gate
+  that waits for green CI refuses the handoff while the PR's checks are unread, pending or red — Monitor CI, hand off again.
 
 ## Approval and merging
 

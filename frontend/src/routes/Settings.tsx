@@ -11,6 +11,7 @@ import {
   COLUMN_TYPES,
   fromDraft,
   invocationIndex,
+  leadChoices,
   invocationLine,
   newLauncher,
   newType,
@@ -112,13 +113,13 @@ function LauncherRow({
 function TypeCard({
   t,
   launchers,
-  typeKeys,
+  types,
   onChange,
   onRemove,
 }: {
   t: TypeDraft;
   launchers: string[];
-  typeKeys: string[];
+  types: TypeDraft[];
   onChange: (t: TypeDraft) => void;
   onRemove: () => void;
 }) {
@@ -161,14 +162,37 @@ function TypeCard({
         runs under{" "}
         <select value={t.under} onChange={(e) => onChange({ ...t, under: e.target.value })}>
           <option value="">no lead</option>
-          {typeKeys
-            .filter((k) => k !== t.key)
-            .map((k) => (
-              <option key={k} value={k}>
-                {k}
-              </option>
-            ))}
+          {leadChoices(types, t).map((k) => (
+            <option key={k} value={k}>
+              {k}
+            </option>
+          ))}
         </select>
+      </label>
+      <label title="a plain session: runs with no lead, no prompt, adopts nothing">
+        <input
+          type="checkbox"
+          checked={t.standalone}
+          onChange={(e) => onChange({ ...t, standalone: e.target.checked })}
+        />{" "}
+        standalone
+      </label>
+      <label title="off = the Launch bar never offers it: only its lead's kanban_spawn starts one (a worker for a card)">
+        <input
+          type="checkbox"
+          checked={t.launchable}
+          onChange={(e) => onChange({ ...t, launchable: e.target.checked })}
+        />{" "}
+        on the Launch bar
+      </label>
+      <label title="the Launch bar button's text; empty = the label">
+        button text{" "}
+        <input
+          value={t.launchLabel}
+          placeholder={t.label || "the label"}
+          disabled={!t.launchable}
+          onChange={(e) => onChange({ ...t, launchLabel: e.target.value })}
+        />
       </label>
       <label>
         agent name <input value={t.agent_name} onChange={(e) => onChange({ ...t, agent_name: e.target.value })} />
@@ -260,7 +284,6 @@ export function Settings() {
 
   const stale = data.revision.id > base; // a NEWER revision than the form's (right after a save the cached read is the older one)
   const launcherKeys = draft.launchers.map((l) => l.key);
-  const typeKeys = draft.types.map((t) => t.key);
 
   const discard = () => {
     setDraft(toDraft(data.doc));
@@ -351,7 +374,7 @@ export function Settings() {
             key={i}
             t={t}
             launchers={launcherKeys}
-            typeKeys={typeKeys}
+            types={draft.types}
             onChange={(nt) => setDraft({ ...draft, types: draft.types.map((x, j) => (j === i ? nt : x)) })}
             onRemove={() => setDraft({ ...draft, types: draft.types.filter((_, j) => j !== i) })}
           />
@@ -372,7 +395,10 @@ export function Settings() {
             <tr>
               <th>type</th>
               <th>launcher</th>
-              <th>argv (+ the prompt)</th>
+              <th title="bin/launcher runs it inside tmux (bash -ic '…; exec bash', with the session's env) and, when config/busyyaks.yml launch.scopes is set, inside a systemd user scope (systemd-run --user --scope)">
+                the agent&apos;s argv · busyyaks adds the skills stage, the board MCP and the prompt · run in tmux, in a
+                systemd scope when launch.scopes is set
+              </th>
             </tr>
           </thead>
           <tbody>

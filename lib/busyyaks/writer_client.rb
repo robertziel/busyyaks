@@ -5,7 +5,8 @@ require "json"
 
 module Busyyaks
   # The web's line to the writer service (bin/writer) over its unix socket at WRITER_SOCKET: the workflow editor's
-  # Save / Reset, which write `<repo>/.busyyaks/workflow.yml` (WorkflowFiles; card #429). No socket = Unavailable (503:
+  # Save / Reset, which write `<repo>/.busyyaks/workflow.yml` (WorkflowFiles; card #429), and the project Settings
+  # tab's Save, which writes `<repo>/.busyyaks/skills/agents/<type>.md` (AgentRuleFiles). No socket = Unavailable (503:
   # the writer is down, nothing was saved); sent but unanswered (a timeout, or the writer died after the request) =
   # NoAnswer (504: it may still apply) — never a save into the database alone.
   module WriterClient
@@ -19,6 +20,10 @@ module Busyyaks
 
     def workflow_save(slug, board, by:) = call({ op: "workflow_save", slug: slug, board: board, by: by })
     def workflow_reset(slug, by:) = call({ op: "workflow_reset", slug: slug, by: by })
+    # the project page's Settings tab: the repo's .busyyaks/skills/agents/<type>.md files (AgentRuleFiles)
+    def agent_rules_save(slug, files, by:) = call({ op: "agent_rules_save", slug: slug, files: files, by: by })
+    # Settings → Agent rules: busyyaks's own skills files (SkillFiles), in the checkout the WRITER finds itself
+    def skills_save(files, by:) = call({ op: "skills_save", files: files, by: by })
 
     # → [status, body] (the writer's answer)
     def call(req, timeout: TIMEOUT)

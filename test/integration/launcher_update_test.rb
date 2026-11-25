@@ -17,7 +17,7 @@ require "yaml"
 class LauncherUpdateTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
   BOOT_SECONDS = 60
-  COPY = %w[bin/launcher bin/yaks cli lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml
+  COPY = %w[bin/launcher bin/yaks bin/setup cli lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml
             config/harnesses.yml].freeze
   FIXTURE = YAML.safe_load_file(File.expand_path("../fixtures/busyyaks.yml", __dir__))
   GIT_ENV = { "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@example.test", "GIT_COMMITTER_NAME" => "t",

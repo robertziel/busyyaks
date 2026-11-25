@@ -15,13 +15,14 @@ launchers:
 #
 agent_types:
   - key: lead
-    label: Launch
+    label: Team lead
+    launch_label: Launch team lead   # the Launch bar button; the label stays its name
     launchers: [fullclaude, localclaude]
     model: null   # stays null: a --model would override localclaude's gateway model (Claude takes the LAST --model) — test/unit/no_kanban_code_test.rb
     prompt: |
       Test {type} session for {slug} ({dir}): tmux {session}, board name {agent}, cards {cards}.
     agent_name: "claude-{session}"
-    session_name: "{slug}_teamlead"
+    session_name: "by_{slug}_teamlead"
     takes: [queued, working, review, gate]
     max: 0
     # ONE lead per board, always: two leads adopt the same cards (seen twice). Not a capacity cap.
@@ -29,6 +30,7 @@ agent_types:
   # ONE session per card, started by the board's lead (kanban_spawn) for a card it owns or nobody owns.
   - key: worker
     label: Worker
+    launchable: false   # never on the Launch bar: only the lead's kanban_spawn starts a worker, for a card
     launchers: [fullclaude, localclaude]
     # --model on its launch → the collector reads it → the card face shows it; none under localclaude: a
     # --model would override the gateway's model (Claude takes the LAST --model)
@@ -38,7 +40,7 @@ agent_types:
     prompt: |
       Test {type} session for {slug} ({dir}): tmux {session}, board name {agent}, cards {cards}.
     agent_name: "worker-{session}"
-    session_name: "{slug}_worker"
+    session_name: "by_{slug}_worker"
     takes: []
     max: 0
     max_per_project: 0
@@ -50,7 +52,7 @@ agent_types:
     prompt: |
       Test {type} session for {slug} ({dir}): tmux {session}, board name {agent}, cards {cards}.
     agent_name: "team-{session}"
-    session_name: "{slug}_team"
+    session_name: "by_{slug}_team"
     takes: []
     max: 0
     max_per_project: 0
@@ -60,7 +62,7 @@ agent_types:
     model: null   # same: localclaude
     prompt: null
     agent_name: "claude-{session}"
-    session_name: "{slug}"
+    session_name: "by_{slug}"
     takes: []
     max: 0
     max_per_project: 0

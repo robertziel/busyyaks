@@ -54,11 +54,12 @@ export type UpdateStatus = {
   last: UpdateRecord | null;
 };
 
-export const STEPS = ["check", "checkout", "build", "backup", "up", "launcher", "status"] as const;
+export const STEPS = ["check", "checkout", "setup", "build", "backup", "up", "launcher", "status"] as const;
 export const STEP_LABEL: Record<(typeof STEPS)[number], string> = {
   check: "check",
   backup: "back up DB",
   checkout: "checkout",
+  setup: "bin/setup",
   build: "docker build",
   up: "compose up",
   launcher: "launcher",

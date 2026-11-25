@@ -79,6 +79,7 @@ module Busyyaks
       when "churn" then churn(list(req, "shas", 500))
       when "files_at" then files_at(list(req, "refs", MAX_REFS), list(req, "files", MAX_FILES))
       when "ignored" then ignored(req.fetch("file"))
+      when "tracked" then tracked(list(req, "files", MAX_FILES), under: req["under"])
       else raise Refused, "unknown op #{req['op'].inspect}"
       end
     end
@@ -418,6 +419,49 @@ end }
       raise Refused, "#{file.inspect} is not a relative path in the repo" unless plain_path?(file)
 
       { ignored: repo.path_ignored?(file), tracked: !repo.index[file].nil? }
+    end
+
+    # {file => {tracked: in the index?, head: its blob id in HEAD's tree | nil, ignored: by git's ignore rules?}} —
+    # what the project page's Settings tab needs to say that a .busyyaks/skills/agents/<type>.md is tracked, whether
+    # the bytes on disk are the committed ones, and whether git would ever commit it (the caller hashes the work-tree
+    # file itself: nothing of the work tree is read here)
+    # under: a dir (relative, or nil): every file git holds below it — in HEAD's tree or the index — is answered too,
+    # so a file removed from the work tree is still named (the project tab's "removed, uncommitted"); more than
+    # MAX_FILES in all → refused, never cut short
+    def tracked(files, under: nil)
+      head = tree_of("HEAD")
+      files = (files + held_under(head, under)).uniq if under
+      raise Refused, "more than #{MAX_FILES} files to answer" if files.size > MAX_FILES
+
+      { files: files.to_h do |f|
+        raise Refused, "#{f.inspect} is not a relative path in the repo" unless plain_path?(f)
+
+        [f, { tracked: !repo.index[f].nil?, head: head && blob_id(head, f),
+              ignored: repo.path_ignored?(f), },]
+      end }
+    end
+
+    def held_under(head, dir)
+      raise Refused, "#{dir.inspect} is not a relative path in the repo" unless plain_path?(dir)
+
+      inside = ->(p) { p.start_with?("#{dir}/") }
+      out = []
+      repo.index.each { |e| out << e[:path] if inside.(e[:path]) }
+      sub = head && begin
+        head.path(dir)
+      rescue Rugged::TreeError
+        nil
+      end
+      if sub && sub[:type] == :tree
+        repo.lookup(sub[:oid]).walk_blobs(:preorder) { |root, entry| out << "#{dir}/#{root}#{entry[:name]}" }
+      end
+      out.uniq
+    end
+
+    def blob_id(tree, file)
+      tree.path(file)[:oid]
+    rescue Rugged::TreeError
+      nil
     end
 
     def tree_of(ref)

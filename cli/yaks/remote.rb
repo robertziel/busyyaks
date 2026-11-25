@@ -216,7 +216,7 @@ module Busyyaks
         loop = DashboardUrl::LOOPBACK
         ctx.out.puts "#{ports['host']} (#{target}): #{dashboard_url(ports)}"
         if mcp
-          ctx.out.puts "MCP: claude mcp add --transport http --scope user busyyaks-#{ports['host']} " \
+          ctx.out.puts "MCP: claude mcp add --transport http --scope local busyyaks-#{ports['host']} " \
                        "\"http://#{loop}:#{ports['mcp_port']}/mcp\" --header \"Authorization: Bearer $MCP_TOKEN\"",
                        "     MCP_TOKEN = #{ports['host']}'s .env MCP_TOKEN: copy it yourself, yaks never reads or sends it"
         end

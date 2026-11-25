@@ -247,6 +247,45 @@ class LauncherRulesTest < Minitest::Test
     end
   end
 
+  # 2026-11-24: a dead lead's background loop kept busyyaks-<s>.scope alive and the next launch of <s> failed
+  # ("Unit … was already loaded"): every busyyaks scope whose session tmux no longer lists is stopped
+  def test_stale_scopes_are_the_busyyaks_scopes_of_ended_sessions
+    r = Busyyaks::LauncherRules
+    out = <<~UNITS
+      busyyaks-by_repo_teamlead.scope   loaded active running /home/u/.local/bin/claude --remote-control x
+      busyyaks-by_repo_worker.scope     loaded active running claude
+      busyyaks-by_gone_worker_1.scope   loaded active running bash supervise.sh
+      busyyaks-hand_started.scope       loaded active running claude
+      other-app.scope                   loaded active running x
+      busyyaks-.scope                   loaded active running x
+      busyyaks-by_.scope                loaded active running x
+    UNITS
+    assert_equal %w[busyyaks-by_gone_worker_1.scope], r.stale_scopes(out, %w[by_repo_teamlead by_repo_worker])
+    assert_equal [], r.stale_scopes("", [])
+    assert_equal "busyyaks-s1.scope", r.scope_unit("s1")
+  end
+
+  # Critic blocker (2026-11-24): a ping while the session is still starting is retried, never dropped; a session
+  # busyyaks did not start is refused at once (unsupported), one tmux does not list is gone, tmux unreadable = retry
+  def test_a_ping_during_the_start_is_retried_never_dropped
+    r = Busyyaks::LauncherRules
+    pids = { "by_x" => 10, "hand" => 11 }
+    starting = r.notify_refusal("by_x", in_flight: true, pids: {}, launched: false)
+    assert_equal [false, true, "session by_x is still starting"], starting.values_at(:ok, :retry, :error)
+    assert_nil r.notify_refusal("by_x", in_flight: false, pids: pids, launched: true)
+    assert r.notify_refusal("hand", in_flight: false, pids: pids, launched: false)[:unsupported]
+    assert r.notify_refusal("by_gone", in_flight: false, pids: pids, launched: false)[:gone]
+    assert r.notify_refusal("by_x", in_flight: false, pids: nil, launched: false)[:retry]
+  end
+
+  # The operator (2026-11-24): "add naming to the busyyaks sessions so we don't mistake them … start with BY so we can
+  # easily identify and isolate them" — and a session started by hand is never touched by busyyaks
+  def test_only_a_by_prefixed_name_is_a_busyyaks_session
+    r = Busyyaks::LauncherRules
+    assert r.busyyaks_session?("by_acme_app_teamlead")
+    %w[acme_app acme_app_fix health by_ BY_x xby_y].each { |n| refute r.busyyaks_session?(n), n }
+  end
+
   # a corrupt leads.json is refused naming the file, the error class and the line — never the
   # parser's quote of the text, which would carry a key fragment
   def test_a_corrupt_leads_file_is_refused_without_quoting_it

@@ -1,6 +1,6 @@
 // One repo: stats, launch bar with live tmux sessions, contribution graph, commits, notes — and the Board tab.
 import { ProjectIcon } from "../components/ProjectIcon";
-import { useState, type FormEvent } from "react";
+import { useCallback, useRef, useState, type FormEvent } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { apiPost, revalidate, useResource } from "../api";
 import { ProjectBoard } from "../components/Board";
@@ -9,6 +9,8 @@ import { useFlash } from "../components/Flash";
 import { ContribCard } from "../components/Heatmap";
 import { Html } from "../components/Html";
 import { Launch } from "../components/Launch";
+import { ProjectRules } from "../components/ProjectRules";
+import { leaveRefusal } from "../lib/projectRules";
 import { Sessions } from "../components/Sessions";
 import { useStopSessions } from "../components/StopSessions";
 import { ErrorState, Loading } from "../components/States";
@@ -19,21 +21,34 @@ import type { Note, ProjectData } from "../types";
 export function Project() {
   const slug = useParams()["*"] ?? "";
   const [params, setParams] = useSearchParams();
-  const tab = params.get("tab") === "overview" ? "overview" : "board"; // the board is the project's default view
+  // the board is the project's default view; settings = its rules per agent type (ProjectRules)
+  const tabParam = params.get("tab");
+  const tab = tabParam === "overview" || tabParam === "settings" ? tabParam : "board";
   useTitle(slug);
   const key = `/api/projects/${slug.split("/").map(encodeURIComponent).join("/")}`;
   const { data, error, loading, reload } = useResource<ProjectData>(key);
   const { busy: stopping, stop } = useStopSessions(slug, () => void reload());
+  // the Settings tab's unsaved edits (ProjectRules reports them): leaving the tab would drop them without a word
+  const unsaved = useRef(0);
+  const onUnsaved = useCallback((n: number) => {
+    unsaved.current = n;
+  }, []);
+  const { setFlash } = useFlash();
   if (loading) return <Loading what={`project ${slug}`} />;
   if (error && !data) return <ErrorState error={error} what={slug} retry={reload} />;
   if (!data) return null;
   const p = data.project;
   const live = [...p.sessions].sort((a, b) => b.created - a.created);
-  const setTab = (t: "overview" | "board") => {
+  const setTab = (t: "overview" | "board" | "settings") => {
+    const refusal = leaveRefusal(tab, t, unsaved.current);
+    if (refusal) {
+      setFlash({ ok: false, text: refusal });
+      return;
+    }
     const n = new URLSearchParams(params);
     if (t === "board") n.delete("tab");
     else {
-      n.set("tab", "overview");
+      n.set("tab", t);
       n.delete("card");
       n.delete("archived");
     }
@@ -61,6 +76,9 @@ export function Project() {
         <button type="button" role="tab" aria-selected={tab === "overview"} onClick={() => setTab("overview")}>
           Overview
         </button>
+        <button type="button" role="tab" aria-selected={tab === "settings"} onClick={() => setTab("settings")}>
+          Settings
+        </button>
       </div>
       {data.launches.types.length > 0 && (
         <section className="launchbar card">
@@ -75,6 +93,8 @@ export function Project() {
       )}
       {tab === "board" ? (
         <ProjectBoard slug={p.slug} />
+      ) : tab === "settings" ? (
+        <ProjectRules slug={p.slug} onUnsaved={onUnsaved} />
       ) : (
         <>
           <section className="stats">

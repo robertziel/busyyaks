@@ -212,6 +212,7 @@ SESSION_COOKIE_SECURE=false
 SESSION_COOKIE_SAME_SITE=strict
 MCP_TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 MCP_REPORT_TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+MCP_BOARD_TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 COMPOSE_PROFILES=
 DATABASE_ADAPTER=sqlite
 SQLITE_BUSY_TIMEOUT_MS=15000

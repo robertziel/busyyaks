@@ -143,7 +143,7 @@ services:
     mem_limit: ${SERVICE_MEM_LIMIT:?}   # the container's ceiling over its git-read children's own GIT_READ_MEMORY_BYTES
     volumes: *launcher_volumes   # x-app's + the launcher socket dir
     command: ["bin/mcp"]
-    environment: { <<: *env, MCP_PORT: "${MCP_CONTAINER_PORT:?}", MCP_TOKEN: "${MCP_TOKEN:?}", MCP_REPORT_TOKEN: "${MCP_REPORT_TOKEN:?}", MCP_HOST: "${MCP_HOST:?}", LOG_LEVEL: warn, LAUNCHER_SOCKET: /launcher/launcher.sock }
+    environment: { <<: *env, MCP_PORT: "${MCP_CONTAINER_PORT:?}", MCP_TOKEN: "${MCP_TOKEN:?}", MCP_REPORT_TOKEN: "${MCP_REPORT_TOKEN:?}", MCP_BOARD_TOKEN: "${MCP_BOARD_TOKEN:?}", MCP_HOST: "${MCP_HOST:?}", LOG_LEVEL: warn, LAUNCHER_SOCKET: /launcher/launcher.sock }
     ports: ["${MCP_HOST:?}:${MCP_HOST_PORT:?}:${MCP_CONTAINER_PORT:?}"]
     # healthy = it answers its own bearer on /mcp (a GET with MCP_TOKEN → 405, POST only): booted, the token taken — an
     # MCP_TOKEN it refuses stops the boot, so `up --wait` fails instead of returning over a crash loop
@@ -193,7 +193,10 @@ services:
       - *vol_data
       - *vol_config
       - *vol_kanban
-      - ${PROJECTS_ROOT:?}:${PROJECTS_MOUNT:?}   # read-write: .busyyaks/workflow.yml (test/unit/compose_test.rb)
+      - ${PROJECTS_ROOT:?}:${PROJECTS_MOUNT:?}   # read-write: .busyyaks/ — workflow.yml, skills/agents/<type>.md (test/unit/compose_test.rb)
+      # read-only: WHICH scanned repo is this checkout (Settings → Agent rules writes its skills layers through the
+      # projects mount above, only into the repo whose skills/ is this very directory — never a clone or fork)
+      - ./skills:/busyyaks/skills:ro
     environment: { <<: *env, LOG_LEVEL: warn }
     depends_on:
       web: { condition: service_healthy }   # web migrates the database on start: the writer reads workflow_files

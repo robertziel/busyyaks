@@ -16,9 +16,13 @@ class DailyReportDryRunTest < Minitest::Test
   include Rack::Test::Methods
 
   TOKEN = "t" * 40
+  BOARD_TOKEN = "b" * 40
   HOSTILE = "fix $(touch /tmp/pwned) `id`"
 
-  def app = Busyyaks::McpServer.new(token: TOKEN, report_token: "r" * 40, scan_interval: -> { 60 }, store: store, config: nil)
+  def app
+    Busyyaks::McpServer.new(token: TOKEN, report_token: "r" * 40, board_token: BOARD_TOKEN, scan_interval: -> {
+ 60 }, store: store, config: nil)
+  end
 
   def tool(name, args = {})
     header "Authorization", "Bearer #{TOKEN}"

@@ -25,6 +25,12 @@ export type AgentType = {
   max_per_project: number | null;
   // lead-first boards: the lead type a session of this type runs under (only while it runs, on its launcher)
   under?: string | null;
+  // a plain session that runs with no lead (only a type with no prompt that takes nothing; card 463)
+  standalone?: boolean;
+  // false = the Launch bar never offers it: only its lead's kanban_spawn starts one (absent = offered)
+  launchable?: boolean;
+  // the Launch bar button's text ("Launch team lead"); absent / null = the label
+  launch_label?: string | null;
 };
 // one host-allowlisted invocation: a launcher must equal one of them (its key and label are the dashboard's)
 export type Invocation = { kind: string; command: string; args: string[]; via_shell: boolean };
@@ -44,7 +50,10 @@ export type AgentSettingsData = {
 export const COLUMN_TYPES = ["parked", "queued", "working", "review", "gate", "done", "cancelled"] as const;
 
 // In the form a type's model is always one field per launcher it runs ("" = Claude Code's own choice).
-export type TypeDraft = Omit<AgentType, "model" | "prompt" | "under"> & {
+export type TypeDraft = Omit<AgentType, "model" | "prompt" | "under" | "standalone" | "launchable" | "launch_label"> & {
+  standalone: boolean; // kept through the form: a save never drops it (plain would then be a type under no lead)
+  launchable: boolean; // kept through the form: a save never puts a spawn-only type back on the Launch bar
+  launchLabel: string; // "" = the button says the label
   models: Record<string, string>;
   hasPrompt: boolean;
   prompt: string;
@@ -74,6 +83,9 @@ export function toDraft(doc: AgentDoc): Draft {
       max: t.max,
       max_per_project: t.max_per_project,
       under: t.under ?? "",
+      standalone: t.standalone === true,
+      launchable: t.launchable !== false,
+      launchLabel: t.launch_label ?? "",
     })),
   };
 }
@@ -109,6 +121,9 @@ export function fromDraft(d: Draft): AgentDoc {
         max_per_project: t.max_per_project,
       };
       if (t.under) out.under = t.under;
+      if (t.standalone) out.standalone = true;
+      if (!t.launchable) out.launchable = false;
+      if (t.launchLabel.trim()) out.launch_label = t.launchLabel.trim();
       return out;
     }),
   };
@@ -177,11 +192,20 @@ export const newType = (launchers: Launcher[]): TypeDraft => ({
   hasPrompt: false,
   prompt: "",
   agent_name: "claude-{session}",
-  session_name: "{slug}_session",
+  session_name: "by_{slug}_session",
   takes: [],
   max: 0,
   max_per_project: 0,
   under: "",
+  standalone: false,
+  launchable: true,
+  launchLabel: "",
 });
 
 export const sameDoc = (a: AgentDoc, b: AgentDoc) => JSON.stringify(a) === JSON.stringify(b);
+
+// "runs under" offers only the types that can lead: one that runs under no lead itself and is not a standalone plain
+// session (the engine refuses a type under a worker, a sub team or a plain session)
+export function leadChoices(types: TypeDraft[], self: TypeDraft): string[] {
+  return types.filter((t) => t !== self && t.key !== self.key && !t.under && !t.standalone).map((t) => t.key);
+}

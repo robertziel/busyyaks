@@ -11,6 +11,7 @@ require_relative "lib/busyyaks/runtime_settings"
 Busyyaks::EnvFile.shape!("MCP_HOST", ENV.fetch("MCP_HOST"))
 
 run Busyyaks::McpServer.new(token: ENV.fetch("MCP_TOKEN"), report_token: ENV.fetch("MCP_REPORT_TOKEN"),
+                            board_token: ENV.fetch("MCP_BOARD_TOKEN"),
                             scan_interval: lambda {
                               Busyyaks::RuntimeSettings.get(Hanami.app["db.gateway"].connection)[:scan_interval_seconds]
                             })

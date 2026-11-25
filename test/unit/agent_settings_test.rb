@@ -29,16 +29,27 @@ class AgentSettingsTest < Minitest::Test
     end
   end
 
-  def test_show_answers_the_current_revision_the_allowlist_and_each_argv
+  # the audit: "show the real argv a launch adds" — the commands table is the argv bin/launcher runs, with the skills
+  # stage, the board MCP and the prompt behind /busyyaks:session busyyaks adds, never the bare launcher command
+  def test_show_answers_the_current_revision_the_allowlist_and_the_real_argv_a_launch_runs
     status, body = API.show(db: db, commands: ALLOW)
     assert_equal 200, status
     assert_equal %w[fullclaude localclaude], body[:doc]["launchers"].map { |l| l["key"] }
     assert_equal ALLOW, body[:commands]
     assert_nil body[:error]
+    stage = "$LAUNCHER_STATE_DIR/skills/SESSION"
     lead = body[:preview].find { |p| p[:type] == "lead" && p[:launcher] == "fullclaude" }
-    assert_equal %w[claude --permission-mode bypassPermissions --remote-control SESSION], lead[:argv]
+    assert_equal %w[claude --permission-mode bypassPermissions], lead[:argv].first(3)
+    assert_equal %w[--remote-control SESSION], lead[:argv].last(2), "--remote-control stays LAST"
+    pairs = lead[:argv].each_cons(2).to_a
+    assert_includes pairs, ["--plugin-dir", stage]
+    assert_includes pairs, ["--mcp-config", Busyyaks::BoardMcp.claude_path(stage)]
+    assert_includes lead[:argv], "/busyyaks:session <the type's prompt>"
+    plain = body[:preview].find { |p| p[:type] == "plain" && p[:launcher] == "fullclaude" }
+    assert_includes plain[:argv], "/busyyaks:session", "a type with no prompt still starts on the entry skill"
     local = body[:preview].find { |p| p[:type] == "worker" && p[:launcher] == "localclaude" }
-    assert_equal ["bash", "-ic", "localclaude --remote-control SESSION"], local[:argv]
+    assert_equal ["bash", "-ic"], local[:argv].first(2)
+    assert_match(/\Alocalclaude --mcp-config .* --plugin-dir .* --remote-control SESSION\z/, local[:argv].last)
   end
 
   def test_a_save_writes_a_new_revision_that_the_engine_config_runs_at_once
@@ -91,7 +102,8 @@ class AgentSettingsTest < Minitest::Test
   # (written before the check, or by hand) when loaded — every caller of Kanban.config, the MCP tools included
   def test_a_revision_with_a_type_under_no_lead_is_refused_on_save_and_on_load
     d = doc
-    d["agent_types"].find { |t| t["key"] == "worker" }.delete("under")
+    w = d["agent_types"].find { |t| t["key"] == "worker" }
+    %w[under launchable].each { w.delete(_1) }
     n = db[:agent_settings].count
     status, body = save(d)
     assert_equal 422, status
@@ -149,15 +161,58 @@ class AgentSettingsTest < Minitest::Test
 
   def test_the_migration_seeds_the_repo_template
     assert_equal %w[claude], S.template["launchers"].map { |l| l["command"] }
-    assert_equal %w[lead worker team plain], S.template["agent_types"].map { |t| t["key"] }
+    assert_equal %w[lead worker team], S.template["agent_types"].map { |t| t["key"] }
   end
 
   # the worker's PR subagents (QA + Reviewer) run on haiku, never on the worker's own model — said once, in the
   # worker's part of the skills busyyaks hands every worker session (skills/busyyaks/agents/worker.md)
   def test_the_worker_prompt_runs_its_qa_and_reviewer_subagents_on_haiku
     author = File.read(File.expand_path("../../skills/busyyaks/agents/worker.md", __dir__))
-    assert_match(/\*\*QA agent\*\*: a fresh subagent \(`model: "haiku"`\)/, author)
-    assert_match(/dispatch a REVIEWER — a fresh subagent \(`model: "haiku"`\)/, author)
+    # the worker names each subagent's skill; each brief, its own file, says the subagent runs on haiku
+    %w[qa reviewer critic].each do |s|
+      assert_match(/dispatch the on-demand `#{s}` skill's/, author, s)
+      brief = File.read(File.expand_path("../../skills/busyyaks/#{s}/SKILL.md", __dir__))
+      assert_match(/Dispatch a fresh subagent with `model: "haiku"`/, brief, s)
+    end
+  end
+
+  # the operator: "remove ones we don't use like plain!" — no agent type nobody uses: every type the shipped template
+  # defines is started by something (the Launch bar, or its lead's kanban_spawn as the lead's rules say) and has its
+  # rules file; no rules file, face colour or launcher is left for a type or command no type runs
+  def test_no_agent_type_nobody_uses
+    root = File.expand_path("../..", __dir__)
+    types = S.template["agent_types"]
+    keys = types.map { _1["key"] }
+    lead = File.read(File.join(root, "skills/busyyaks/agents/lead.md"))
+    types.each do |t|
+      started = t.fetch("launchable", true) || lead.include?("kanban_spawn(id, \"#{t['key']}\"")
+      assert started, "#{t['key']}: nothing starts it"
+      assert File.exist?(File.join(root, "skills/busyyaks/agents/#{t['key']}.md")), "#{t['key']}: no rules"
+    end
+    assert_empty Dir[File.join(root, "skills/busyyaks/agents/*.md")].map { File.basename(_1, ".md") } - keys
+    assert_empty S.template["launchers"].map { _1["key"] } - types.flat_map { _1["launchers"] }, "a launcher no type runs"
+    example = YAML.safe_load_file(File.join(root, "config/kanban.example.yml"))
+    faces = example["theme"].keys.grep(/\A--ak-face-type-/).map { _1.delete_prefix("--ak-face-type-") }
+    assert_empty faces - keys - example["face_roles"].keys, "a face colour for a type nobody is"
+    refute_includes keys, "plain"
+  end
+
+  # "the critic and the QA brief are editable files like the reviewer": each subagent a session dispatches is its
+  # own on-demand skill of busyyaks's layer, with the one line that says who dispatches it and when
+  def test_the_critic_and_the_qa_brief_are_editable_files_like_the_reviewer
+    root = File.expand_path("../..", __dir__)
+    layer = Busyyaks::Skills.busyyaks!(root, types: S.template["agent_types"].map { _1["key"] },
+                                             settings: Busyyaks::Skills.settings!(SKILLS_SETTINGS)).first
+    briefs = layer.skills.to_h { [_1.name, _1] }
+    assert_equal %w[critic qa reviewer], briefs.keys.sort
+    briefs.each_value { |b| assert_match(/\A(the worker|the worker, )/, b.dispatch, b.name) }
+    assert_match(/input-isolated|ONLY the card's requirement/, briefs["critic"].body)
+    assert_match(/BLOCKER.*MAJOR.*MINOR/m, briefs["critic"].body)
+    assert_match(/break the code it names .* a test that still passes proves nothing/m, briefs["critic"].body)
+    assert_match(/start, stop or kill a session, container or (?:process|PID) you did not start/i,
+                 briefs["critic"].body)
+    worker = File.read(File.join(root, "skills/busyyaks/agents/worker.md"))
+    refute_match(/attaches screenshots|PASS \/ FAIL on the card/, worker, "the QA brief lives in qa/SKILL.md only")
   end
 
   # A template prompt says who the session is; the workflow is the skills', never repeated here

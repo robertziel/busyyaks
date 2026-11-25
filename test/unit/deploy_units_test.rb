@@ -57,8 +57,8 @@ class DeployUnitsTest < Minitest::Test
     assert_match(/AgentCollector\.check!/, src)
     assert_includes src, 'Busyyaks::AgentCollector.refusal(COLLECTOR, req["op"])'
     # the methods that read the collector are reached only through those ops
-    { "agents" => "agents", "agent_tasks" => "agent_tasks(req)", "reap_preview" => "reap_preview", "reap" => "reap(req)",
-      "notify" => "notify(req)", }.each do |op, call|
+    { "agents" => "launched_agents", "agent_tasks" => "agent_tasks(req)", "reap_preview" => "reap_preview",
+      "reap" => "reap(req)", "notify" => "notify(req)", }.each do |op, call|
       assert_includes src, %(when "#{op}" then #{call})
       assert_includes Busyyaks::AgentCollector::OPS, op
     end
