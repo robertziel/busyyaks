@@ -4,19 +4,25 @@
 import { useEffect, useRef, useState } from "react";
 import { apiGet } from "../api";
 
+// A poll runs while the tab is visible; `whileHidden` polls a hidden tab too (the waiting widget: a card that starts
+// waiting there marks the tab, card 611). A pause (a drag, unsaved typing) skips the poll either way.
+export const shouldPoll = (hidden: boolean, whileHidden: boolean, paused: boolean): boolean =>
+  (!hidden || whileHidden) && !paused;
+
 export type LiveState = { at: number | null; error: string | null };
 
 // `onRev` gets every poll's whole body (a rev endpoint may carry small live fields beside the rev, e.g. the last scan).
 export function useLiveRev<B extends { rev: string } = { rev: string }>(
   revUrl: string | null,
   onChange: () => void,
-  opts: { every?: number; paused?: () => boolean; onRev?: (body: B) => void } = {},
+  opts: { every?: number; paused?: () => boolean; onRev?: (body: B) => void; whileHidden?: boolean } = {},
 ): LiveState {
   const every = opts.every ?? 3000;
   const last = useRef<string | null>(null);
   const change = useRef(onChange);
   const paused = useRef(opts.paused);
   const onRev = useRef(opts.onRev);
+  const whileHidden = opts.whileHidden ?? false;
   onRev.current = opts.onRev;
   change.current = onChange;
   paused.current = opts.paused;
@@ -28,7 +34,7 @@ export function useLiveRev<B extends { rev: string } = { rev: string }>(
     let stop = false;
     let ctl: AbortController | null = null;
     const tick = async () => {
-      if (stop || document.hidden || paused.current?.()) return;
+      if (stop || !shouldPoll(document.hidden, whileHidden, paused.current?.() ?? false)) return;
       ctl?.abort();
       ctl = new AbortController();
       try {
@@ -54,7 +60,7 @@ export function useLiveRev<B extends { rev: string } = { rev: string }>(
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", vis);
     };
-  }, [revUrl, every]);
+  }, [revUrl, every, whileHidden]);
 
   return state;
 }
