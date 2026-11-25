@@ -11,6 +11,7 @@ import { apiGet, useResource } from "../api";
 import { now, projectPath } from "../lib/format";
 import { useLiveRev } from "../lib/live";
 import { readWaiting } from "../lib/appBadge";
+import { useNewWaitingAlert } from "../lib/tabAlert";
 import {
   age,
   approvedLine,
@@ -379,7 +380,9 @@ export function WaitingWidget() {
     );
   }, []);
   useEffect(load, [load]);
-  const live = useLiveRev("/api/waiting/rev", load, { every: 4000 });
+  // polled in a background tab too: a card that starts waiting there marks the tab (card 611)
+  const live = useLiveRev("/api/waiting/rev", load, { every: 4000, whileHidden: true });
+  useNewWaitingAlert(data);
   useEffect(() => setAt(now()), [live.at, data]);
 
   const error = fetchErr ?? live.error;
