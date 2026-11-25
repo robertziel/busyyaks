@@ -82,8 +82,8 @@ class CliUpdateTest < Minitest::Test
     sh(@work, "git", "checkout", "-q", "-b", "main")
     File.write(File.join(@work, ".gitignore"), ".env\nconfig/busyyaks.yml\ndata/\ndocker-compose.yml\n")
     @v1 = commit("one")
-    sh(@work, "git", "tag", "v1.0.0")
-    sh(@work, "git", "push", "-q", "origin", "main", "v1.0.0")
+    sh(@work, "git", "tag", "v0.1.0")
+    sh(@work, "git", "push", "-q", "origin", "main", "v0.1.0")
     sh(@dir, "git", "clone", "-q", @remote, @home)
     FileUtils.mkdir_p(File.join(@home, "config"))
     File.write(File.join(@home, "config/busyyaks.yml"),

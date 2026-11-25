@@ -10,7 +10,7 @@ const check = (over: Partial<Check> = {}): Check => ({
   url: "git@example.test:me/busyyaks.git",
   channel: "tags",
   checked_at: "2026-11-18T10:00:00Z",
-  head: { sha: A, branch: "main", describe: "v1.0.0-2-gaaaaaaa" },
+  head: { sha: A, branch: "main", describe: "v0.1.0-2-gaaaaaaa" },
   dirty: [],
   tag: {
     name: "v1.1.0",
@@ -103,7 +103,7 @@ describe("rows", () => {
     expect(
       rows(
         status({
-          check: check({ head: { sha: A, branch: null, describe: "v1.0.0" } }),
+          check: check({ head: { sha: A, branch: null, describe: "v0.1.0" } }),
         }),
       )[0]!.blocked,
     ).toBeNull();

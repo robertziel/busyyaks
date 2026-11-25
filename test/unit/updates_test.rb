@@ -23,8 +23,8 @@ class UpdatesTest < Minitest::Test
     sh(@dir, "git", "clone", "-q", @remote, @work)
     sh(@work, "git", "checkout", "-q", "-b", "main")
     commit(@work, "one")
-    sh(@work, "git", "tag", "v1.0.0")
-    sh(@work, "git", "push", "-q", "origin", "main", "v1.0.0")
+    sh(@work, "git", "tag", "v0.1.0")
+    sh(@work, "git", "push", "-q", "origin", "main", "v0.1.0")
     sh(@dir, "git", "clone", "-q", @remote, @co)
     @settings = U.parse!(OK)
   end
@@ -89,7 +89,7 @@ class UpdatesTest < Minitest::Test
     assert_equal Gem::Version.new("1.2.0"), s.version_of("release-1.2.0-final")
     assert_nil s.version_of("release-x-final")
     assert_nil s.version_of("v1.2.0")
-    assert_operator @settings.version_of("v1.0.0"), :>, @settings.version_of("v1.0.0-beta.2")
+    assert_operator @settings.version_of("v0.1.0"), :>, @settings.version_of("v0.1.0-beta.2")
     assert_operator @settings.version_of("v1.10.0"), :>, @settings.version_of("v1.9.0")
     assert_nil @settings.version_of("vnext")
   end
@@ -97,10 +97,10 @@ class UpdatesTest < Minitest::Test
   def test_current_when_nothing_is_newer
     c = check
     assert_equal "current", c[:tag][:state]
-    assert_equal "v1.0.0", c[:tag][:name]
+    assert_equal "v0.1.0", c[:tag][:name]
     assert_equal "current", c[:branch][:state]
     assert_equal "main", c[:head][:branch]
-    assert_equal "v1.0.0", c[:head][:describe]
+    assert_equal "v0.1.0", c[:head][:describe]
     refute c[:available]
     assert_equal NOW.iso8601, c[:checked_at]
     assert_equal @remote, c[:url]
@@ -238,7 +238,7 @@ class UpdatesTest < Minitest::Test
   end
 
   def test_move_detached_checks_out_the_commit
-    sh(@co, "git", "checkout", "-q", "--detach", "v1.0.0")
+    sh(@co, "git", "checkout", "-q", "--detach", "v0.1.0")
     head = release("two")
     t = U.target!(check, @settings, mode: "branch")
     assert_nil t[:branch]
@@ -261,7 +261,7 @@ class UpdatesTest < Minitest::Test
     sh(@work, "git", "push", "-q", "origin", ":refs/tags/v1.1.0")
     sh(@co, "git", "tag", "v9.0.0")
     c = check
-    assert_equal ["v1.0.0", "current"], c[:tag].values_at(:name, :state)
+    assert_equal ["v0.1.0", "current"], c[:tag].values_at(:name, :state)
     assert_includes sh(@co, "git", "tag"), "v9.0.0"
   end
 
