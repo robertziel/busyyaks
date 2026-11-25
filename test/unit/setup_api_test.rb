@@ -60,13 +60,14 @@ class SetupAPITest < Minitest::Test
     assert_equal [false, "no scan has finished yet (compose service scanner)"], c["scanner"].values_at(:ok, :detail)
     assert_equal [false, "launcher socket missing"], c["launcher"].values_at(:ok, :detail)
     assert c["agents"][:ok], c["agents"].inspect
-    assert_equal [false, "no GitHub collection has run yet (compose service github)"], c["github"].values_at(:ok, :detail)
+    assert_equal [false, "no GitHub collection has run yet for octotest (compose service github)"],
+                 c["github"].values_at(:ok, :detail)
   end
 
   def test_healthy_checks_carry_their_numbers
     now = Busyyaks::Clock.epoch
     db[:scans].insert(started_at: now - 5, finished_at: now - 1, repos: 7)
-    db[:gh_runs].insert(login: ENV.fetch("GITHUB_LOGIN"), started_at: now - 9, finished_at: now - 2, ok: true,
+    db[:gh_runs].insert(login: GitHostFixture::LOGIN, started_at: now - 9, finished_at: now - 2, ok: true,
                         baseline: false)
     c = checks(show.last)
     assert_equal [true, true, true], [c["scanner"][:ok], c["launcher"][:ok], c["github"][:ok]]
@@ -80,7 +81,7 @@ class SetupAPITest < Minitest::Test
   def test_a_failed_scan_and_a_failed_github_run_are_shown_as_failed
     now = Busyyaks::Clock.epoch
     db[:scans].insert(started_at: now - 5, finished_at: now - 1, repos: 0, error: "root /projects missing")
-    db[:gh_runs].insert(login: ENV.fetch("GITHUB_LOGIN"), started_at: now - 9, finished_at: now - 2, ok: false,
+    db[:gh_runs].insert(login: GitHostFixture::LOGIN, started_at: now - 9, finished_at: now - 2, ok: false,
                         baseline: false, error: "401 bad credentials")
     c = checks(show.last)
     assert_equal [false, "last scan failed: root /projects missing"], c["scanner"].values_at(:ok, :detail)

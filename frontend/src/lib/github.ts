@@ -1,5 +1,12 @@
 // The /github page's pure logic: which window the URL asks for, and the collector status line.
-import type { GithubFeedRepo, GithubFeedStatus, GithubPollers, GithubStatus } from "../types";
+import type {
+  GithubAnswer,
+  GithubFeedRepo,
+  GithubFeedStatus,
+  GithubOffData,
+  GithubPollers,
+  GithubStatus,
+} from "../types";
 import { ago, at } from "./format";
 
 export const WINDOWS = [
@@ -113,3 +120,6 @@ export function repoSummary(r: GithubFeedRepo): { types: string; actors: string 
     actors: actors.length > 3 ? `${actors.slice(0, 3).join(", ")} +${actors.length - 3}` : actors.join(", "),
   };
 }
+
+// no GitHub connected: the answer carries the sentence and the CI sections only
+export const githubOff = (d: GithubAnswer): d is GithubOffData => typeof d.github_off === "string";

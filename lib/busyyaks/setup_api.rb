@@ -6,6 +6,7 @@ require_relative "launcher_client"
 require_relative "clock"
 require_relative "daily_report_settings"
 require_relative "harnesses"
+require_relative "git_hosts"
 
 module Busyyaks
   # The first-run hello screen (/hello): the boot checks, where the projects come from, and the agent
@@ -168,9 +169,16 @@ module Busyyaks
             "revision #{agents[:revision][:id]}")
     end
 
-    def github_check(github, env)
-      last = github.last_run(env.fetch("GITHUB_LOGIN"))
-      return check("github", "GitHub collector", false, "no GitHub collection has run yet (compose service github)") unless last
+    def github_check(github, _env)
+      login = GitHosts.github_login(github.db)
+      # not connected is a choice, not a failure: the check says where to connect it
+      return check("github", "GitHub", true, "#{GitHosts.not_connected} (optional)") unless login
+
+      last = github.last_run(login)
+      unless last
+        return check("github", "GitHub collector", false,
+                     "no GitHub collection has run yet for #{login} (compose service github)")
+      end
       return check("github", "GitHub collector", false, last[:error].to_s) unless last[:ok]
 
       check("github", "GitHub collector", true, "last run #{Time.at(last[:finished_at]).utc.iso8601}")

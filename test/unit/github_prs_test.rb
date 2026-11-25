@@ -57,7 +57,7 @@ class GithubPrsTest < Minitest::Test
     @gh.fail_with = [401, "Bad credentials"]
     r = collect!
     refute r[:ok]
-    assert_match(/rejected GITHUB_TOKEN/, r[:error])
+    assert_match(/rejected the token/, r[:error])
     prs, status = read
     assert_equal 1, prs.size, "what was read before stays"
     assert_equal [false, NOW], [status[:ok], status[:last_ok_at]]

@@ -66,7 +66,7 @@ class ReadmeLoadDumpTest < Minitest::Test
 
   # → [output, success?]: the printed line, or the refusal's message
   def load!(mode = "load", at: NOW)
-    env = { "DUMP_DIR" => @dir, "ATTACHMENTS_DIR" => @attachments, "GITHUB_LOGIN" => "dev-example" }
+    env = { "DUMP_DIR" => @dir, "ATTACHMENTS_DIR" => @attachments, "DEMO_GITHUB_LOGIN" => "dev-example" }
     Busyyaks::Clock.stub(:epoch, at) { [Busyyaks::ReadmeLoadDump.run(mode, db: db, env: env), true] }
   rescue Busyyaks::ReadmeLoadDump::Refused => e
     [e.message, false]

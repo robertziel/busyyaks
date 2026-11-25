@@ -96,11 +96,16 @@ export function Today() {
           <CommitLog commits={data.today_commits} fold={narrow ? 6 : 14} />
         </section>
         <section>
-          <Head title="Merged PRs" parts={[`${data.merged_prs_total} in ${data.days.length}d`]}>
-            <PrStatusLine status={data.pr_status} />
+          <Head title="Merged PRs" parts={[`${data.github_off ? "—" : data.merged_prs_total} in ${data.days.length}d`]}>
+            <PrStatusLine status={data.pr_status} off={data.github_off} />
           </Head>
           <div className="td-panel">
-            <MergedPrs prs={data.merged_prs} total={data.merged_prs_total} fold={narrow ? 6 : 14} />
+            <MergedPrs
+              prs={data.merged_prs}
+              total={data.merged_prs_total}
+              fold={narrow ? 6 : 14}
+              off={data.github_off}
+            />
           </div>
         </section>
       </div>

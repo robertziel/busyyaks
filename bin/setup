@@ -29,6 +29,9 @@ MIN_SESSION_SECRET_BYTES=64   # lib/busyyaks/session_cookie.rb SessionCookie::MI
 MIN_MCP_TOKEN_CHARS=32        # lib/busyyaks/mcp_server.rb McpServer::MIN_TOKEN_CHARS (MCP_TOKEN, MCP_REPORT_TOKEN, MCP_BOARD_TOKEN)
 # the .env keys moved to Settings → Runtime (lib/busyyaks/runtime_settings.rb RuntimeSettings::KEYS): `check`
 # refuses a .env that still has one
+# the git host's keys moved to Settings → Git hosts (lib/busyyaks/git_hosts.rb): `check` refuses a .env that
+# still has one, naming the one-time import
+GIT_HOSTS_MOVED="GITHUB_LOGIN GITHUB_TOKEN"
 RUNTIME_MOVED="SCAN_INTERVAL_SECONDS WRITER_SYNC_SECONDS GITHUB_INTERVAL_SECONDS GITHUB_CI_INTERVAL_SECONDS NOTIFIER_INTERVAL_SECONDS NOTIFIER_WATCH_SECONDS WATCHDOG_GRACE_SECONDS"
 
 dir=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -261,6 +264,16 @@ SHAPE
       bad "$k moved to Settings → Runtime: start web alone (docker compose up -d --wait web: it migrates)," \
         "import your values (docker compose exec -T web bin/runtime-settings import-env < .env), then delete the line" \
         "from .env (docs/DEPLOY.md § Runtime settings)"
+    fi
+  done
+
+  # the git host (GitHub login + token) moved to Settings → Git hosts: the token now lives only in the
+  # github service's own volume; a line left here would look like it still connects GitHub
+  for k in $GIT_HOSTS_MOVED; do
+    if grep -q "^[[:space:]]*$k=" .env; then
+      bad "$k moved to Settings → Git hosts: connect GitHub there, or import these lines once" \
+        "(docker compose up -d --wait web github, then docker compose exec -T github bin/git-hosts import-env < .env)," \
+        "then delete GITHUB_LOGIN and GITHUB_TOKEN from .env (docs/DEPLOY.md § Git hosts)"
     fi
   done
 

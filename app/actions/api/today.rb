@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "busyyaks/clock"
+require "busyyaks/git_hosts"
 
 module Busyyaks
   module Actions
@@ -26,8 +27,9 @@ module Busyyaks
           first = now.to_date - (window_days - 1) # the scanner keeps window_days × 24 h, so this whole local day is in it
           from = Time.new(first.year, first.month, first.day).to_i
           window = store.commits(since: from, limit: 1_000_000)
-          prs, pr_status = Busyyaks::GithubPrs.read(Busyyaks::GithubNetwork::Data.default.db,
-                                                    login: ENV.fetch("GITHUB_LOGIN"), from: from)
+          gh_db = Busyyaks::GithubNetwork::Data.default.db
+          login = Busyyaks::GitHosts.github_login(gh_db) # nil: no GitHub connected — said, never 0 PRs
+          prs, pr_status = login ? Busyyaks::GithubPrs.read(gh_db, login: login, from: from) : [[], nil]
           prs_since = pr_status && pr_status[:since] && Date.iso8601(pr_status[:since])
           prs_today_known = prs_since && prs_since <= now.to_date
           slugs = projects.each_with_object({}) do |p, h|
@@ -49,6 +51,7 @@ module Busyyaks
                  end,
                  merged_prs_total: prs.size,
                  pr_status: pr_status,
+                 github_off: login ? nil : Busyyaks::GitHosts.not_connected,
                  scan: scan && { started_at: scan[:started_at], finished_at: scan[:finished_at],
                                  repos: scan[:repos], error: scan[:error], },
                  year: year, year_total: Busyyaks::Heatmap.total(year), year_all: Busyyaks::Heatmap.total(store.daily),

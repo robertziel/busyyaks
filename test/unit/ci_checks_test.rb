@@ -270,6 +270,16 @@ class CiChecksTest < Minitest::Test
     assert_match(/\Ano progress for 90 min/, @kb.card(@id)[:progress_stale])
   end
 
+  # no git host connected → nothing can be read, so an approval is refused naming why — never "not read
+  # yet" (no collector would ever answer it), and nothing is asked of the poller
+  def test_approval_is_refused_while_no_git_host_is_connected
+    GitHostFixture.none!(@conn)
+    step = { from: "human_check", to: "local_merged_pr", then: "deploy_check", name: "Approve", final: false }
+    answer = @port.approval_checks(@card, step)
+    assert_equal ["blocked", "GitHub not connected — Settings → Git hosts"], answer.values_at(:state, :reason)
+    assert_empty @conn[:gh_pr_checks].all
+  end
+
   # the approval gate's port. Not enrolled: every step reads the card's `pr` PR. Enrolled: a non-final step reads
   # the `local` PR; the final step the `public` one; none assigned, one on another repo, or an enrolment without a
   # public repo is said.
@@ -1151,7 +1161,7 @@ class CiChecksTest < Minitest::Test
     assert_raises(CK::Unavailable) { @port.pr_checks(@card) } # re-requests (touches requested_at) while still stale
     @poller.run
     e = assert_raises(CK::Unavailable) { @port.pr_checks(@card) }
-    assert_match(/rejected GITHUB_TOKEN/, e.message)
+    assert_match(/rejected the token/, e.message)
   end
 
   def test_requested_but_never_polled_for_too_long_is_unavailable

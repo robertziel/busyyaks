@@ -644,6 +644,37 @@ that only a verdict about the screen leaves the host: the screen and your keys n
 | proxy | mode 2 / 3 with `public_host: allow`: the nginx template's `location = /api/terminal` passes the WebSocket upgrade (`bin/render-deploy` again after an update) |
 | wire | the launcher's `attach` op on its socket: one JSON line `{ok, session, cols, rows, screen}`, then JSON lines both ways (`lib/busyyaks/terminal.rb`); the web relays it as WebSocket text messages |
 
+## Git hosts (GitHub)
+
+GitHub is optional and connected in the app, not in `.env`: **Settings → Git hosts** (`/settings/git-hosts`, also a
+step of `/hello`). Paste a token (read-only public data is enough: `gh auth token`, or a fine-grained token with no
+repository access) → the `github` service checks it with GitHub (`GET /user`, which also gives the login) → the token
+is stored as a file in the `git-hosts` Docker volume, mounted into the `github` service and nowhere else (not `./data`,
+not the projects mount); the login, the provider and the token's last four characters go into the database
+(`git_host_connections`, one row per change). The web hands the token over through that service's socket
+(`GIT_HOSTS_SOCKET`) and keeps nothing; the github service down → 503, nothing changed.
+
+| state | what busyyaks does |
+|---|---|
+| nothing connected (a fresh install) | the `github` service reads nothing; `/github`, Today's merged-PR line, the PR flags on cards and the `/hello` check say "GitHub not connected — Settings → Git hosts"; an approval or handoff into a gate with `requires_green_ci` is refused with that reason (never "not read yet": nothing would answer) |
+| connected | as before network, feed, merged PRs, PR states and CI checks, every `github_interval_seconds` / `github_ci_interval_seconds` |
+| disconnected | the token file is removed, a `{provider: null}` row recorded; the stored snapshots stay |
+
+GitLab is listed as "coming soon": connecting it is refused. A new host is a new `Busyyaks::GitHosts::Provider` class
+(`lib/busyyaks/git_hosts.rb`).
+
+**Upgrading a deployment that had `GITHUB_LOGIN` / `GITHUB_TOKEN` in `.env`** (`bin/setup check` refuses them now):
+
+```sh
+docker compose up -d --wait web github                          # web migrates (git_host_connections), github opens its socket
+docker compose exec -T github bin/git-hosts import-env < .env    # GitHub checks GITHUB_TOKEN; its login must equal GITHUB_LOGIN
+$EDITOR .env                                                     # delete the GITHUB_LOGIN and GITHUB_TOKEN lines
+bin/setup check
+```
+
+`bin/git-hosts show` prints the connection (and whether the token file is there); `bin/git-hosts disconnect` removes it.
+`GITHUB_WEBHOOK_SECRET` stays in `.env` (the web's, [GitHub webhook](#github-webhook-wakes-the-pr--ci-polls)).
+
 ## GitHub webhook (wakes the PR / CI polls)
 
 Card #472: the card links' PR flags (`gh_pr_states`) and the approval gates' CI (`gh_pr_checks`) are polled by the

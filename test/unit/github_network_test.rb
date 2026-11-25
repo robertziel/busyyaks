@@ -179,7 +179,7 @@ class GithubNetworkTest < Minitest::Test
     @gh.fail_with = [401, "Bad credentials"]
     r = run!
     refute r[:ok]
-    assert_equal "GitHub rejected GITHUB_TOKEN (401): Bad credentials", r[:error]
+    assert_equal "GitHub rejected the token (401): Bad credentials", r[:error]
     assert r[:baseline], "nothing was stored: the next run is still the baseline"
   end
 
@@ -214,11 +214,11 @@ class GithubNetworkTest < Minitest::Test
     assert_includes html, %(src="https://avatars.githubusercontent.com/u/9?v=4&amp;s=40")
     assert_includes html, ">bob</a> and <a"
     assert_includes html, "Erin E"
-    assert_equal [], Busyyaks::ReportBlocks.github_unverified(md, @data.db)
+    assert_equal [], Busyyaks::ReportBlocks.github_unverified(md, @data.db, login: "me")
     forged = md.sub("o/r1", "evil/invented")
     assert_equal ["tl:github (block 1): evil/invented — no stored star by @bob",
                   "tl:github (block 1): evil/invented — no stored star by @alice",],
-                 Busyyaks::ReportBlocks.github_unverified(forged, @data.db)
+                 Busyyaks::ReportBlocks.github_unverified(forged, @data.db, login: "me")
   end
 
   def test_block_caps_and_counts_the_rest

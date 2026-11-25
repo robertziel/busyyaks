@@ -8,9 +8,10 @@ import { useResource } from "../api";
 import { Html } from "../components/Html";
 import { ErrorState, Loading } from "../components/States";
 import { at, now } from "../lib/format";
-import { feedLine, parseWindow, pollersLine, repoSummary, statusLine, WINDOWS } from "../lib/github";
+import { feedLine, githubOff, parseWindow, pollersLine, repoSummary, statusLine, WINDOWS } from "../lib/github";
 import { useTitle } from "../lib/title";
-import type { GithubData } from "../types";
+import { GitHostOff } from "../components/GitHosts";
+import type { GithubAnswer, GithubData } from "../types";
 
 const MARK = (
   <svg viewBox="0 0 16 16" aria-hidden="true" className="ghp-mark">
@@ -21,12 +22,51 @@ const MARK = (
   </svg>
 );
 
+// the CI sections: shown connected or not (the gates read CI through the same token, said apart from the feed)
+function CiAlerts({ data }: { data: Pick<GithubData, "ci_unconfigured" | "gate_stale" | "ci_window"> }) {
+  return (
+    <>
+      {data.ci_unconfigured.length > 0 && (
+        <p className="ghp-status t-warn" role="alert">
+          <i className="tl-dot" />
+          <span>CI contexts not configured for {data.ci_unconfigured.join(", ")}</span>
+          <span>config ci.required</span>
+        </p>
+      )}
+      {data.gate_stale.map((g) => (
+        <p key={g.card} className="ghp-status t-bad">
+          <i className="tl-dot" />
+          <span>
+            <a href={g.path} data-card-id={g.card}>
+              card {g.card}
+            </a>{" "}
+            · {g.column}
+          </span>
+          {g.reads.map((r) => (
+            <span key={`${r.repo} ${r.ref}`}>
+              {r.repo} {r.ref} ·{" "}
+              {r.error
+                ? `poll failed: ${r.error}`
+                : r.why
+                  ? r.why
+                  : r.age === null
+                    ? "never asked"
+                    : `asked ${r.age}s ago`}
+            </span>
+          ))}
+          <span>not answered inside the {data.ci_window}s poll window · Approve refused until read</span>
+        </p>
+      ))}
+    </>
+  );
+}
+
 export function GitHub() {
   useTitle("GitHub");
   const { search } = useLocation();
   const w = parseWindow(search);
   const hours = "error" in w ? null : w.hours;
-  const { data, error, loading, reload } = useResource<GithubData>(hours ? `/api/github?hours=${hours}` : null, {
+  const { data, error, loading, reload } = useResource<GithubAnswer>(hours ? `/api/github?hours=${hours}` : null, {
     every: 300_000,
   });
 
@@ -34,7 +74,7 @@ export function GitHub() {
     <div className="ghp-head">
       <h1>
         {MARK} GitHub network
-        {data && (
+        {data && !githubOff(data) && (
           <a className="ghp-who" href={`https://github.com/${data.login}?tab=following`} target="_blank" rel="noopener">
             @{data.login} · <b>{data.followees.length}</b> following
           </a>
@@ -76,6 +116,16 @@ export function GitHub() {
       </>
     );
   if (!data) return null;
+  if (githubOff(data))
+    return (
+      <div className="ghp">
+        {head}
+        <CiAlerts data={data} />
+        <div className="gith-empty">
+          <GitHostOff text={data.github_off} />
+        </div>
+      </div>
+    );
 
   const st = statusLine(data.status, now());
   const fl = feedLine(data.feed.status, now(), data.window.from);
@@ -97,37 +147,7 @@ export function GitHub() {
           <span key={i}>{p}</span>
         ))}
       </p>
-      {data.ci_unconfigured.length > 0 && (
-        <p className="ghp-status t-warn" role="alert">
-          <i className="tl-dot" />
-          <span>CI contexts not configured for {data.ci_unconfigured.join(", ")}</span>
-          <span>config ci.required</span>
-        </p>
-      )}
-      {data.gate_stale.map((g) => (
-        <p key={g.card} className="ghp-status t-bad">
-          <i className="tl-dot" />
-          <span>
-            <a href={g.path} data-card-id={g.card}>
-              card {g.card}
-            </a>{" "}
-            · {g.column}
-          </span>
-          {g.reads.map((r) => (
-            <span key={`${r.repo} ${r.ref}`}>
-              {r.repo} {r.ref} ·{" "}
-              {r.error
-                ? `poll failed: ${r.error}`
-                : r.why
-                  ? r.why
-                  : r.age === null
-                    ? "never asked"
-                    : `asked ${r.age}s ago`}
-            </span>
-          ))}
-          <span>not answered inside the {data.ci_window}s poll window · Approve refused until read</span>
-        </p>
-      ))}
+      <CiAlerts data={data} />
       <div className="ghp-grid">
         <div className="ghp-main">
           <section className="ghp-feed" aria-label="Feed">

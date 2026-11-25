@@ -131,12 +131,16 @@ class ComposeTest < Minitest::Test
     refute_includes base, mount
     %w[web mcp notifier].each do |name|
       s = services.fetch(name)
-      assert_equal base + [mount], s.fetch("volumes"), name
+      # web also reaches the github service's socket (Settings → Git hosts)
+      own = name == "web" ? ["git-hosts-run:/git-hosts-run"] : []
+      assert_equal base + [mount] + own, s.fetch("volumes"), name
       assert_equal "/launcher/launcher.sock", s.fetch("environment").fetch("LAUNCHER_SOCKET"), name
     end
     %w[scanner github].each do |name|
       s = services.fetch(name)
-      assert_equal base, s.fetch("volumes"), "#{name} gets x-app's volumes only"
+      # github also holds the git host's token volume (test_the_git_host_token_is_the_github_services_alone)
+      own = name == "github" ? %w[git-hosts:/var/lib/busyyaks/git-hosts git-hosts-run:/git-hosts-run] : []
+      assert_equal base + own, s.fetch("volumes"), "#{name} gets x-app's volumes only"
       refute s.fetch("environment").key?("LAUNCHER_SOCKET"), name
     end
     root = File.expand_path("../..", __dir__)
@@ -173,13 +177,35 @@ class ComposeTest < Minitest::Test
     end
   end
 
+  # the git host's token is a file in the named volume git-hosts — mounted into the github service and no
+  # other (not ./data, not the projects mount: every service has those); its socket (connect / test / disconnect) is in
+  # git-hosts-run, mounted into web and github only; no service gets a GitHub env key
+  def test_the_git_host_token_is_the_github_services_alone
+    assert_equal %w[git-hosts git-hosts-run], COMPOSE.fetch("volumes").keys
+    holders = lambda do |vol|
+      COMPOSE.fetch("services").select { |_, svc| Array(svc["volumes"]).any? { _1.to_s.start_with?("#{vol}:") } }.keys
+    end
+    assert_equal ["github"], holders.call("git-hosts")
+    assert_equal %w[web github], holders.call("git-hosts-run")
+    assert_equal "/var/lib/busyyaks/git-hosts", COMPOSE.dig("services", "github", "environment", "GIT_HOSTS_DIR")
+    COMPOSE.fetch("services").each do |name, svc|
+      env = svc["environment"].is_a?(Hash) ? svc["environment"].keys : []
+      assert_empty env & %w[GITHUB_LOGIN GITHUB_TOKEN], name
+    end
+    %w[web github].each do |name|
+      assert_equal "/git-hosts-run/git-hosts.sock", COMPOSE.dig("services", name, "environment", "GIT_HOSTS_SOCKET"), name
+    end
+  end
+
   # bin/launcher refuses a LAUNCHER_STATE_DIR inside (or around) anything a container mounts; its `mounted:` list must
   # cover every host source compose binds — a new kind of source fails here until the launcher checks it too
   def test_the_launchers_mounted_list_covers_every_compose_bind
     # (a bare container path, e.g. the test service's "/app/public/app", is an anonymous volume: no host source)
+    # (a named volume, declared at compose's top level, is Docker's: no host path to overlap)
+    named = COMPOSE.fetch("volumes", {}).keys
     sources = COMPOSE.fetch("services").values.flat_map { |svc| Array(svc["volumes"]) }.filter_map do |v|
       v.is_a?(Hash) ? v.fetch("source") : v[/\A(\$\{[^}]+\}|[^:]+):/, 1]
-    end.uniq
+    end.uniq - named
     kinds = sources.filter_map do |src|
       case src
       # one FILE, not a dir (card #280): a container sees that file and nothing beside it, so no state dir can be in

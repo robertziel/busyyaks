@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "busyyaks/github_network"
+require "busyyaks/git_hosts"
 require "busyyaks/ci_checks"
 require "busyyaks/kanban"
 
@@ -19,7 +20,15 @@ module Busyyaks
             error!(res, 400, "hours must be a whole number 1..#{GithubNetwork::MAX_HOURS}") unless hours && (1..GithubNetwork::MAX_HOURS).cover?(hours)
 
             data = GithubNetwork::Data.default
-            feed = GithubNetwork::Feed.call(data, login: ENV.fetch("GITHUB_LOGIN"), hours: hours)
+            login = Busyyaks::GitHosts.github_login(data.db)
+            # no GitHub connected: the page says so and where to connect it — no feed is made up
+            unless login
+              return json(res, { github_off: Busyyaks::GitHosts.not_connected,
+                                 ci_unconfigured: CiChecks.unlisted(data.db, Config.load.ci),
+                                 gate_stale: Kanban.stale_gates, ci_window: Kanban.ci_window, })
+            end
+
+            feed = GithubNetwork::Feed.call(data, login: login, hours: hours)
             d = GithubNetwork::Block.data(feed, max: nil)
             network = ReportBlocks.gh_network(d["network"])
             window = GithubNetwork::Block.window_label(hours)

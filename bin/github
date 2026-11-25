@@ -7,6 +7,7 @@
 # and by the MCP tool github_network. A failed run invents nothing; the next one tries again. Both intervals
 # (github_interval_seconds, github_ci_interval_seconds) are Settings → Runtime, read at every turn.
 require "hanami/prepare"
+require "fileutils"
 require "busyyaks/github_network"
 require "busyyaks/ci_checks"
 require "busyyaks/pr_states"
@@ -16,10 +17,32 @@ require "busyyaks/config"
 require "busyyaks/github_hook"
 require "busyyaks/clock"
 require "busyyaks/runtime_settings"
+require "busyyaks/git_hosts"
+require "busyyaks/private_socket"
 
-login = ENV.fetch("GITHUB_LOGIN")
-token = ENV.fetch("GITHUB_TOKEN")
+# The git host: connected on Settings → Git hosts through this service's socket (GIT_HOSTS_SOCKET) — the
+# login in the database (git_host_connections), the token in GIT_HOSTS_DIR, a volume only this service mounts. Both
+# read at every turn: a connect or disconnect applies without a restart. Nothing connected → nothing is read; the
+# pages say "GitHub not connected" (never a run recorded as if it had happened).
 data = Busyyaks::GithubNetwork::Data.default
+store = Busyyaks::GitHosts::Store.new(ENV.fetch("GIT_HOSTS_DIR"))
+sock_path = ENV.fetch("GIT_HOSTS_SOCKET")
+FileUtils.mkdir_p(File.dirname(sock_path), mode: 0o700)
+File.unlink(sock_path) if File.socket?(sock_path)
+Busyyaks::GitHosts::Server.new(db: data.db, store: store, socket: Busyyaks::PrivateSocket.bind(sock_path),
+                               log: ->(line) { puts line }).start
+said = nil
+# → [provider, login, token] of the connected host, or nil (said once per change: not connected / no token file)
+connection = lambda do
+  cur = Busyyaks::GitHosts.current(data.db)
+  token = cur && store.token(cur[:provider])
+  why = if cur.nil? then Busyyaks::GitHosts.not_connected
+        elsif token.nil? then "#{cur[:label]} connected as #{cur[:login]} but its token file is missing: connect it again"
+        end
+  puts "github: #{why}" if why && why != said
+  said = why
+  why ? nil : [Busyyaks::GitHosts.provider!(cur[:provider]), cur[:login], token]
+end
 config = Busyyaks::Config.load
 window_days = config.window_days # the home page's range (/api/today reads the same key)
 $stdout.sync = true
@@ -35,62 +58,56 @@ Thread.new do
   gate = Busyyaks::GithubPollers.new(db: data.db)
   loop do
     ci_interval = Busyyaks::RuntimeSettings.get(data.db)[:github_ci_interval_seconds]
+    provider, _, token = connection.call
+    unless token
+      Busyyaks::Clock.pause(ci_interval)
+      next
+    end
     # GitHub webhooks (config github_hook; card #472) mark rows dirty: between two full polls, every wake_seconds the
     # dirty ones are polled at once. Off → a plain sleep.
     waker = Busyyaks::GithubHook::Waker.new(db: data.db, settings: config.github_hook,
                                              wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval))
-    client = Busyyaks::GithubNetwork::Client.new(token: token) # one per tick: its counters are the tick's cost
-    poller = Busyyaks::CiChecks::Poller.new(db: data.db, client: client, gate: gate,
-                                            wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval),
-                                            ci: config.ci) # config ci: the contexts that gate per repo + the stuck limit
-    states = Busyyaks::PrStates::Poller.new(db: data.db, client: client, gate: gate,
-                                            wanted_for: Busyyaks::PrStates.wanted_for(ci_interval))
-    begin
-      n = poller.run
-      puts "ci checks polled=#{n}" if n.positive?
-    rescue StandardError => e
-      puts "ci checks FAILED #{e.class}: #{e.message}"
+    # config ci: the contexts that gate per repo + the stuck limit
+    poll = ->(dirty) { provider.poll(db: data.db, token: token, gate: gate, interval: ci_interval, ci: config.ci, dirty: dirty) }
+    say = lambda do |label, out|
+      puts "#{label} polled=#{out[:polled]}" if out[:polled].positive?
+      out[:failed].each { puts "#{label} FAILED #{_1}" }
     end
     begin
-      n = states.run
-      puts "pr states polled=#{n}" if n.positive?
-    rescue StandardError => e
-      puts "pr states FAILED #{e.class}: #{e.message}"
-    end
-    begin
-      gate.finished(client)
+      say.call("pr + ci", poll.call(false))
       why = gate.paused
       puts "pr pollers #{why}" if why
     rescue StandardError => e
-      puts "pr pollers status FAILED #{e.class}: #{e.message}"
+      puts "pr + ci poll FAILED #{e.class}: #{e.message}"
     end
     # the wakes until the next full poll: each its own client, so its cost is recorded as a tick of its own
     waker.wait(ci_interval) do
-      wake = Busyyaks::GithubNetwork::Client.new(token: token)
-      n = Busyyaks::CiChecks::Poller.new(db: data.db, client: wake, gate: gate,
-                                         wanted_for: Busyyaks::CiChecks.wanted_for(ci_interval), ci: config.ci).run(dirty: true) +
-          Busyyaks::PrStates::Poller.new(db: data.db, client: wake, gate: gate,
-                                         wanted_for: Busyyaks::PrStates.wanted_for(ci_interval)).run(dirty: true)
-      gate.finished(wake)
-      puts "hook woke the pollers polled=#{n}"
+      say.call("hook woke the pollers", poll.call(true))
     rescue StandardError => e
       puts "hook wake FAILED #{e.class}: #{e.message}"
     end
   end
 end
 loop do
+  provider, login, token = connection.call
+  unless token
+    break if ENV["GITHUB_ONCE"] == "1"
+
+    Busyyaks::Clock.pause(Busyyaks::RuntimeSettings.get(data.db)[:github_interval_seconds])
+    next
+  end
   t = Busyyaks::Clock.monotonic
-  client = Busyyaks::GithubNetwork::Client.new(token: token)
-  r = Busyyaks::GithubNetwork::Collector.new(login: login, client: client, data: data).run
+  since = Busyyaks::Clock.today - window_days
+  out = provider.collect(db: data.db, login: login, token: token, since: since)
+  r = out[:network]
+  pr = out[:prs]
   secs = (Busyyaks::Clock.monotonic - t).round(1)
   stats = "followees=#{r[:followees]} stars_added=#{r[:stars_added]} follows_added=#{r[:follows_added]} calls=#{r[:calls]} " \
           "304=#{r[:not_modified]} rate=#{r[:rate_remaining]}/#{r[:rate_limit]} baseline=#{r[:baseline]} seconds=#{secs} " \
           "feed=#{r[:feed_ok] ? 'ok' : "FAILED(#{r[:feed_error]})"} feed_added=#{r[:feed_added]} feed_calls=#{r[:feed_calls]} feed_304=#{r[:feed_not_modified]} feed_gap=#{r[:feed_gap]}"
   puts r[:ok] ? "github ok #{stats}" : "github FAILED #{r[:error]} #{stats}"
-  since = Busyyaks::Clock.today - window_days
-  pr = Busyyaks::GithubPrs.collect(db: data.db, client: client, login: login, since: since)
   puts pr[:ok] ? "merged prs ok since=#{since} found=#{pr[:found]} added=#{pr[:added]} calls=#{pr[:calls]}" : "merged prs FAILED #{pr[:error]}"
   break if ENV["GITHUB_ONCE"] == "1"
 
-  sleep Busyyaks::RuntimeSettings.get(data.db)[:github_interval_seconds]
+  Busyyaks::Clock.pause(Busyyaks::RuntimeSettings.get(data.db)[:github_interval_seconds])
 end

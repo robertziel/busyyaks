@@ -64,7 +64,6 @@ cat > "$work/fill" <<FILL
 #!/bin/sh
 sed -e 's|^PROJECTS_ROOT=.*|PROJECTS_ROOT=$work/projects|' -e 's|^LAUNCHER_RUN_DIR=.*|LAUNCHER_RUN_DIR=$work/state/run|' \
     -e 's|^GIT_EXCLUDES_FILE=.*|GIT_EXCLUDES_FILE=$work/git-ignore|' \
-    -e 's|^GITHUB_LOGIN=.*|GITHUB_LOGIN=octocat|' -e 's|^GITHUB_TOKEN=.*|GITHUB_TOKEN=ghp_quickstart_test|' \
     -e 's|^TEAM_TERMINAL_URL=.*|TEAM_TERMINAL_URL=http://127.0.0.1:8080/|' \
     -e 's|^SSH_ATTACH_TEMPLATE=.*|SSH_ATTACH_TEMPLATE="ssh -t devbox tmux attach -t {session}"|' "\$1" > "\$1.new"
 cat "\$1.new" > "\$1" && rm "\$1.new"

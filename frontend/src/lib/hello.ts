@@ -125,13 +125,15 @@ export type HarnessesData = {
   allowlist_in_sync: boolean; // the launcher enforces the launch.commands the web read (false: restart both)
 };
 
-// the steps, in order; `?step=<key>` names one (any step reachable, deep-linkable)
-export const STEP_KEYS = ["checks", "skin", "projects", "agents", "summary"] as const;
+// the steps, in order; `?step=<key>` names one (any step reachable, deep-linkable); Git host is optional — nothing
+// connected never blocks Summary or Done
+export const STEP_KEYS = ["checks", "skin", "projects", "git", "agents", "summary"] as const;
 export type StepKey = (typeof STEP_KEYS)[number];
 export const STEP_LABELS: Record<StepKey, string> = {
   checks: "Checks",
   skin: "Skin",
   projects: "Projects",
+  git: "Git host",
   agents: "Agents",
   summary: "Summary",
 };

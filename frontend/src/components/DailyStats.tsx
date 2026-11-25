@@ -5,6 +5,7 @@ import type { CSSProperties } from "react";
 import type { TileProps } from "./GraphTile";
 import { Link } from "react-router-dom";
 import { ago, num, projectPath } from "../lib/format";
+import { GitHostOff } from "./GitHosts";
 import type { DayStats, MergedPr, PrStatus, TodayData } from "../types";
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -74,8 +75,10 @@ export function DailyTable({ days, today }: { days: DayStats[]; today: string })
   );
 }
 
-// the PR collection's state: never read · failed (reason + last good read) · read N ago
-export function PrStatusLine({ status }: { status: PrStatus | null }) {
+// the PR collection's state: no GitHub connected (muted, a link to connect one) · never read · failed
+// (reason + last good read) · read N ago
+export function PrStatusLine({ status, off = null }: { status: PrStatus | null; off?: string | null }) {
+  if (off) return <GitHostOff text={off} className="muted pr-status" />;
   if (!status)
     return (
       <p className="err pr-status">
@@ -96,7 +99,19 @@ export function PrStatusLine({ status }: { status: PrStatus | null }) {
   );
 }
 
-export function MergedPrs({ prs, total, fold = 12 }: { prs: MergedPr[]; total: number; fold?: number }) {
+// off: no GitHub connected → "—", never "0 merged PRs"
+export function MergedPrs({
+  prs,
+  total,
+  fold = 12,
+  off = null,
+}: {
+  prs: MergedPr[];
+  total: number;
+  fold?: number;
+  off?: string | null;
+}) {
+  if (off) return <p className="muted">—</p>;
   if (prs.length === 0) return <p className="muted">0 merged PRs</p>;
   return (
     <ul className="merged-prs">

@@ -30,7 +30,8 @@ module Busyyaks
     def self.run(mode, db:, env:)
       case mode
       when "touch" then touch(db)
-      when "load" then load(db, env.fetch("DUMP_DIR"), env.fetch("ATTACHMENTS_DIR"), env.fetch("GITHUB_LOGIN"))
+      # DEMO_GITHUB_LOGIN: the demo's GitHub account (build passes it; seed-github.rb connects it)
+      when "load" then load(db, env.fetch("DUMP_DIR"), env.fetch("ATTACHMENTS_DIR"), env.fetch("DEMO_GITHUB_LOGIN"))
       else raise Refused, "load-dump: #{mode.inspect} is not load or touch"
       end
     end

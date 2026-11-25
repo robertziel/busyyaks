@@ -224,8 +224,6 @@ POSTGRES_DB=
 POSTGRES_USER=
 POSTGRES_PASSWORD=
 POSTGRES_LOCK_TIMEOUT_MS=
-GITHUB_LOGIN=dev-example
-GITHUB_TOKEN=unused
 GITHUB_WEBHOOK_SECRET=
 TEAM_TERMINAL_URL="https://terminal.example.com/#s={session}&sock={socket}"
 CLAUDE_SESSIONS_DIR=$w/session-records
@@ -249,6 +247,7 @@ services:
   scanner: { image: $IMAGE, restart: "no" }
   notifier: { image: $IMAGE, restart: "no" }
   writer: { image: $IMAGE, restart: "no" }
+  github: { image: $IMAGE, restart: "no" }   # never the live busyyaks:local, if anyone starts it (the demo does not)
   launcher:
     image: $LAUNCHER_IMAGE
     network_mode: none

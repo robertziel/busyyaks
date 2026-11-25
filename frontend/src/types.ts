@@ -129,6 +129,9 @@ export type TodayData = LaunchState & {
   merged_prs: MergedPr[];
   merged_prs_total: number;
   pr_status: PrStatus | null;
+  // "GitHub not connected — Settings → Git hosts" while no GitHub is connected (then pr_status null,
+  // merged_prs [], stats.prs_today null), else null
+  github_off: string | null;
   scan: Scan | null;
   year: DailyCounts;
   year_total: number;
@@ -388,7 +391,11 @@ export type GithubData = {
   // yet" (card #511); ci_window = that window in seconds
   gate_stale: GithubGateStale[];
   ci_window: number;
+  github_off?: null;
 };
+// GET /api/github while no GitHub is connected: the sentence + the CI sections, no feed / network
+export type GithubOffData = Pick<GithubData, "ci_unconfigured" | "gate_stale" | "ci_window"> & { github_off: string };
+export type GithubAnswer = GithubData | GithubOffData;
 export type GithubGateStale = {
   card: number;
   project: string;

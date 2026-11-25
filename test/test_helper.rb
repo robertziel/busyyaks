@@ -31,11 +31,26 @@ module AgentSettingsFixture
 end
 AgentSettingsFixture.install!
 
+# The git host the suite runs on: GitHub connected as LOGIN, before
+# every DBReset test. A test of the "not connected" state calls none! first.
+module GitHostFixture
+  LOGIN = "octotest"
+
+  def self.install!(db = Hanami.app["db.gateway"].connection)
+    db[:git_host_connections].delete
+    db[:git_host_connections].insert(provider: "github", login: LOGIN, token_hint: "…test", author: "test fixture",
+                                     created_at: 0)
+  end
+
+  def self.none!(db = Hanami.app["db.gateway"].connection) = db[:git_host_connections].delete
+end
+
 module DBReset
   def setup
     super
     db = Hanami.app["db.gateway"].connection
     AgentSettingsFixture.install!(db)
+    GitHostFixture.install!(db)
     %i[daily_report_settings agent_sessions session_dialogs card_attachments card_pings checklist_items checklists
        board_labels card_activity cards projects commits reports notes scans daily gh_users gh_follows gh_repos gh_stars
        gh_pages gh_runs gh_events gh_pr_checks gh_pr_states ci_watches gh_merged_prs gh_pr_runs

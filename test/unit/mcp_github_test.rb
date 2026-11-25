@@ -34,7 +34,7 @@ class McpGithubTest < Minitest::Test
   def setup
     super
     now = Busyyaks::Clock.epoch
-    login = ENV.fetch("GITHUB_LOGIN")
+    login = GitHostFixture::LOGIN
     db[:gh_runs].insert(login: login, started_at: now - 100, finished_at: now - 90, ok: true, baseline: true, calls: 9,
                         not_modified: 0, rate_limit: 5000, rate_remaining: 4991, rate_reset: now + 3000, followees: 2,
                         stars_added: 3, follows_added: 0)
@@ -54,6 +54,16 @@ class McpGithubTest < Minitest::Test
                            baseline: false)
     db[:gh_follows].insert(follower: "alice", followee: "dave", first_seen_at: now - 90, last_seen_at: now - 90, baseline: true)
     db[:gh_users].insert(login: "carol", name: "Carol C", bio: "builds things", followers: 2400, avatar_url: AV)
+  end
+
+  # no git host connected — the tool says so as a state (the daily report reads it and goes on), never an
+  # empty network
+  def test_github_network_says_github_is_not_connected
+    GitHostFixture.none!(db)
+    r = tool("github_network", { "hours" => 24 })
+    assert_equal false, r["isError"]
+    assert_equal({ "connected" => false, "reason" => "GitHub not connected — Settings → Git hosts" },
+                 JSON.parse(r["content"][0]["text"]))
   end
 
   def test_github_network_lists_new_stars_and_follows_with_the_block
@@ -79,7 +89,7 @@ class McpGithubTest < Minitest::Test
 
   def test_github_network_has_the_feed_part_and_check_report_verifies_it
     now = Busyyaks::Clock.epoch
-    login = ENV.fetch("GITHUB_LOGIN")
+    login = GitHostFixture::LOGIN
     db[:gh_runs].where(login: login).update(feed_ok: true, feed_added: 2, feed_calls: 3, feed_not_modified: 0, feed_gap: false)
     db[:gh_events].insert(login: login, id: "901", type: "ReleaseEvent", action: "published", actor: "alice", actor_avatar: AV,
                           repo: "alice/lib", public: true, created_at: now - 600, first_seen_at: now,
@@ -117,7 +127,7 @@ class McpGithubTest < Minitest::Test
 
   def test_collector_error_is_in_status_and_block
     now = Busyyaks::Clock.epoch
-    db[:gh_runs].insert(login: ENV.fetch("GITHUB_LOGIN"), started_at: now - 10, finished_at: now - 5,
+    db[:gh_runs].insert(login: GitHostFixture::LOGIN, started_at: now - 10, finished_at: now - 5,
                         ok: false, baseline: false,
                         error: "GitHub rate limited (0/5000 left, resets 13:00) at /users/bob/starred")
     out = JSON.parse(tool("github_network", hours: 24)["content"][0]["text"])
@@ -149,7 +159,7 @@ class GithubBlockTest < Minitest::Test
   end
 
   def test_error_only_shows_the_error
-    out = html("window: 1d\nerror: \"GitHub rejected GITHUB_TOKEN (401): Bad credentials\"\n")
+    out = html("window: 1d\nerror: \"GitHub rejected the token (401): Bad credentials\"\n")
     assert_includes out, "ghn-error"
     assert_includes out, "Bad credentials"
     refute_includes out, "nothing new"

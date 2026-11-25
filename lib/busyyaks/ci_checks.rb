@@ -9,6 +9,7 @@ require_relative "github_network"
 require_relative "github"
 require_relative "pr_states"
 require_relative "clock"
+require_relative "git_hosts"
 
 module Busyyaks
   # PR check status for the kanban idle watch (config/kanban.yml idle_watch; the engine's CiChecks port).
@@ -160,6 +161,10 @@ module Busyyaks
       # pass asks only whether the heads' required checks are green: a rebuild of the same head after the handoff never
       # parks the card.
       def approval_checks(card, step)
+        # no git host connected (Settings → Git hosts): nothing can be read, so nothing is green — refused
+        # naming why, never "not read yet" (that would wait forever)
+        return blocked(nil, GitHosts.not_connected) unless GitHosts.github_login(@db)
+
         built!(card, step_checks(card, step))
       end
 

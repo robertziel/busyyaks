@@ -408,7 +408,7 @@ module Busyyaks
 
     # check_report's provenance check: every repo / person a tl:github block names must be in the collector's snapshots —
     # each starred_by login has that star stored, each followed_by login that (non-baseline) follow. → ["…"] problems
-    def github_unverified(md, db, login: ENV.fetch("GITHUB_LOGIN"))
+    def github_unverified(md, db, login:) # login nil: no GitHub connected — no feed event can be verified
       md.to_s.scan(FENCE).select { |name, _| name == "github" }.each_with_index.flat_map do |(_, body), i|
         d = begin
           YAML.safe_load(body, permitted_classes: [Date, Time])

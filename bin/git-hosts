@@ -1,0 +1,50 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The git host connection (Settings → Git hosts) from a shell, inside the github container — the only one
+# that mounts the token's volume:
+#
+#   docker compose exec -T github bin/git-hosts show                 # the connection (provider, login, token hint)
+#   docker compose exec -T github bin/git-hosts import-env < .env    # connect GitHub with the old .env lines
+#                                                                    # GITHUB_TOKEN (+ GITHUB_LOGIN, checked)
+#   docker compose exec -T github bin/git-hosts disconnect
+#
+# import-env is the one-time move off .env: the token is checked by GitHub (GET /user), its login must equal
+# GITHUB_LOGIN when that line is set, then it is stored like a connect from the page. Then delete both lines from
+# .env (bin/setup check refuses them).
+require "bundler/setup"
+require "hanami/prepare"
+require "busyyaks/git_hosts"
+require "busyyaks/env_file"
+require "busyyaks/kanban"
+
+H = Busyyaks::GitHosts
+db = Busyyaks::Kanban.db
+store = H::Store.new(ENV.fetch("GIT_HOSTS_DIR"))
+case ARGV
+in ["show"]
+  cur = H.current(db)
+  abort "none connected" unless cur
+  file = store.token(cur[:provider]) ? "file present" : "FILE MISSING"
+  puts "#{cur[:provider]} #{cur[:login]} token #{cur[:token_hint]} (#{file})"
+in ["import-env"]
+  begin
+    env = Busyyaks::EnvFile.parse($stdin.read, path: "stdin")
+    token = env["GITHUB_TOKEN"].to_s
+    abort "bin/git-hosts import-env: no GITHUB_TOKEN line with a value on stdin" if token.strip.empty?
+    login = H.provider!("github").identify(token)
+    want = env["GITHUB_LOGIN"].to_s
+    unless want.empty? || want == login
+      abort "bin/git-hosts import-env: the token is #{login}'s, GITHUB_LOGIN says #{want}: nothing stored"
+    end
+    cur = H.connect!(db: db, store: store, provider: "github", token: token, author: "bin/git-hosts import-env")
+    puts "connected: github #{cur[:login]} token #{cur[:token_hint]} — now delete GITHUB_LOGIN and GITHUB_TOKEN from .env"
+  rescue H::Refused, Busyyaks::EnvFile::Invalid => e
+    abort "bin/git-hosts import-env: #{e.message}"
+  end
+in ["disconnect"]
+  H.disconnect!(db: db, store: store, author: "bin/git-hosts disconnect")
+  puts "none connected"
+else
+  abort "usage: bin/git-hosts show | import-env < .env | disconnect"
+end

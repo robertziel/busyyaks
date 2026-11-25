@@ -41,7 +41,7 @@ In scope: what busyyaks itself does with the secrets and access it is given.
 - the host-side launcher (`bin/launcher`): its socket, the ops it accepts, what it types into tmux panes;
 - the agent-session collector (`bin/collector`): its read socket, what it reads from `/proc` and tmux, what it pastes
   into a pane;
-- the collectors: handling of `GITHUB_TOKEN`, `MCP_TOKEN`, `SESSION_SECRET`, credentials inside git remote URLs;
+- the collectors: handling of the git host token (Settings → Git hosts), `MCP_TOKEN`, `SESSION_SECRET`, credentials inside git remote URLs;
 - the daily-report runner: the agent CLI it starts with the busyyaks MCP as its only tools (no terminal);
 - the open risks documented in [docs/DEPLOY.md → Remaining risks](docs/DEPLOY.md#remaining-risks) — the shared
   database, git on untrusted repos — are known;

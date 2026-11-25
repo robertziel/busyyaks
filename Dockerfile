@@ -50,6 +50,10 @@ ENV BUNDLE_WITHOUT=lint
 RUN bundle install
 COPY . .
 COPY --from=frontend /src/public/app ./public/app
+# the github service's volumes (compose): a new named volume copies its mount point's mode, and the image
+# cannot know HOST_UID, so the dirs are 1777 (sticky). Each container runs ONE uid (HOST_UID), and the token volume
+# is mounted only into github (the socket's into web + github): no other uid ever runs beside them
+RUN mkdir -p /var/lib/busyyaks/git-hosts /git-hosts-run && chmod 1777 /var/lib/busyyaks/git-hosts /git-hosts-run
 # the /data ownership check every service runs first (bin/entrypoint), then its command
 ENTRYPOINT ["/app/bin/entrypoint"]
 CMD ["bin/web"]

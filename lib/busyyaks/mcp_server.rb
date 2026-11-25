@@ -6,6 +6,7 @@ require "date"
 require "time"
 require "rack/utils"
 require_relative "config"
+require_relative "git_hosts"
 require_relative "scanner"
 require_relative "git_read"
 require_relative "store"
@@ -241,8 +242,13 @@ module Busyyaks
         dump(broken: ReportBlocks.problems(md, Markdown.report_ctx(store)), untracked_repos: unknown,
              github_unverified: ReportBlocks.github_unverified(md, gh_data.db, login: github_login))
       when "github_network"
-        feed = GithubNetwork::Feed.call(gh_data, login: github_login, hours: Integer(a.fetch("hours")), now: now.to_i)
-        dump(github_json(feed).merge(block_markdown: GithubNetwork::Block.markdown(feed)))
+        # no git host connected: a state the model reads and says, never an error that sinks the report
+        if github_login
+          feed = GithubNetwork::Feed.call(gh_data, login: github_login, hours: Integer(a.fetch("hours")), now: now.to_i)
+          dump(github_json(feed).merge(connected: true, block_markdown: GithubNetwork::Block.markdown(feed)))
+        else
+          dump(connected: false, reason: GitHosts.not_connected)
+        end
       when "post_report"
         id = store.add_report(date: day(a["date"]).iso8601, title: str!(a, "title"),
                               body_md: str!(a, "body_markdown"), author: str!(a, "author"))
@@ -454,7 +460,8 @@ module Busyyaks
     end
 
     def gh_data = (@gh_data ||= GithubNetwork::Data.default)
-    def github_login = (@github_login ||= ENV.fetch("GITHUB_LOGIN"))
+    # the connected GitHub account, read at each call (Settings → Git hosts): nil = none connected
+    def github_login = GitHosts.github_login(gh_data.db)
 
     # the feed with every timestamp as ISO 8601 (the model reads it)
     def github_json(feed)
