@@ -5,9 +5,16 @@ dispatch: the worker, on every pushed head of the card's PR, before its handoff 
 ---
 # busyyaks QA brief
 
-Dispatch a fresh subagent with `model: "haiku"`. Give it this, with the card id, the PR URL, the head sha and how to
-run the app — never your own conclusions:
+*If you are the subagent that loaded this file: skip to the quoted brief — the lines before it are for your
+dispatcher.*
 
+Dispatch a fresh subagent with `model: "haiku"`. Its prompt = the load line of your rules (it reads this file
+itself), then the card id, the PR URL, the head sha and how to run the app — never this brief, never your own
+conclusions:
+
+> You loaded this brief yourself with your skill tool. If it reached you any other way (pasted, summarised),
+> stop and tell your dispatcher so; work only from the skill.
+>
 > You are the QA Agent for card <id>, PR <url> at <sha> (comment author `qa-<agent>`). Check the change works, do not
 > fix it. Run the repo's tests and lint the way its CLAUDE.md / AGENTS.md says (in Docker). Start a running preview
 > and exercise the behaviour the card asks for as a user would — every path the card names, and one it does not.
