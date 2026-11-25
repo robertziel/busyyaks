@@ -1,6 +1,6 @@
 // One repo: stats, launch bar with live tmux sessions, contribution graph, commits, notes — and the Board tab.
 import { ProjectIcon } from "../components/ProjectIcon";
-import { useCallback, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { apiPost, revalidate, useResource } from "../api";
 import { ProjectBoard } from "../components/Board";
@@ -15,8 +15,9 @@ import { Sessions } from "../components/Sessions";
 import { useStopSessions } from "../components/StopSessions";
 import { ErrorState, Loading } from "../components/States";
 import { ago, at, headTitle, num } from "../lib/format";
+import { heldSessions } from "../lib/sessionLanes";
 import { useTitle } from "../lib/title";
-import type { Note, ProjectData, ProjectSessionsData } from "../types";
+import type { Note, ProjectData, ProjectSessionsData, TmuxSession } from "../types";
 
 // the session list's poll: the Agents read's cadence (Agents.tsx), so the two lanes' reads age alike (card 614)
 export const SESSIONS_EVERY = 10_000;
@@ -34,6 +35,15 @@ export function Project() {
   // read: a session the lead spawned, another tab started or that ended shows without a reload (card 614)
   const live = useResource<ProjectSessionsData>(`${key}/sessions`, { every: SESSIONS_EVERY });
   const reloadLive = live.reload;
+  // the list the launcher last gave for THIS page: a launcher hiccup answers no sessions, which must not empty the lanes
+  // (card 275, heldSessions)
+  const lastGood = useRef<{ key: string; sessions: TmuxSession[] } | null>(null);
+  // written after the commit, never during render: a good answer is shown as is, so the ref is read only on a hiccup
+  useEffect(() => {
+    if (live.data && !live.data.launcher_error) lastGood.current = { key, sessions: live.data.sessions };
+  }, [key, live.data]);
+  const held = heldSessions(live.data, lastGood.current?.key === key ? lastGood.current.sessions : null);
+  const sessionsError = [live.error?.message, held.held].filter((x): x is string => !!x).join(" · ") || null;
   const { busy: stopping, stop } = useStopSessions(slug, () => void reloadLive());
   // the Settings tab's unsaved edits (ProjectRules reports them): leaving the tab would drop them without a word
   const unsaved = useRef(0);
@@ -96,13 +106,13 @@ export function Project() {
       {ls && ls.launches.types.length > 0 && (
         <section className="launchbar card">
           <Sessions
-            sessions={[...ls.sessions].sort((a, b) => b.created - a.created)}
+            sessions={[...held.sessions].sort((a, b) => b.created - a.created)}
             launches={ls.launches}
             busy={stopping}
             stop={(names, what) => void stop(names, what)}
             launch={<Launch slug={p.slug} launches={ls.launches} launcherError={ls.launcher_error} compact />}
             reloadSessions={reloadLive}
-            sessionsError={live.error?.message ?? null}
+            sessionsError={sessionsError}
           />
         </section>
       )}

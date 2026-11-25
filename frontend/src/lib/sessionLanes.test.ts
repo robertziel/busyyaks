@@ -13,6 +13,7 @@ import {
   inTerminal,
   laneOf,
   liveIssue,
+  heldSessions,
   behindKey,
   catchUpAsks,
   catchUpTracker,
@@ -476,5 +477,43 @@ describe("the project page shows only sessions busyyaks runs", () => {
       [lead, worker],
     );
     expect(l.quiet.map((x) => x.short).sort()).toEqual(["teamlead", "worker_2"]);
+  });
+});
+
+describe("heldSessions (card 275: a launcher hiccup never empties the lanes)", () => {
+  const s = (name: string) => ({ name }) as unknown as TmuxSession;
+  const ok = (...names: string[]) => ({ sessions: names.map(s), launcher_error: null });
+  const down = { sessions: [], launcher_error: "launcher not reachable" };
+  const names = (r: ReturnType<typeof heldSessions>) => r.sessions.map((x) => x.name);
+
+  it("a good answer is shown as is", () => {
+    expect(heldSessions(ok("a", "b"), null)).toEqual({ sessions: ok("a", "b").sessions, held: null });
+  });
+  it("the launcher down after a good answer: that list stays, said", () => {
+    const r = heldSessions(down, ok("a", "b").sessions);
+    expect(names(r)).toEqual(["a", "b"]);
+    expect(r.held).toBe("launcher not reachable");
+  });
+  it("down from the first read: nothing held, the empty answer (the flash says why)", () => {
+    expect(heldSessions(down, null)).toEqual({ sessions: [], held: null });
+  });
+  it("no answer yet: the last list (another page's never: the caller keys it)", () => {
+    expect(names(heldSessions(undefined, ok("a").sessions))).toEqual(["a"]);
+    expect(heldSessions(undefined, null)).toEqual({ sessions: [], held: null });
+  });
+  it("a poll sequence: started → hiccup → ended, no reload", () => {
+    let last: ReturnType<typeof heldSessions>["sessions"] | null = null;
+    const seen = [ok("a"), ok("a", "w"), down, down, ok("a")].map((answer) => {
+      const r = heldSessions(answer, last);
+      if (!answer.launcher_error) last = answer.sessions;
+      return [names(r).join(","), r.held !== null];
+    });
+    expect(seen).toEqual([
+      ["a", false],
+      ["a,w", false],
+      ["a,w", true],
+      ["a,w", true],
+      ["a", false],
+    ]);
   });
 });

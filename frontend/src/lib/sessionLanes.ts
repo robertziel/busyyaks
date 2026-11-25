@@ -314,6 +314,20 @@ export function catchUpAsks(before: string | null, key: string): boolean {
   return key.split("\n").some((n) => !had.has(n));
 }
 
+// A launcher hiccup: /api/projects/:slug/sessions still answers 200, with launcher_error and NO sessions (it could not
+// ask). Shown as is, every live session would leave the lanes until the launcher answers again (card 275). So the list
+// the launcher last gave is held — and said (`held` = why, fed to liveIssue as the list's refresh failure: dimmed);
+// none held yet (the launcher was down from the first read) → the empty list, the page's "Launcher down" flash says
+// why. The next answer with no launcher_error replaces it: a session that ended meanwhile leaves then.
+export function heldSessions(
+  answer: { sessions: TmuxSession[]; launcher_error: string | null } | undefined,
+  lastGood: TmuxSession[] | null,
+): { sessions: TmuxSession[]; held: string | null } {
+  if (!answer) return { sessions: lastGood ?? [], held: null };
+  if (!answer.launcher_error) return { sessions: answer.sessions, held: null };
+  return lastGood ? { sessions: lastGood, held: answer.launcher_error } : { sessions: answer.sessions, held: null };
+}
+
 // The catch-up of one read, as the page runs it (Sessions' useCatchUp): fed the difference key on every render — null
 // while the Agents read has not answered (nothing recorded, nothing asked) — it says whether to ask again now. The first
 // key only records; the same key again (a re-render, a new `ask` function) asks nothing; each new name asks once.
