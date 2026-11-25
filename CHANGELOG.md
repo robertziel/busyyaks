@@ -7,6 +7,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Board card faces: a small tag beside the assignee's face says what its agent is doing now — thinking / the tool it runs and for how long, `needs you` when it is stopped on a dialog, and while it is idle what the card waits for (`waiting for your answer`, `waiting for CI`, `blocked externally`, `waiting for you`), else `idle`; `not running` when its session is gone.
 - Card dialog: the comment box stays at the bottom of the card while it scrolls, so writing a comment needs no scrolling; a long draft scrolls inside the box, and a "Write a comment" button (keyboard focus, top of the card) jumps to it.
 - Comment actions: a card's comment box offers **Comment** (pings the owner, no move) and one **Comment & <transition> → <column>** button per workflow transition marked `comment: true` out of the card's column — the comment is posted and the card moved in one step. Marked per transition in the board (`.busyyaks/workflow.yml` or the Workflow editor's "Comment action" checkbox), never in code.
 - Tab alert: a card that starts waiting for you (a question or a gate) while busyyaks is not in front of you puts `(N new)` in the tab title and a dot on the favicon, and sets the page's theme colour; looking at the tab clears them, even while the card still waits.
