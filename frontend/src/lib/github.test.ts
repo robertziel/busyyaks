@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { GithubFeedStatus, GithubStatus } from "../types";
-import { eventWord, feedLine, parseWindow, pollersLine, repoSummary, statusLine } from "./github";
+import type { GithubAnswer, GithubFeedStatus, GithubStatus } from "../types";
+import { eventWord, feedLine, githubOff, parseWindow, pollersLine, repoSummary, statusLine } from "./github";
 
 const base: GithubStatus = {
   ok: true,
@@ -45,7 +45,7 @@ describe("statusLine", () => {
     });
   });
   it("failed with no good run ever", () => {
-    const s = { ...base, ok: false, error: "GitHub rejected GITHUB_TOKEN (401)", last_ok_at: null };
+    const s = { ...base, ok: false, error: "GitHub rejected the token (401)", last_ok_at: null };
     expect(statusLine(s, 1060).parts[1]).toBe("no good collection yet");
   });
   it("never collected", () => {
@@ -146,5 +146,21 @@ describe("pollersLine", () => {
   });
   it("never ran", () => {
     expect(pollersLine(null, 1000)).toEqual({ tone: "warn", parts: ["PR pollers: no tick yet"] });
+  });
+});
+
+describe("githubOff", () => {
+  it("the not-connected answer: the sentence, no feed", () => {
+    const d = {
+      github_off: "GitHub not connected — Settings → Git hosts",
+      ci_unconfigured: [],
+      gate_stale: [],
+      ci_window: 600,
+    };
+    expect(githubOff(d)).toBe(true);
+  });
+  it("a connected answer (github_off absent or null) is not", () => {
+    expect(githubOff({ ci_window: 600 } as unknown as GithubAnswer)).toBe(false);
+    expect(githubOff({ ci_window: 600, github_off: null } as unknown as GithubAnswer)).toBe(false);
   });
 });

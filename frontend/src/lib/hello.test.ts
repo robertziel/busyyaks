@@ -272,6 +272,7 @@ const h = (over: Partial<Harness>): Harness => ({
 describe("stepFrom", () => {
   it("the URL's step, else Checks on a first run and Summary on a reopen", () => {
     expect(stepFrom("agents", false)).toBe("agents");
+    expect(stepFrom("git", false)).toBe("git");
     expect(stepFrom(null, false)).toBe("checks");
     expect(stepFrom(null, true)).toBe("summary");
     expect(stepFrom("nope", true)).toBe("summary");

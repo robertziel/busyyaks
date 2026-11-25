@@ -5,7 +5,7 @@
 #            (deploy/). Gate: the auth provider in config/busyyaks.yml `auth` (none = no sign-in: keep it local).
 # mcp     -> http://${MCP_HOST}:${MCP_HOST_PORT}/mcp, local only, bearer MCP_TOKEN; kanban_claim checks tmux sessions through the launcher socket.
 # scanner -> rescans every repo under PROJECTS_ROOT (read-only) every scan_interval_seconds (Settings → Runtime).
-# github  -> GitHub network snapshots (GITHUB_LOGIN's followees: stars, follows) every github_interval_seconds.
+# github  -> GitHub network snapshots (the connected account's followees: stars, follows) every github_interval_seconds.
 # postgres -> optional (profile `postgres`; .env COMPOSE_PROFILES=postgres makes it part of the stack): the database when
 #             DATABASE_ADAPTER=postgresql and no server of your own; data in ./data/postgres, reached only through its
 #             Unix socket in ./data/postgres-run (/data/postgres-run in the app containers), no network.
@@ -95,7 +95,6 @@ x-app: &app
     ATTACHMENTS_DIR: /data/attachments
     ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:?}
     ATTACHMENT_TYPES: ${ATTACHMENT_TYPES:?}
-    GITHUB_LOGIN: ${GITHUB_LOGIN:?}
     # the limits of every read of a scanned repo (bin/git-read, one killable child per read; lib/busyyaks/git_read.rb)
     GIT_READ_TIMEOUT_SECONDS: ${GIT_READ_TIMEOUT_SECONDS:?}
     GIT_READ_CPU_SECONDS: ${GIT_READ_CPU_SECONDS:?}
@@ -128,15 +127,16 @@ x-launcher-volumes: &launcher_volumes
   - *vol_kanban
   - *vol_projects
   - *vol_excludes
-  - { type: bind, source: "${LAUNCHER_RUN_DIR:?}", target: /launcher, bind: { create_host_path: false } }
+  - &vol_launcher { type: bind, source: "${LAUNCHER_RUN_DIR:?}", target: /launcher, bind: { create_host_path: false } }
 
 services:
   web:
     <<: *app
     build: .
     mem_limit: ${SERVICE_MEM_LIMIT:?}   # the container's ceiling over its git-read children's own GIT_READ_MEMORY_BYTES
-    volumes: *launcher_volumes   # x-app's + the launcher socket dir
-    environment: { <<: *env, HANAMI_PORT: "${WEB_CONTAINER_PORT:?}", LOG_LEVEL: info,
+    # x-app's + the launcher socket dir + the github service's socket dir (Settings → Git hosts)
+    volumes: [*vol_data, *vol_config, *vol_kanban, *vol_projects, *vol_excludes, *vol_launcher, "git-hosts-run:/git-hosts-run"]
+    environment: { <<: *env, HANAMI_PORT: "${WEB_CONTAINER_PORT:?}", LOG_LEVEL: info, GIT_HOSTS_SOCKET: /git-hosts-run/git-hosts.sock,
                    HANAMI_MAX_THREADS: "${HANAMI_MAX_THREADS:?}", HANAMI_MIN_THREADS: "${HANAMI_MIN_THREADS:?}",
                    HANAMI_WEB_CONCURRENCY: "${HANAMI_WEB_CONCURRENCY:?}", LAUNCHER_SOCKET: /launcher/launcher.sock,
                    # the speech server for the card dialog's mic (config/busyyaks.yml dictation): web only,
@@ -175,12 +175,23 @@ services:
       web: { condition: service_healthy }   # web migrates the database on start: the others boot on the migrated schema
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
 
-  # GitHub network collector (bin/github): who GITHUB_LOGIN follows, their stars and follows, every
-  # github_interval_seconds (Settings → Runtime). The only service holding GITHUB_TOKEN; web/mcp read its snapshots from the db.
+  # GitHub network collector (bin/github): who the connected GitHub account follows, their stars and follows, every
+  # github_interval_seconds (Settings → Runtime) — nothing while no git host is connected (Settings → Git hosts).
+  # The only service holding the token: a file in the git-hosts volume, mounted here and nowhere else (not in ./data,
+  # not in the projects mount); web/mcp read the snapshots and the connection (login) from the db.
   github:
     <<: *app
     command: ["bin/github"]
-    environment: { <<: *env, LOG_LEVEL: warn, GITHUB_TOKEN: "${GITHUB_TOKEN:?}" }
+    volumes:
+      - *vol_data
+      - *vol_config
+      - *vol_kanban
+      - *vol_projects
+      - *vol_excludes
+      - git-hosts:/var/lib/busyyaks/git-hosts
+      - git-hosts-run:/git-hosts-run
+    environment: { <<: *env, LOG_LEVEL: warn, GIT_HOSTS_DIR: /var/lib/busyyaks/git-hosts,
+                   GIT_HOSTS_SOCKET: /git-hosts-run/git-hosts.sock }
     depends_on:
       web: { condition: service_healthy }   # web migrates the database on start: the others boot on the migrated schema
       postgres: { condition: service_healthy, required: false }   # only with the postgres profile (COMPOSE_PROFILES)
@@ -261,7 +272,6 @@ services:
       ATTACHMENT_MAX_BYTES: "1048576"
       ATTACHMENT_TYPES: image/png,image/jpeg,image/gif,image/webp,image/svg+xml,text/html,application/pdf,text/plain,text/markdown,application/json
       LOG_LEVEL: warn
-      GITHUB_LOGIN: octotest   # tests stub GitHub; no token, no network
       GIT_READ_TIMEOUT_SECONDS: "20"   # a fixture that hangs (test/unit/git_read_test.rb) is killed inside it
       GIT_READ_CPU_SECONDS: "20"
       GIT_READ_MEMORY_BYTES: "1073741824"
@@ -311,3 +321,10 @@ services:
       - ./data/postgres:/var/lib/postgresql/data
       - ./data/postgres-run:/var/run/postgresql
     healthcheck: { test: ["CMD", "pg_isready", "-q", "-h", "/var/run/postgresql", "-U", "${POSTGRES_USER?}"], interval: 10s, timeout: 5s, retries: 5 }
+
+volumes:
+  # the git host's token: the github service's alone (Docker keeps it outside ./data and the projects mount)
+  git-hosts:
+  # the github service's socket (connect / test / disconnect the git host): web and github only — not ./data, which
+  # every service mounts, so no other service can replace or remove the token
+  git-hosts-run:

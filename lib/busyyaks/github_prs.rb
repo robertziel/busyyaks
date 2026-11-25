@@ -7,7 +7,7 @@ require_relative "clock"
 module Busyyaks
   # The operator's merged PRs, from GitHub itself: the search API, `is:pr is:merged author:<login>
   # merged:>=<since>`, every repo the token can see — merge, squash and rebase merges alike. Run by the `github`
-  # collector (bin/github, the only GITHUB_TOKEN holder); read by /api/today. A failed read stores nothing and is
+  # collector (bin/github, the only holder of the token); read by /api/today. A failed read stores nothing and is
   # recorded in gh_pr_runs with the reason; what was stored before stays, shown beside the last good read's time.
   module GithubPrs
     SEARCH_MAX = 1000 # GitHub search never returns more; a window holding more cannot be read whole → error
@@ -16,7 +16,7 @@ module Busyyaks
 
     # One read → the gh_pr_runs row. Never raises for a GitHub failure: the error is the run's result.
     def collect(db:, client:, login:, since:, clock: -> { Busyyaks::Clock.epoch })
-      raise GithubNetwork::Error, "GITHUB_LOGIN #{login.inspect} is not a GitHub login" unless login.to_s.match?(GithubNetwork::LOGIN)
+      raise GithubNetwork::Error, "#{login.inspect} is not a GitHub login" unless login.to_s.match?(GithubNetwork::LOGIN)
 
       calls = client.calls
       id = db[:gh_pr_runs].insert(login: login, since: since.iso8601, started_at: clock.call)

@@ -3,6 +3,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GitHostsData } from "../lib/gitHosts";
 import type { SetupData } from "../lib/hello";
 import { PlanCard, ReadyFacts, RestartBoth, STEPS, Skin } from "./Hello";
 
@@ -24,8 +25,8 @@ const data = {
 } as unknown as SetupData;
 
 describe("Hello", () => {
-  it("steps: Checks, Skin, Projects, Agents, Summary", () => {
-    expect(STEPS).toEqual(["Checks", "Skin", "Projects", "Agents", "Summary"]);
+  it("steps: Checks, Skin, Projects, Git host, Agents, Summary", () => {
+    expect(STEPS).toEqual(["Checks", "Skin", "Projects", "Git host", "Agents", "Summary"]);
   });
 
   it("Skin step: every skin choice, the current one checked", () => {
@@ -56,6 +57,41 @@ describe("Hello", () => {
     );
     expect(html).toContain('<dt>checks</dt><dd>1/2 ok<span class="hello-bad">✗ github</span></dd>');
     expect(html).toContain("✗ not set up");
+  });
+});
+
+// the git host is optional — Summary names it, or says not connected (optional), never as an issue
+describe("Ready: the git host", () => {
+  const summary = { launchers: [{ key: "claude", label: "claude", problem: null }], def: "claude" };
+  const providers = [{ key: "github", label: "GitHub", available: true, note: null }];
+  const render = (current: unknown) => {
+    stub("dark");
+    return renderToStaticMarkup(
+      createElement(ReadyFacts, {
+        data,
+        summary,
+        gitHost: { data: { providers, current, collector: null } as unknown as GitHostsData },
+      }),
+    );
+  };
+  it("not connected (optional), muted", () => {
+    expect(render(null)).toContain('<dt>git host</dt><dd><span class="muted">not connected (optional)</span></dd>');
+  });
+  it("the connected host and its login", () => {
+    const cur = {
+      id: 1,
+      provider: "github",
+      label: "GitHub",
+      login: "octocat",
+      token_hint: "…abcd",
+      author: "op",
+      at: 1,
+    };
+    expect(render(cur)).toContain('<dt>git host</dt><dd><span class="">GitHub · octocat</span></dd>');
+  });
+  it("left out when the wizard did not read it", () => {
+    stub("dark");
+    expect(renderToStaticMarkup(createElement(ReadyFacts, { data, summary }))).not.toContain("git host");
   });
 });
 

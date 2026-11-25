@@ -13,8 +13,7 @@ require_relative "../support/auto_loaded"
 # bin/setup in a copy of the checkout's files it reads: what it copies, writes, lists, creates and refuses.
 class SetupTest < Minitest::Test
   # the required .env keys .env.example leaves empty
-  EMPTY_KEYS = %w[GITHUB_LOGIN GITHUB_TOKEN GIT_EXCLUDES_FILE LAUNCHER_RUN_DIR PROJECTS_ROOT SSH_ATTACH_TEMPLATE
-                  TEAM_TERMINAL_URL].freeze
+  EMPTY_KEYS = %w[GIT_EXCLUDES_FILE LAUNCHER_RUN_DIR PROJECTS_ROOT SSH_ATTACH_TEMPLATE TEAM_TERMINAL_URL].freeze
 
   ROOT = File.expand_path("../..", __dir__)
   FILES = %w[bin/setup .env.example docker-compose.yml config/busyyaks.example.yml config/kanban.example.yml].freeze
@@ -61,8 +60,7 @@ class SetupTest < Minitest::Test
     FileUtils.mkdir_p(projects = File.join(@tmp, "projects"))
     File.write(excludes = File.join(@tmp, "git-ignore"), "*.swp\n")
     { "PROJECTS_ROOT" => projects, "GIT_EXCLUDES_FILE" => excludes, "LAUNCHER_RUN_DIR" => File.join(@tmp, "state/run"),
-      "GITHUB_LOGIN" => "octocat",
-      "GITHUB_TOKEN" => "ghp_x", "TEAM_TERMINAL_URL" => "http://127.0.0.1:8080/",
+      "TEAM_TERMINAL_URL" => "http://127.0.0.1:8080/",
       "SSH_ATTACH_TEMPLATE" => '"ssh -t devbox tmux attach -t {session}"', }
   end
 
@@ -102,7 +100,7 @@ class SetupTest < Minitest::Test
     EMPTY_KEYS.each do |k|
       assert_includes err, "FAIL  #{k} is empty in .env"
     end
-    assert_includes err, "7 problem(s)"
+    assert_includes err, "5 problem(s)"
     refute File.exist?(File.join(@dir, "data"))
     refute File.exist?(File.join(@tmp, "docker.log")), "compose is not asked while .env is incomplete"
   end
@@ -229,6 +227,26 @@ class SetupTest < Minitest::Test
     File.write(File.join(@dir, ".env"), text)
     _, _, err = setup!("check")
     assert_match(/FAIL  \.env line \d+: not KEY=value/, err, "an export line is refused by the shape check, as EnvFile does")
+  end
+
+  # the git host is Settings → Git hosts (its token in the github service's own volume); a .env line left
+  # over would look like it still connects GitHub — refused naming the one-time import
+  def test_the_moved_git_host_keys_are_refused
+    %w[GITHUB_LOGIN GITHUB_TOKEN].each { |k| refute_match(/^#{k}=/, File.read(File.join(ROOT, ".env.example")), k) }
+    moved = File.read(File.join(ROOT, "bin/setup"))[/^GIT_HOSTS_MOVED="([A-Z_ ]+)"$/, 1].split
+    assert_equal %w[GITHUB_LOGIN GITHUB_TOKEN], moved
+    setup!
+    fill(filled)
+    File.write(File.join(@dir, ".env"), "#{File.read(File.join(@dir, '.env'))}GITHUB_LOGIN=octocat\nGITHUB_TOKEN=ghp_x\n")
+    code, _, err = setup!("check")
+    assert_equal 1, code
+    %w[GITHUB_LOGIN GITHUB_TOKEN].each do |k|
+      assert_includes err, "FAIL  #{k} moved to Settings → Git hosts: connect GitHub there, or import these " \
+                           "lines once (docker compose up -d --wait web github, then docker compose exec -T github " \
+                           "bin/git-hosts import-env < .env), then delete GITHUB_LOGIN and GITHUB_TOKEN from .env " \
+                           "(docs/DEPLOY.md § Git hosts)"
+    end
+    refute File.exist?(File.join(@tmp, "docker.log")), "refused before compose"
   end
 
   def test_check_refuses_a_short_mcp_token_and_the_databases_empty_keys

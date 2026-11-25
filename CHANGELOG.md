@@ -23,6 +23,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 - Only you move a card out of Backlog: no agent takes a card out of a parked column (Backlog) or works one there, whatever the workflow says. A workflow giving agents a way out of a parked column is refused naming the transition; the upgrade's migration makes every stored board's way out (Prioritise) yours, and the writer writes each board back to its `.busyyaks/workflow.yml`. A board whose own column is typed parked for agent work (e.g. a `Waiting` column) needs that column retyped to `queued`.
 - Pull request template: What · Why · Verified (with a required `Not verified:` line) · an optional Visual, above the contributor checklist.
+- **Breaking:** GitHub is optional, connected on **Settings → Git hosts** instead of `.env` (GitLab coming soon); upgrading imports the old keys once ([docs/DEPLOY.md § Git hosts](docs/DEPLOY.md#git-hosts-github)).
 
 ## [0.1.0] - 2026-11-25
 

@@ -94,7 +94,7 @@ from <a href="https://robertz.co/feeds/architecture/how-i-reached-100-prs-a-day/
 |---|---|
 | the dashboard, scanner, MCP, boards | Linux, Docker Engine 25+ with the compose plugin (2.20+), `git`, a POSIX shell, a directory of git repos — no host Ruby: `bin/setup` is `sh`, everything else runs in the image |
 | signing in | nothing on localhost (`auth: { provider: none, allow_unauthenticated: true }`); anything reachable from elsewhere needs an [auth provider](#sign-in) |
-| GitHub pages and merged PRs | a GitHub login and a read-only token in `.env` (`gh auth token` with the [`gh` CLI](https://cli.github.com), or a fine-grained token with no repository access) |
+| GitHub pages, merged PRs, PR + CI state on cards (optional) | a read-only GitHub token, pasted on **Settings → Git hosts** (`gh auth token` with the [`gh` CLI](https://cli.github.com), or a fine-grained token with no repository access); not connected = every page says so |
 | connecting Claude Code (`bin/env` reads `.env`), the launcher (`bin/launcher`, on the host: Launch, claim, dialog answers, new repos), [`yaks`](#the-yaks-command) | Ruby 3.2+ on the host (stdlib only, no gems); the launcher also `git`, `tmux`, the `claude` CLI and a systemd user manager (`systemctl --user`; on a server without a login session: `loginctl enable-linger`) |
 | the agents sidebar, typing comments into sessions (optional) | an **agent-session collector**: busyyaks ships one, `bin/collector` (Ruby 3.2+, `tmux`, a systemd user manager; [below](#agent-sessions)) |
 | the daily report (optional) | the runner's CLI (e.g. `hermes`), Ruby 3.2+ (`bin/env` reads `.env`), `jq`, `curl`, `flock`, `timeout` on the host, a systemd user manager, and an OpenAI-compatible LLM gateway |
@@ -151,7 +151,8 @@ git clone https://github.com/robertziel/busyyaks && cd busyyaks
 bin/setup
 
 # fill what bin/setup listed — PROJECTS_ROOT, GIT_EXCLUDES_FILE (your global git excludes; none → touch an empty
-# file), LAUNCHER_RUN_DIR, GITHUB_LOGIN, GITHUB_TOKEN, TEAM_TERMINAL_URL, SSH_ATTACH_TEMPLATE — each explained above its line; groups 4-6 of .env work as shipped (SQLite, ports 8080 / 8081)
+# file), LAUNCHER_RUN_DIR, TEAM_TERMINAL_URL, SSH_ATTACH_TEMPLATE — each explained above its line (GitHub is optional:
+# Settings → Git hosts, after the start); groups 4-6 of .env work as shipped (SQLite, ports 8080 / 8081)
 $EDITOR .env
 
 # every value compose requires set, HOST_UID = you, PROJECTS_ROOT a real directory; creates ./data and
@@ -445,7 +446,7 @@ selected, Enter opens it) and every saved server, each with its state. The dashb
 | `web` | Serves the SPA shell for every signed-in GET and the `/api/*` JSON API. Markdown (reports, notes, cards) is rendered on the server with raw HTML dropped. |
 | `mcp` | The MCP endpoint, local only. Refuses any request that carries an `Origin` header. |
 | `scanner` | Every `scan_interval_seconds`: log, status and upstream of each repo under the configured roots. A repo is a dir with `.git`; group dirs are searched `search_depth` levels down. Every read is one short-lived child (`bin/git-read`, libgit2: it runs no program a repo's config names) with hard limits (`GIT_READ_*`); a repo it cannot read is an error on that repo, never the git CLI instead. |
-| `github` | Every `github_interval_seconds`: the network, the feed, your merged PRs and PR states for the board. The only container that holds `GITHUB_TOKEN`; conditional requests (ETag) everywhere. |
+| `github` | Every `github_interval_seconds`: the network, the feed, your merged PRs and PR states for the board. The only container that holds the GitHub token (Settings → Git hosts; nothing read while none is connected); conditional requests (ETag) everywhere. |
 | `notifier` | Delivers the operator's comments, moves and answers to the owning session; turns a session stuck on a dialog into a question on its card; releases cards whose session is gone. |
 | `bin/launcher` | Runs on the host, because the containers cannot reach the host's tmux. Starts sessions, lists them, captures and answers dialogs, clones repos. |
 | `bin/daily-report` | Runs on the host from a systemd timer. See [the daily report](#the-daily-report). |
@@ -817,7 +818,7 @@ Set up busyyaks (this repo) on this machine and get its tests green.
 2. Run bin/setup (copies .env.example and the two config examples, writes the secrets and HOST_UID/HOST_GID, lists
    what is left), then fill .env and the configs for this box (launch.commands: the invocations an agent launcher may
    be, as in the example; the launchers themselves are set on Settings → Agents & launchers):
-   PROJECTS_ROOT = <dir holding my repos>, GITHUB_LOGIN = <login>, GITHUB_TOKEN = a read-only token,
+   PROJECTS_ROOT = <dir holding my repos>,
    TEAM_TERMINAL_URL + SSH_ATTACH_TEMPLATE (ask me: they point at my own tools / host name);
    keep `auth: { provider: none, allow_unauthenticated: true }` (localhost) and `agents: { collector: none }` unless I name a collector.
    LAUNCHER_RUN_DIR = ~/.local/state/busyyaks/run written out (persistent; outside this checkout and PROJECTS_ROOT).

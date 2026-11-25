@@ -48,7 +48,7 @@ put() { sed -i "s|^$1=.*|$1=$2|" "$base/app/.env"; grep -q "^$1=" "$base/app/.en
 : > "$base/git-ignore"   # GIT_EXCLUDES_FILE: an empty global excludes file
 for kv in "PROJECTS_ROOT=$base/projects" "GIT_EXCLUDES_FILE=$base/git-ignore" "LAUNCHER_RUN_DIR=$base/run" "LAUNCHER_STATE_DIR=$base/state" \
           "CLAUDE_SESSIONS_DIR=$base/home/.claude/sessions" MCP_HOST=127.0.0.1 \
-          DATABASE_ADAPTER=sqlite COMPOSE_PROFILES= PUBLIC_HOST= GITHUB_LOGIN=e2e-user GITHUB_TOKEN=e2e-unused \
+          DATABASE_ADAPTER=sqlite COMPOSE_PROFILES= PUBLIC_HOST= \
           'SSH_ATTACH_TEMPLATE="ssh e2e-host"' TEAM_TERMINAL_URL=http://127.0.0.1:1/; do put "${kv%%=*}" "${kv#*=}"; done
 {
   echo "services:"

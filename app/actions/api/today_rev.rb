@@ -3,6 +3,7 @@
 require "digest"
 require "busyyaks/github_network"
 require "busyyaks/github_prs"
+require "busyyaks/git_hosts"
 require "busyyaks/clock"
 
 module Busyyaks
@@ -15,10 +16,11 @@ module Busyyaks
       class TodayRev < Busyyaks::APIAction
         def handle(_req, res)
           gh = Busyyaks::GithubNetwork::Data.default.db
-          login = ENV.fetch("GITHUB_LOGIN")
+          login = Busyyaks::GitHosts.github_login(gh) # nil: no GitHub connected
           pr_run = gh[:gh_pr_runs].where(login: login).exclude(finished_at: nil).order(Sequel.desc(:id)).get(:id)
           prs = gh[:gh_merged_prs].where(login: login).count
-          rev = Digest::SHA256.hexdigest(JSON.dump([Busyyaks::Clock.today.iso8601, store.today_rev_parts, pr_run, prs]))[0, 16]
+          parts = [Busyyaks::Clock.today.iso8601, store.today_rev_parts, login, pr_run, prs]
+          rev = Digest::SHA256.hexdigest(JSON.dump(parts))[0, 16]
           scan = store.last_scan
           json(res, { rev: rev, scan: scan && { finished_at: scan[:finished_at], error: scan[:error] } })
         end

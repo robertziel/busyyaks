@@ -12,7 +12,8 @@ require_relative "github_pollers"
 require_relative "clock"
 
 module Busyyaks
-  # The operator's GitHub network: who GITHUB_LOGIN follows (followees), what they star, whom they follow.
+  # The operator's GitHub network: who the connected account (Settings → Git hosts) follows (followees), what they
+  # star, whom they follow.
   #
   # Collector (bin/github, its own compose service, every github_interval_seconds) snapshots into SQLite (gh_*):
   # - stars: GET /users/:f/starred newest first with starred_at (star+json). Page 1 is conditional (If-None-Match);
@@ -44,6 +45,8 @@ module Busyyaks
 
     class Error < StandardError; end
     class RepoMoved < Error; end
+    # GitHub answered and refused the token itself (401): the token is wrong, not GitHub down
+    class Rejected < Error; end
 
     # reset: x-ratelimit-reset (epoch) when the primary limit is used up; retry_after: seconds from a secondary limit's
     # Retry-After. Neither known → both nil (nothing says when it ends).
@@ -78,7 +81,7 @@ module Busyyaks
       attr_reader :calls, :not_modified, :rate
 
       def initialize(token:, http: Http.new)
-        raise Error, "GITHUB_TOKEN is empty" if token.to_s.strip.empty?
+        raise Error, "the GitHub token is empty" if token.to_s.strip.empty?
 
         @token = token
         @http = http
@@ -153,7 +156,7 @@ module Busyyaks
                                 "#{h['x-ratelimit-limit'] || '?'} left, resets #{reset}) at #{path}: #{msg}",
                                 reset: used_up ? h["x-ratelimit-reset"].to_i : nil, retry_after: retry_after)
         end
-        raise Error, "GitHub rejected GITHUB_TOKEN (401): #{msg}" if status == 401
+        raise Rejected, "GitHub rejected the token (401): #{msg}" if status == 401
 
         raise Error, "GitHub #{status} at #{path}: #{msg}"
       end
@@ -252,7 +255,7 @@ module Busyyaks
       include FeedSync
 
       def initialize(login:, client:, data:, clock: -> { Busyyaks::Clock.epoch })
-        raise Error, "GITHUB_LOGIN #{login.inspect} is not a GitHub login" unless login.to_s.match?(LOGIN)
+        raise Error, "#{login.inspect} is not a GitHub login" unless login.to_s.match?(LOGIN)
 
         @login = login
         @client = client

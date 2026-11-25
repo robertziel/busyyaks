@@ -7,9 +7,12 @@
 require "sequel"
 require "busyyaks/clock" # from the image's lib/ (-I lib): stdin has no file to require relative to
 
-login = ENV.fetch("GITHUB_LOGIN")
+# the demo's GitHub account: connected the way Settings → Git hosts records it, no token (no collector runs)
+login = ENV.fetch("DEMO_GITHUB_LOGIN") # scripts/readme-images/build
 db = Sequel.sqlite(ENV.fetch("SQLITE_PATH"))
 now = Busyyaks::Clock.epoch
+db[:git_host_connections].insert(provider: "github", login: login, token_hint: "…demo", author: "readme demo",
+                                 created_at: now)
 repos = %w[acme/storefront acme/payments-api acme/mobile-app acme/docs-site acme/infra].freeze
 titles = [
   "Paginate the product listing", "Fix currency rounding on invoices", "Upgrade to Ruby 3.4",

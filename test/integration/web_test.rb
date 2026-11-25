@@ -247,15 +247,25 @@ class WebTest < Minitest::Test
     assert_equal [[], 0, nil, nil], [j["merged_prs"], j["merged_prs_total"], j["pr_status"], j["stats"]["prs_today"]]
 
     db = Busyyaks::GithubNetwork::Data.default.db
-    db[:gh_pr_runs].insert(login: ENV.fetch("GITHUB_LOGIN"), since: (Busyyaks::Clock.today - 7).iso8601, started_at: 1,
+    db[:gh_pr_runs].insert(login: GitHostFixture::LOGIN, since: (Busyyaks::Clock.today - 7).iso8601, started_at: 1,
                            finished_at: 2, ok: true, found: 1, added: 1, calls: 1)
-    db[:gh_merged_prs].insert(login: ENV.fetch("GITHUB_LOGIN"), repo: "o/r", number: 5, title: "T",
+    db[:gh_merged_prs].insert(login: GitHostFixture::LOGIN, repo: "o/r", number: 5, title: "T",
                               url: "https://github.com/o/r/pull/5", merged_at: Busyyaks::Clock.epoch, first_seen_at: 2)
     j = api(:get, "/api/today")
     assert_equal [1, 1], [j["stats"]["prs_today"], j["days"][0]["prs"]]
     assert_equal({ "repo" => "o/r", "number" => 5, "title" => "T", "url" => "https://github.com/o/r/pull/5",
                    "merged_at" => j["merged_prs"][0]["merged_at"], "project_slug" => "r", },
                  j["merged_prs"][0], "the GitHub repo maps to the tracked project")
+    assert_nil j["github_off"]
+
+    # no git host connected — said, and no PR is read (the stored one belongs to an account not connected)
+    GitHostFixture.none!
+    j = api(:get, "/api/today")
+    assert_equal "GitHub not connected — Settings → Git hosts", j["github_off"]
+    assert_equal [[], nil, nil], [j["merged_prs"], j["pr_status"], j["stats"]["prs_today"]]
+    g = api(:get, "/api/github?hours=24")
+    assert_equal "GitHub not connected — Settings → Git hosts", g["github_off"]
+    refute g.key?("repos")
   end
 
   def test_component_gallery_renders_every_catalog_example

@@ -5,6 +5,7 @@ require_relative "github_network"
 require_relative "github"
 require_relative "github_hook"
 require_relative "clock"
+require_relative "git_hosts"
 
 module Busyyaks
   # The flags on a card's PR links: which repo the PR is in (local · public, from the project's
@@ -194,8 +195,14 @@ error: "the repo of #{project[:slug]} is not on github.com (#{project[:remote] |
         @clock = clock
       end
 
+      # a GitHub account is connected (read once per Reader: one page / pass)
+      def connected? = @connected.nil? ? (@connected = !GitHosts.github_login(@db).nil?) : @connected
+
       # → {state:, number:, url:} | {state: "checking"} | {error: "…"} — and marks the row wanted.
       def lookup(repo, ref)
+        # no git host connected: the flag says so — never "checking" (nothing would ever answer)
+        return { error: GitHosts.not_connected } unless connected?
+
         now = @clock.call
         row = @db[:gh_pr_states].where(repo: repo, ref: ref).first
         unless row

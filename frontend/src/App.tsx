@@ -15,6 +15,7 @@ import { Reports } from "./routes/Reports";
 import { Settings } from "./routes/Settings";
 import { AgentRulesSettings } from "./routes/AgentRulesSettings";
 import { DailyReportSettings } from "./routes/DailyReportSettings";
+import { GitHostsSettings } from "./routes/GitHostsSettings";
 import { RuntimeSettings } from "./routes/RuntimeSettings";
 import { ShortcutsSettings } from "./routes/ShortcutsSettings";
 import { UpdateSettings } from "./routes/UpdateSettings";
@@ -59,6 +60,7 @@ export function App() {
           <Route path="settings/agent-rules" element={<AgentRulesSettings />} />
           <Route path="settings/daily-report" element={<DailyReportSettings />} />
           <Route path="settings/runtime" element={<RuntimeSettings />} />
+          <Route path="settings/git-hosts" element={<GitHostsSettings />} />
           <Route path="settings/shortcuts" element={<ShortcutsSettings />} />
           <Route path="settings/updates" element={<UpdateSettings />} />
           <Route path="*" element={<NotFound />} />

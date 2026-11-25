@@ -1,6 +1,6 @@
 // The settings cog at the right end of the header: a menu with the signed-in account, Agents & launchers (/settings),
 // Agent rules (/settings/agent-rules: busyyaks's own skills layers, every global markdown a launched session gets),
-// Daily report (/settings/daily-report), Runtime (/settings/runtime), Shortcuts (/settings/shortcuts),
+// Daily report (/settings/daily-report), Runtime (/settings/runtime), Git hosts (/settings/git-hosts), Shortcuts (/settings/shortcuts),
 // Updates (/settings/updates; card 536: a dot on the cog + the link's tag while an update is available),
 // the hello screen (/hello),
 // the skin and Sign out.
@@ -107,6 +107,9 @@ export function SettingsView({ open, onToggle, email, signOut, csrf, update = nu
         </Link>
         <Link className="settings-link" to="/settings/runtime">
           Runtime
+        </Link>
+        <Link className="settings-link" to="/settings/git-hosts">
+          Git hosts
         </Link>
         <Link className="settings-link" to="/settings/shortcuts">
           Shortcuts

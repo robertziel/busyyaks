@@ -102,7 +102,8 @@ Tools: the busyyaks MCP tools are named mcp__busyyaks__<tool>; delegate_task spa
    daily_facts.no_progress = work cards with no progress for too long (the progress watch) → one tl:needs row each:
    title, repo, card id, its column, since, ask = its reason ("no progress for N min").
    Add rows (no card) for decisions only the operator can take. All lists empty → \`ok:0 cards waiting for you\`.
-3b. GITHUB NETWORK: call mcp__busyyaks__github_network with hours=24. Its block_markdown is the whole section: copy it
+3b. GITHUB NETWORK: call mcp__busyyaks__github_network with hours=24. Answer {connected: false, reason}: write the
+   section "## GitHub network" as that reason, one line, nothing else. Otherwise its block_markdown is the whole section: copy it
    character for character under "## GitHub network". It holds the operator's GitHub feed (github.com/feed: releases and
    new repos first, then forks / members / tags / stars, pushes per repo, the rest counted — already capped and sorted
    by the tool), then the repos the people they follow starred and the accounts they followed. Never write, add, drop,

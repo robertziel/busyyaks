@@ -5,8 +5,8 @@ require "time"
 
 module Busyyaks
   # The operator's GitHub dashboard feed (what github.com/feed shows): GET /users/:login/received_events with
-  # GITHUB_TOKEN — events by the people they follow and on the repos they watch, private ones the token can see
-  # included. GitHub keeps at most 300 events / 90 days there (3 pages of 100).
+  # the connected token (Settings → Git hosts) — events by the people they follow and on the repos they watch,
+  # private ones the token can see included. GitHub keeps at most 300 events / 90 days there (3 pages of 100).
   #
   # Order on that endpoint is by event id, and GitHub's event ids are not time-ordered across id ranges (2026: a block of
   # 2597… ids from Nov 1 sorts above Nov 2's 1893… ids), so "stop at the first seen id" would stop at once and miss

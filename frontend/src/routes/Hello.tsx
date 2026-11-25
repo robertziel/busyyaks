@@ -1,7 +1,8 @@
-// /hello — the setup wizard (re-enterable settings + harness detection). Five steps, any of them
-// reachable from the stepper and named in the URL (?step=checks|skin|projects|agents|summary): Checks (every check
+// /hello — the setup wizard (re-enterable settings + harness detection). Six steps, any of them
+// reachable from the stepper and named in the URL (?step=checks|skin|projects|git|agents|summary): Checks (every check
 // GET /api/setup ran; first run: the trotting yak ticks them in), Skin (this browser's skin, applied live), Projects
-// (the host dir — typed or picked from a host dir browser, checked and applied by bin/launcher; card 532), Agents (the agent CLIs the launcher finds on the host — GET /api/setup/harnesses —
+// (the host dir — typed or picked from a host dir browser, checked and applied by bin/launcher; card 532), Git host
+// (optional, Settings → Git hosts' cards), Agents (the agent CLIs the launcher finds on the host — GET /api/setup/harnesses —
 // and which allowlisted commands become launchers + the default: a new agent settings revision) and Summary (the
 // current values, an Edit per row). Two modes from GET /api/setup's `completed`: a FIRST RUN (the shell opens /hello
 // while <meta name="setup"> is "pending"; Skip setup / Open busyyaks POST /api/setup/complete) and a REOPEN from the
@@ -12,6 +13,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, apiGet, apiPost, invalidate, useResource } from "../api";
 import { CopyChip } from "../components/Copy";
+import { GitHosts } from "../components/GitHosts";
 import { SkinSwitch, skinName } from "../components/Skin";
 import { ErrorState } from "../components/States";
 import { YakLoader } from "../components/YakLoader";
@@ -48,6 +50,7 @@ import {
   type SetupData,
   type StepKey,
 } from "../lib/hello";
+import { GIT_HOSTS_KEY, summaryLine, type GitHostsData } from "../lib/gitHosts";
 import { markSetupDone } from "../lib/setupGate";
 import { useTitle } from "../lib/title";
 
@@ -226,6 +229,19 @@ export function Skin() {
         current: {skinName()} · stored in this browser · settings cog → Skin · more: <code>skins/&lt;key&gt;.yml</code>{" "}
         (host, restart)
       </p>
+    </section>
+  );
+}
+
+// optional: Next with nothing connected is fine — every page that needs a host says so and links here
+function GitHost() {
+  return (
+    <section className="hello-step">
+      <StepHeading>Git host</StepHeading>
+      <p className="muted">
+        optional · stars, follows, the feed, merged PRs and PR / CI reads · later: settings cog → Git hosts
+      </p>
+      <GitHosts />
     </section>
   );
 }
@@ -1179,6 +1195,7 @@ export function ReadyFacts({
   data,
   summary,
   harnesses,
+  gitHost,
   checks = data.checks,
   firstRun = false,
   onEdit = null,
@@ -1186,6 +1203,7 @@ export function ReadyFacts({
   data: SetupData;
   summary: Summary;
   harnesses?: { data?: HarnessesData; error?: ApiError } | null;
+  gitHost?: { data?: GitHostsData; error?: ApiError };
   checks?: Check[];
   firstRun?: boolean;
   onEdit?: ((s: StepKey) => void) | null;
@@ -1212,6 +1230,21 @@ export function ReadyFacts({
         {data.projects.host_root && <code>{data.projects.host_root}</code>}
         {edit("projects")}
       </dd>
+      {gitHost !== undefined && (
+        <>
+          <dt>git host</dt>
+          <dd>
+            {gitHost.data ? (
+              <span className={gitHost.data.current ? "" : "muted"}>{summaryLine(gitHost.data.current)}</span>
+            ) : gitHost.error ? (
+              <span className="hello-bad">unavailable · {gitHost.error.message}</span>
+            ) : (
+              "checking…"
+            )}
+            {edit("git")}
+          </dd>
+        </>
+      )}
       {harnesses !== undefined && (
         <>
           <dt>harnesses</dt>
@@ -1290,6 +1323,7 @@ export function Hello() {
   const [params, setParams] = useSearchParams();
   const { data, error, reload, refreshing } = useResource<SetupData>(KEY);
   const hr = useResource<HarnessesData>(HARNESSES);
+  const gh = useResource<GitHostsData>(GIT_HOSTS_KEY);
   const [saved, setSaved] = useState<AgentSettingsData | null>(null);
   const [draft, setDraftState] = useState<(Draft & { rev: number }) | null>(null);
   const [saveState, setSaveState] = useState<SaveState>({
@@ -1533,6 +1567,7 @@ export function Hello() {
             )}
             {step === "skin" && <Skin />}
             {step === "projects" && <Projects data={data} />}
+            {step === "git" && <GitHost />}
             {step === "agents" && (
               <Agents
                 agents={agents}
@@ -1569,6 +1604,7 @@ export function Hello() {
                   data={data}
                   summary={summary}
                   harnesses={{ data: detect.data, error: detect.error }}
+                  gitHost={{ data: gh.data, error: gh.error }}
                   checks={checks}
                   firstRun={firstRun}
                   onEdit={go}

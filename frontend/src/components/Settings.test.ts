@@ -49,6 +49,7 @@ describe("SettingsView", () => {
     expect(html).toMatch(/<a class="settings-link" href="\/settings"[^>]*>Agents &amp; launchers<\/a>/);
     expect(html).toMatch(/<a class="settings-link" href="\/settings\/daily-report"[^>]*>Daily report<\/a>/);
     expect(html).toMatch(/<a class="settings-link" href="\/settings\/runtime"[^>]*>Runtime<\/a>/);
+    expect(html).toMatch(/<a class="settings-link" href="\/settings\/git-hosts"[^>]*>Git hosts<\/a>/);
     expect(html).toMatch(/<a class="settings-link" href="\/settings\/shortcuts"[^>]*>Shortcuts<\/a>/);
     expect(html).toMatch(/<a class="settings-link" href="\/hello"[^>]*>Setup<\/a>/);
     expect(html.match(/role="radio"/g)).toHaveLength(4);

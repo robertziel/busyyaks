@@ -507,6 +507,14 @@ CREATE TABLE `runtime_settings`(
   `author` varchar(255) NOT NULL,
   `created_at` integer NOT NULL
 );
+CREATE TABLE `git_host_connections`(
+  `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+  `provider` varchar(255),
+  `login` varchar(255),
+  `token_hint` varchar(255),
+  `author` varchar(255) NOT NULL,
+  `created_at` integer NOT NULL
+);
 INSERT INTO schema_migrations (filename) VALUES
 ('20261101000000_create_core.rb'),
 ('20261101230000_create_daily.rb'),
@@ -564,4 +572,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261225100000_launch_bar_keys.rb'),
 ('20261225612000_lead_never_assignee.rb'),
 ('20261225613000_comment_actions.rb'),
-('20261226610000_parked_exits_operator_only.rb');
+('20261226610000_parked_exits_operator_only.rb'),
+('20261227630000_git_host_connections.rb');

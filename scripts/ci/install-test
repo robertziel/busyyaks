@@ -23,8 +23,8 @@
 # 127.0.0.1:<WEB_HOST_PORT>/<MCP_HOST_PORT> (.env) and leaves the stack running. Needs (the workflow installs them): Linux with a systemd user
 # manager (loginctl enable-linger), docker + compose, ruby >= MIN_RUBY, git, tmux, the claude CLI, curl, jq;
 # `install` also google-chrome, desktop-file-validate, xvfb-run, ImageMagick's import.
-# No credential: .env's GITHUB_TOKEN is a value GitHub refuses (the machine runs the change's own code; the github
-# service records the refusal and keeps serving — nothing here reads GitHub). Env: CI_ARTIFACTS (a dir:
+# No credential: no git host is connected (Settings → Git hosts; an older base's .env GITHUB_TOKEN is a value GitHub
+# refuses) — the machine runs the change's own code; nothing here reads GitHub. Env: CI_ARTIFACTS (a dir:
 # screenshots and the logs of a failure land there); `update` also CI_UPDATE_FROM.
 set -euo pipefail
 
@@ -99,7 +99,10 @@ awk '
     v["PROJECTS_ROOT"] = ENVIRON["W"] "/projects"; v["LAUNCHER_RUN_DIR"] = ENVIRON["W"] "/state/run"
     v["GIT_EXCLUDES_FILE"] = ENVIRON["W"] "/git-ignore"
     v["LAUNCHER_STATE_DIR"] = ENVIRON["W"] "/state/launcher"; v["CLAUDE_SESSIONS_DIR"] = ENVIRON["HOME"] "/.claude/sessions"
+    # a base from before still asks .env for GitHub (the `update` stage installs it); the own .env of the change
+    # has no such line — GitHub is Settings → Git hosts, left unconnected here
     v["GITHUB_LOGIN"] = "octocat"; v["GITHUB_TOKEN"] = "install-test-holds-no-github-token"
+    opt["GITHUB_LOGIN"] = 1; opt["GITHUB_TOKEN"] = 1
     v["TEAM_TERMINAL_URL"] = "http://127.0.0.1:" ENVIRON["WEB_PORT"] "/"  # no team terminal UI: the dashboard (.env.example)
     v["SSH_ATTACH_TEMPLATE"] = "\"ssh -t devbox tmux attach -t {session}\""
     if (ENVIRON["ADAPTER"] == "postgresql") {
@@ -111,7 +114,7 @@ awk '
   { k = $0; sub(/=.*/, "", k) }
   (k in v) && /^[A-Z_]+=/ { print k "=" v[k]; seen[k] = 1; next }
   { print }
-  END { for (k in v) if (!(k in seen)) { print "fill: .env has no " k "= line" > "/dev/stderr"; exit 1 } }
+  END { for (k in v) if (!(k in seen) && !(k in opt)) { print "fill: .env has no " k "= line" > "/dev/stderr"; exit 1 } }
 ' "$env_file" > "$env_file.new"
 cat "$env_file.new" > "$env_file" && rm "$env_file.new"
 sed -e "s|/home/you/|$HOME/|g" "$dir/config/busyyaks.yml" > "$dir/config/busyyaks.yml.new"

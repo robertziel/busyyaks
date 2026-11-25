@@ -1,5 +1,8 @@
+import { createElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
-import { dayShort, dayTiles, total } from "../components/DailyStats";
+import { dayShort, dayTiles, MergedPrs, PrStatusLine, total } from "../components/DailyStats";
 import type { TileProps } from "../components/GraphTile";
 
 const day = (prs: number | null) => ({ day: "2026-11-06", commits: 2, mine: 1, repos: 1, prs });
@@ -31,5 +34,25 @@ describe("dayTiles", () => {
     expect(p.value).toBeNull();
     expect(p.series).toEqual([2, null]);
     expect(p.title).toBe("Fri 06.11 2 · Today —");
+  });
+});
+
+// no GitHub connected is said muted with the way to connect one — never "never read", never "0 merged PRs"
+describe("no GitHub connected", () => {
+  const OFF = "GitHub not connected — Settings → Git hosts";
+  const html = (el: ReactElement) => renderToStaticMarkup(createElement(MemoryRouter, null, el));
+  it("PrStatusLine: muted, linked to Settings → Git hosts, not the red error", () => {
+    const h = html(createElement(PrStatusLine, { status: null, off: OFF }));
+    expect(h).toContain('class="gith-off muted pr-status"');
+    expect(h).toMatch(/<a href="\/settings\/git-hosts"[^>]*>Settings → Git hosts<\/a>/);
+    expect(h).not.toContain("never read");
+    expect(h).not.toContain("err");
+  });
+  it("PrStatusLine without off keeps the never-read error", () => {
+    expect(html(createElement(PrStatusLine, { status: null }))).toContain("never read from GitHub");
+  });
+  it("MergedPrs: — instead of 0 merged PRs", () => {
+    expect(html(createElement(MergedPrs, { prs: [], total: 0, off: OFF }))).toBe('<p class="muted">—</p>');
+    expect(html(createElement(MergedPrs, { prs: [], total: 0 }))).toContain("0 merged PRs");
   });
 });
