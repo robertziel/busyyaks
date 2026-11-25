@@ -43,6 +43,13 @@ class SearchTest < Minitest::Test
     assert_equal "/commit/abcdef1234567", group(res, "commits")[:items].first[:href]
   end
 
+  # a detached repo is found by its sha and says so in the subtitle
+  def test_a_detached_repo_is_found_by_its_sha
+    store.upsert_project(slug: "pogo-tools", branch: nil, detached_sha: "c0ffee1#{'0' * 33}")
+    item = group(search("c0ffee1"), "projects")[:items].first
+    assert_equal ["pogo-tools", "own · detached @ c0ffee1"], [item[:title], item[:subtitle]]
+  end
+
   def test_prefix_ranks_before_substring
     assert_equal %w[pogo-tools acme/sunpogoda], group(search("pogo"), "projects")[:items].map { |i| i[:title] }
   end

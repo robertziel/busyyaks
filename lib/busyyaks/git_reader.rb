@@ -258,16 +258,27 @@ else
   k
 end }
       { remotes: repo.remotes.each_name.to_h { |n| [n, repo.remotes[n]&.url] },
-        branch: b, config: names.to_h { |k| [k, repo.config[k]] }, **dirty, unpushed: unpushed,
+        branch: b.empty? ? nil : b, detached: detached, config: names.to_h { |k| [k, repo.config[k]] }, **dirty,
+        unpushed: unpushed,
         branches: branches, branch_tips: branch_tips, remote_heads: remote_heads, default_ref: default_ref, **walk, }
     end
 
-    def head = { branch: branch, last_commit_at: repo.head_unborn? ? nil : repo.head.target.time.to_i }
+    def head
+      b = branch
+      { branch: b.empty? ? nil : b, detached: detached, last_commit_at: repo.head_unborn? ? nil : repo.head.target.time.to_i }
+    end
 
     # the checked-out branch's name; "" when HEAD is detached (git branch --show-current)
     def branch
       ref = repo.references["HEAD"]
       ref&.type == :symbolic ? ref.target_id.to_s.delete_prefix("refs/heads/") : ""
+    end
+
+    # the commit a detached HEAD points at (full sha); nil when HEAD names a branch (born or not). The scan
+    # says the detached state with this, never a "" branch.
+    def detached
+      ref = repo.references["HEAD"]
+      ref&.type == :direct ? ref.target_id : nil
     end
 
     def default_ref

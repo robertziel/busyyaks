@@ -70,14 +70,15 @@ module Busyyaks
     def path(slug) = "/projects/" + slug.split("/").map { |s| ERB::Util.url_encode(s) }.join("/")
 
     def projects(q)
-      where_like(@db[:projects].where(present: true), :slug, :branch, :remote, q).limit(200).all
+      where_like(@db[:projects].where(present: true), :slug, :branch, :detached_sha, :remote, q).limit(200).all
         .sort_by { |p| [score(p[:slug].split("/").last, q), score(p[:slug], q), -p[:last_commit_at].to_i] }
         .map do |p|
           via = if p[:slug].downcase.include?(q.downcase) then nil
                 elsif p[:branch].to_s.downcase.include?(q.downcase) then "branch #{p[:branch]}"
+                elsif p[:detached_sha].to_s.include?(q.downcase) then API.head_label(p)
                 else p[:remote]
                 end
-          subtitle = [p[:own] ? "own" : "upstream", p[:branch], via].compact.uniq.join(" · ")
+          subtitle = [p[:own] ? "own" : "upstream", API.head_label(p), via].compact.uniq.join(" · ")
           Item.call(kind: "project", title: p[:slug], icon: API.icon_url(p), subtitle: subtitle,
                     href: path(p[:slug]), at: p[:last_commit_at],
                     meta: { commits_7d: p[:commits_window], dirty: p[:dirty], unpushed: p[:unpushed], remote: p[:remote] })

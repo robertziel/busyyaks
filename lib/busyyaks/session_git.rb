@@ -13,7 +13,8 @@ module Busyyaks
 
     module_function
 
-    # → {"ok" => true, "branch" => …, "last_commit_at" => epoch | nil}; Unavailable with the reason otherwise.
+    # → {"ok" => true, "branch" => … (nil when detached), "detached" => sha | nil, "last_commit_at" => epoch | nil};
+    # Unavailable with the reason otherwise.
     def git(session:, socket:, store: Store.default, launcher: LauncherClient)
       rel = launcher.git(session: session, socket: socket)["path"].to_s
       raise Unavailable, "the launcher named no dir for #{session}" if rel.empty? || rel.split("/").include?("..")
@@ -21,7 +22,7 @@ module Busyyaks
       dir = rel == "." ? GitRead.mount : File.join(GitRead.mount, rel)
       project = store.project_at(dir) or raise Unavailable, "#{session} works in #{dir}, which is no listed project"
       head = GitRead.call("head", path: project[:path], root: GitRead.mount)
-      { "ok" => true, "branch" => head["branch"], "last_commit_at" => head["last_commit_at"] }
+      { "ok" => true, "branch" => head["branch"], "detached" => head["detached"], "last_commit_at" => head["last_commit_at"] }
     rescue GitRead::Failed => e
       raise Unavailable, e.message
     end

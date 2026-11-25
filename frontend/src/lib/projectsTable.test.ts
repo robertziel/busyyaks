@@ -16,6 +16,8 @@ const proj = (slug: string, extra: Partial<Project> = {}): Project => ({
   icon: null,
   repo_url: null,
   branch: "main",
+  detached_sha: null,
+  head_label: "main",
   own: true,
   last_commit_at: 1000,
   commits_window: 3,

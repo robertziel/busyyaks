@@ -123,7 +123,7 @@ touch(v)) }
     assert_equal 2, scan["dirty"], "a.txt and new.txt; the submodule is never looked into"
     assert_equal "main", scan["branch"]
     assert_equal 3, scan["commits"].size
-    read("head", d)
+    assert_equal ["main", nil], read("head", d).values_at("branch", "detached")
     churn = read("churn", d, shas: [s1, s2, s3])["files"]
     assert_equal [["a.txt", 1, 0], [".gitattributes", 2, 0], ["a.txt", 1, 0]], churn.first(3).map { |f| f.first(3) }
     assert_equal({ "a.txt" => "main" }, read("files_at", d, refs: %w[main HEAD], files: ["a.txt"])["found"])

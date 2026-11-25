@@ -142,8 +142,14 @@ class WebTest < Minitest::Test
     store.upsert_project(attrs.merge(dirty: 2))
     dirty = api(:get, "/api/today/rev")["rev"]
     refute_equal first["rev"], dirty, "repo state"
+    store.upsert_project(attrs.merge(dirty: 2, branch: nil, detached_sha: "a" * 40))
+    detached = api(:get, "/api/today/rev")["rev"]
+    refute_equal dirty, detached, "detached"
+    store.upsert_project(attrs.merge(dirty: 2, branch: nil, detached_sha: "b" * 40))
+    moved = api(:get, "/api/today/rev")["rev"]
+    refute_equal detached, moved, "a detached HEAD that moved"
     store.add_report(date: Busyyaks::Clock.today.iso8601, title: "t", body_md: "b", author: "claude")
-    refute_equal dirty, api(:get, "/api/today/rev")["rev"], "a new report"
+    refute_equal moved, api(:get, "/api/today/rev")["rev"], "a new report"
   end
 
   def test_nested_slug_project_and_note_with_csrf

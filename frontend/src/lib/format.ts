@@ -63,3 +63,7 @@ export function hue(email: string): number {
   for (const b of new TextEncoder().encode(email)) sum += b;
   return (sum * 47) % 360;
 }
+
+// the hover text of a project's head label: the full sha when detached, else the label itself
+export const headTitle = (p: { detached_sha?: string | null; head_label?: string | null }) =>
+  p.detached_sha ? `detached HEAD at ${p.detached_sha}` : (p.head_label ?? "—");

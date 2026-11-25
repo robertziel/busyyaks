@@ -148,7 +148,8 @@ module Busyyaks
       remote = sanitize_remote(r["remotes"]["origin"])
       icon_path, icon_mtime = Icons.find(path)
       @store.upsert_project(
-        slug: slug, path: path, remote: remote, pr_remote: pr_remote(r), branch: r["branch"], **enrolment(r),
+        slug: slug, path: path, remote: remote, pr_remote: pr_remote(r), branch: r["branch"], detached_sha: r["detached"],
+        **enrolment(r),
         own: own?(remote, commits),
         last_commit_at: r["last_commit_at"], # no commits = unknown, not 1970
         commits_window: commits.size, mine_window: commits.count { |c| c[:mine] },
