@@ -262,6 +262,8 @@ class ScannerTest < Minitest::Test
 after.slice(:branches, :default_ref, :last_commit_at, :commits_window)
       assert_equal 2, store.project("good")[:commits_window], "the readable repo was scanned"
       assert after[:present]
+      assert_equal ["bad"], store.commits(slug: "bad").map { |c| c[:subject] }, "a repo not read keeps its commits"
+      refute_empty store.daily(slug: "bad")
 
       git(bad, "config", "--unset", "core.worktree")
       Busyyaks::Scanner.new(config, store).run
@@ -347,6 +349,85 @@ after.slice(:branches, :default_ref, :last_commit_at, :commits_window)
       assert_equal 1, Busyyaks::Scanner.new(scan_config([[root, ""]]), store).run
       assert_equal ["app"], store.projects.map { |p| p[:slug] }
       assert_nil store.last_scan[:error]
+    end
+  end
+
+  # A checkout the scan no longer finds (a worktree that was a project, a removed repo, a slug whose projects
+  # row is gone) leaves no commits or daily rows: Home counts each commit once, under the repo that holds it
+  def test_a_repo_no_longer_found_leaves_no_commits_or_daily_rows
+    Dir.mktmpdir do |root|
+      repo = File.join(root, "app")
+      Dir.mkdir(repo); git(repo, "init", "-q", "-b", "main")
+      git(repo, "commit", "-q", "--allow-empty", "-m", "c")
+      git(repo, "worktree", "add", "-q", "-b", "wt/1", File.join(root, "app_wt1"))
+      sha = "a" * 40
+      %w[app_wt1 gone].each do |slug|
+        store.upsert_project(slug: slug, path: File.join(root, slug), own: true, commits_window: 1, mine_window: 1,
+                             dirty: 0, scanned_at: 1)
+        store.replace_commits(slug, [{ sha: sha, author: "n", email: "me@x.io", subject: "c", committed_at: 1,
+                                       mine: true, }], 0)
+        store.replace_daily(slug, { "2026-01-01" => [1, 1] })
+      end
+      store.replace_commits("no_row", [{ sha: sha, author: "n", email: "me@x.io", subject: "c", committed_at: 1,
+                                         mine: true, }], 0)
+      store.replace_daily("no_row", { "2026-01-01" => [1, 1] })
+
+      Busyyaks::Scanner.new(scan_config([[root, ""]]), store).run
+
+      assert_equal ["app"], store.commits.map { |c| c[:project_slug] }.uniq
+      assert_equal 1, store.commits.size, "the repo's one commit, once"
+      %w[gone app_wt1 no_row].each { |slug| assert_empty store.daily(slug: slug), slug }
+      assert_equal 1, store.daily.values.sum
+      assert_equal false, store.project("gone")[:present]
+    end
+  end
+
+  # A dir the scan cannot list (permission denied) is unknown, never gone — the repos last seen under it keep
+  # their state, commits and daily rows, and the scan's error names the dir
+  def test_a_dir_not_listed_keeps_the_rows_of_the_repos_under_it
+    Dir.mktmpdir do |root|
+      group = File.join(root, "group")
+      repo = File.join(group, "app")
+      FileUtils.mkdir_p(repo); git(repo, "init", "-q", "-b", "main")
+      git(repo, "commit", "-q", "--allow-empty", "-m", "c")
+      Busyyaks::Scanner.new(scan_config([[root, ""]]), store).run
+      assert_equal 1, store.commits(slug: "group/app").size
+      refute_empty store.daily(slug: "group/app")
+
+      children = Dir.method(:children)
+      denied = ->(dir) { dir == group ? raise(Errno::EACCES, dir) : children.call(dir) }
+      Dir.stub(:children, denied) { Busyyaks::Scanner.new(scan_config([[root, ""]]), store).run }
+
+      assert_equal true, store.project("group/app")[:present]
+      assert_equal 1, store.commits(slug: "group/app").size
+      refute_empty store.daily(slug: "group/app")
+      assert_includes store.last_scan[:error], "1 dirs not listed"
+      assert_includes store.last_scan[:error], group
+    end
+  end
+
+  # A root that is mounted but lists no repo (an empty dir, a mount that came back empty) is unknown, never
+  # gone — the repos last seen under it keep their state, commits and daily rows, and the scan's error names the root
+  def test_a_root_that_lists_no_repo_keeps_the_rows_of_the_repos_under_it
+    Dir.mktmpdir do |root|
+      repo = File.join(root, "app")
+      Dir.mkdir(repo); git(repo, "init", "-q", "-b", "main")
+      git(repo, "commit", "-q", "--allow-empty", "-m", "c")
+      Busyyaks::Scanner.new(scan_config([[root, ""]]), store).run
+      assert_equal 1, store.commits(slug: "app").size
+
+      FileUtils.mv(repo, "#{root}.away")
+      begin
+        assert_equal 0, Busyyaks::Scanner.new(scan_config([[root, ""]]), store).run
+      ensure
+        FileUtils.rm_rf("#{root}.away")
+      end
+
+      assert_equal true, store.project("app")[:present]
+      assert_equal 1, store.commits(slug: "app").size
+      refute_empty store.daily(slug: "app")
+      assert_includes store.last_scan[:error], "1 roots list no repos"
+      assert_includes store.last_scan[:error], root
     end
   end
 

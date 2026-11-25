@@ -53,8 +53,25 @@ module Busyyaks
                     .max_by { |p| p[:path].size }
     end
 
+    # slugs of the projects whose checkout is one of these dirs or inside one
+    def slugs_under(dirs)
+      return [] if dirs.empty?
+
+      @db[:projects].select_map(%i[slug path]).select do |_slug, path|
+        dirs.any? { |d| path == d || path.to_s.start_with?("#{d}/") }
+      end.map(&:first)
+    end
+
+    # Every repo the scan did not find (removed, renamed, a linked worktree) is hidden, and its commits and
+    # daily rows go: they are the scan's copy of git, read again if the repo comes back. Left, they counted on Home
+    # and in the reports (activity, today's commits, the year graph) once per gone checkout. Rows of a slug with no
+    # projects row at all go too.
     def mark_absent(except:)
-      @db[:projects].exclude(slug: except).update(present: false)
+      @db.transaction do
+        @db[:projects].exclude(slug: except).update(present: false)
+        @db[:commits].exclude(project_slug: except).delete
+        @db[:daily].exclude(project_slug: except).delete
+      end
     end
 
     def projects(own: nil)

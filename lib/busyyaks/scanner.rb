@@ -37,7 +37,9 @@ module Busyyaks
         failed << "#{slug}: #{why}" if why
         slug
       end
-      @store.mark_absent(except: seen)
+      # a dir the scan could not list, or a root that lists no repo (an empty mount), is unknown, never gone: the repos
+      # last seen under it keep their rows
+      @store.mark_absent(except: seen + @store.slugs_under(@unlisted + @empty_roots))
       error = scan_error(failed, repos.size)
       @store.scan_finished(scan_id, @clock.call, repos.size, error)
       repos.size
@@ -56,6 +58,14 @@ module Busyyaks
     def scan_error(failed, total)
       parts = []
       parts << "#{failed.size} of #{total} repos not read — #{failed.join('; ')}" unless failed.empty?
+      unless @unlisted.empty?
+        parts << "#{@unlisted.size} dirs not listed (permission denied; the repos last seen under them kept) — " \
+                 "#{@unlisted.map { |d| on_host(d) }.join('; ')}"
+      end
+      unless @empty_roots.empty?
+        parts << "#{@empty_roots.size} roots list no repos (an empty mount?; the repos last seen under them kept) — " \
+                 "#{@empty_roots.map { |d| on_host(d) }.join('; ')}"
+      end
       unless @orphans.empty?
         parts << "#{@orphans.size} orphaned worktrees (their git dir is gone) — " \
                  "#{@orphans.map { |path, gitdir| "#{on_host(path)} → #{gitdir}" }.join('; ')}"
@@ -65,13 +75,16 @@ module Busyyaks
 
     def repo_paths
       @orphans = []
+      @unlisted = []
+      @empty_roots = []
       roots = @config.roots.map { |r| File.expand_path(r[:path]) }
       @config.roots.flat_map do |root|
         dir = root[:path]
         raise Errno::ENOENT, "root not mounted: #{dir}" unless File.directory?(dir)
 
-        subdirs(dir).flat_map { |c| find_repos(dir, c, @config.search_depth, roots) }
-                    .map { |rel| [File.join(dir, rel), "#{root[:prefix]}#{rel}", dir] }
+        found = subdirs(dir).flat_map { |c| find_repos(dir, c, @config.search_depth, roots) }
+        @empty_roots << dir if found.empty?
+        found.map { |rel| [File.join(dir, rel), "#{root[:prefix]}#{rel}", dir] }
       end
     end
 
@@ -89,6 +102,7 @@ module Busyyaks
     def subdirs(dir)
       Dir.children(dir).sort.reject { |c| c.start_with?(".") }.select { |c| File.directory?(File.join(dir, c)) }
     rescue Errno::EACCES
+      @unlisted << dir
       []
     end
 
