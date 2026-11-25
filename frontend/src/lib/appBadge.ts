@@ -15,20 +15,24 @@ export function setAppBadge(total: number | null, nav: BadgeNavigator = navigato
 }
 
 // One /api/waiting read with its badge: the total on success, unknown (null) on a failure — the widget's load.
+// Resolves to the outcome: null when the data landed, the error message when it failed (never rejects).
 export function readWaiting<W extends { total: number }>(
   get: () => Promise<W>,
   onData: (w: W) => void,
   onError: (message: string) => void,
   nav: BadgeNavigator = navigator,
-): Promise<void> {
+): Promise<string | null> {
   return get().then(
     (w) => {
       onData(w);
       setAppBadge(w.total, nav);
+      return null;
     },
     (e: unknown) => {
       setAppBadge(null, nav);
-      onError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      onError(message);
+      return message;
     },
   );
 }

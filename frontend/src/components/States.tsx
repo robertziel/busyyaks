@@ -12,7 +12,7 @@ export function Loading({ what, inline = false }: { what: string; inline?: boole
 }
 
 // retry = a Resource's reload, which never rejects (revalidate keeps a failure as the entry's error, shown here)
-export function ErrorState({ error, what, retry }: { error: ApiError; what: string; retry?: () => Promise<void> }) {
+export function ErrorState({ error, what, retry }: { error: ApiError; what: string; retry?: () => Promise<unknown> }) {
   return (
     <div className="flash bad" role="alert">
       <i className="dot bad" />
