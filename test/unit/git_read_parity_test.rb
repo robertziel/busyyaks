@@ -76,7 +76,10 @@ class GitReadParityTest < Minitest::Test
     heads, = git(dir, "for-each-ref", "--format=%(refname:short)", "refs/heads")
     remotes, = git(dir, "for-each-ref", "--format=%(refname:short)", "refs/remotes")
     ref, ref_err = git(dir, "rev-parse", "--abbrev-ref", "HEAD")
-    { "branch" => branch, "dirty" => porcelain.lines.size, "unpushed" => err ? nil : unpushed.to_i,
+    sym, = git(dir, "symbolic-ref", "-q", "HEAD")
+    head, = git(dir, "rev-parse", "HEAD")
+    { "branch" => branch.empty? ? nil : branch, "detached" => sym.empty? ? head : nil,
+      "dirty" => porcelain.lines.size, "unpushed" => err ? nil : unpushed.to_i,
       "last_commit_at" => last.empty? ? nil : last.to_i,
       "commits" => log.lines.map do |l|
         sha, an, ae, ct, s = l.chomp.split("\x1f", 5)
@@ -180,6 +183,8 @@ class GitReadParityTest < Minitest::Test
     assert_parity(d, "stashed")
     git!(d, "checkout", "-q", "--detach", "HEAD~1")
     assert_parity(d, "detached")
+    assert_equal [nil, git!(d, "rev-parse", "HEAD")], read("head", d).values_at("branch", "detached"),
+                 "the idle watch's head op says detached too, never a \"\" branch"
     git!(d, "checkout", "-q", "--orphan", "fresh")
     assert_parity(d, "unborn branch")
 

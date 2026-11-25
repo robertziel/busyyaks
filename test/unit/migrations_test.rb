@@ -25,6 +25,7 @@ class MigrationsTest < Minitest::Test
   BEFORE_LEAD_FIRST = 20_261_206_000_000 # the last migration before v12 (lead-first boards)
   BEFORE_PR_LISTS = 20_261_209_492_000 # the last migration before v14 (a card's PRs are a list)
   BEFORE_PR_FLAGS = 20_261_208_467_999 # just before the PR base / merge flags: whatever lands before it stays
+  BEFORE_DETACHED = 20_261_224_280_999 # just before projects.detached_sha
   BEFORE_PROGRESS = 20_261_209_491_999 # just before the progress watch (Schema v13 + projects.branch_tips)
   RUNTIME = 20_261_217_523_000 # the runtime settings (before writer_sync_seconds joined them)
   BEFORE_HOLD = 20_261_217_523_000 # the last migration before v15 (On hold)
@@ -223,6 +224,21 @@ class MigrationsTest < Minitest::Test
     refute_includes @db.schema(:boards).map(&:first), :archived_at
     migrate
     assert_includes @db.schema(:boards).map(&:first), :archived_at
+  end
+
+  # the up adds detached_sha and turns a stored "" branch (a detached HEAD read before it) into null; the
+  # down drops the column
+  def test_detached_sha_clears_blank_branches_and_rolls_back
+    migrate(BEFORE_DETACHED)
+    project("det")
+    project("on")
+    @db[:projects].where(slug: "det").update(branch: "")
+    migrate
+    assert_equal({ "det" => [nil, nil], "on" => ["main", nil] },
+                 @db[:projects].select_hash(:slug, %i[branch detached_sha]).transform_values(&:to_a))
+    migrate(BEFORE_DETACHED)
+    refute_includes @db.schema(:projects).map(&:first), :detached_sha
+    migrate
   end
 
   # v13 = the progress watch's stretch on the card, + the scanner's branch tips; both roll back

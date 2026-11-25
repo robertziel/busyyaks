@@ -19,9 +19,16 @@ module Busyyaks
     def project(p, sessions = {})
       live = sessions[p[:path]] || []
       { slug: p[:slug], path: p[:path], remote: p[:remote], repo_url: Github.repo_url(p[:remote]), branch: p[:branch],
-        own: p[:own], last_commit_at: p[:last_commit_at], commits_window: p[:commits_window], mine_window: p[:mine_window],
+        detached_sha: p[:detached_sha], head_label: head_label(p), own: p[:own], last_commit_at: p[:last_commit_at],
+        commits_window: p[:commits_window], mine_window: p[:mine_window],
         dirty: p[:dirty], unpushed: p[:unpushed], scanned_at: p[:scanned_at], present: p[:present],
         icon: icon_url(p), sessions: live.map { |s| session(s) }, }
+    end
+
+    # the checked-out branch, or "detached @ <sha7>"; nil = not read. The one place this label is made:
+    # the API serves it (project JSON head_label), search uses it
+    def head_label(p)
+      p[:detached_sha] ? "detached @ #{p[:detached_sha][0, 7]}" : p[:branch]
     end
 
     # The repo's own icon, served by GET /api/icons/*slug; ?v= busts the cache when the file changes. nil = none.

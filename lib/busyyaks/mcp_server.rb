@@ -308,7 +308,8 @@ module Busyyaks
         # one order for subjects and churn.commits, stable on every database (same-second commits by sha)
         cs = cs.sort_by { |c| [c[:committed_at], c[:sha]] }
         p = store.project(slug)
-        { repo: slug, own: p && p[:own], branch: p && p[:branch], upstream: p && !p[:unpushed].nil?, commits: cs.size,
+        { repo: slug, own: p && p[:own], branch: p && p[:branch],
+          detached_sha: p && p[:detached_sha], upstream: p && !p[:unpushed].nil?, commits: cs.size,
           prev: (prev_by[slug] || []).size, mine: cs.count { |c| c[:mine] }, dirty: p && p[:dirty], unpushed: p && p[:unpushed],
           dirty_paths: p && p[:dirty_paths] && JSON.parse(p[:dirty_paths]),
           subjects: cs.map { |c| "#{c[:sha][0, 9]} #{c[:subject]}" },
@@ -446,7 +447,8 @@ module Busyyaks
     end
 
     def project_row(p)
-      { slug: p[:slug], path: p[:path], own: p[:own], branch: p[:branch], remote: p[:remote],
+      { slug: p[:slug], path: p[:path], own: p[:own], branch: p[:branch], detached_sha: p[:detached_sha],
+        remote: p[:remote],
         last_commit: iso(p[:last_commit_at]), commits_window: p[:commits_window], mine_window: p[:mine_window],
         dirty: p[:dirty], unpushed: p[:unpushed], }
     end

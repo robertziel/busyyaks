@@ -27,7 +27,7 @@ module Busyyaks
     # What GET /api/today shows that the scanner / reports change: every repo's state but the scan time,
     # the commits table's size + newest row, the reports. The page re-reads /api/today only when this changes.
     def today_rev_parts
-      cols = %i[slug branch remote pr_remote own present last_commit_at commits_window mine_window dirty unpushed]
+      cols = %i[slug branch detached_sha remote pr_remote own present last_commit_at commits_window mine_window dirty unpushed]
       [@db[:projects].order(:slug).select_map(cols),
        @db[:commits].get { [count.function.*.as(:n), max(:id).as(:newest)] },
        @db[:reports].get { [count.function.*.as(:n), max(:id).as(:newest)] },]

@@ -28,7 +28,8 @@ CREATE TABLE `projects`(
   `local_base` varchar(255),
   `public_base` varchar(255),
   `branch_tips` text,
-  `remote_heads` text
+  `remote_heads` text,
+  `detached_sha` varchar(255)
 );
 CREATE TABLE `commits`(
   `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -557,6 +558,7 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261219429000_runtime_writer_sync.rb'),
 ('20261221574000_agents_kanban_on_hold.rb'),
 ('20261221584000_gate_requires_green_ci.rb'),
+('20261224281000_projects_detached_sha.rb'),
 ('20261224600000_busyyaks_session_prefix.rb'),
 ('20261225000000_team_lead_label.rb'),
 ('20261225100000_launch_bar_keys.rb'),

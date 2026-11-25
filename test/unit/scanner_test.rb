@@ -7,6 +7,7 @@ require "json"
 require "minitest/mock"
 require "busyyaks/config"
 require "busyyaks/scanner"
+require "busyyaks/api"
 
 class ScannerTest < Minitest::Test
   include DBReset
@@ -196,6 +197,29 @@ class ScannerTest < Minitest::Test
       config = scan_config([[root, ""], [File.join(root, "grp"), "g/"]])
       assert_equal 1, Busyyaks::Scanner.new(config, store).run
       assert_equal %w[g/a], store.projects.map { |p| p[:slug] }
+    end
+  end
+
+  # a detached HEAD is stored as no branch + the commit it points at, never a "" branch
+  def test_a_detached_head_is_stored_with_its_sha
+    Dir.mktmpdir do |root|
+      d = File.join(root, "det")
+      Dir.mkdir(d); git(d, "init", "-q", "-b", "main")
+      git(d, "commit", "-q", "--allow-empty", "-m", "one"); git(d, "commit", "-q", "--allow-empty", "-m", "two")
+      first = IO.popen(["git", "-C", d, "rev-parse", "HEAD~1"], &:read).strip
+      git(d, "checkout", "-q", "--detach", first)
+      config = scan_config([[root, ""]])
+      Busyyaks::Scanner.new(config, store).run
+      row = store.project("det")
+      assert_equal [nil, first], [row[:branch], row[:detached_sha]]
+      assert_equal "detached @ #{first[0, 7]}", Busyyaks::API.head_label(row)
+      assert_equal [first, "detached @ #{first[0, 7]}"], Busyyaks::API.project(row).values_at(:detached_sha, :head_label)
+
+      git(d, "checkout", "-q", "main")
+      Busyyaks::Scanner.new(config, store).run
+      row = store.project("det")
+      assert_equal ["main", nil], [row[:branch], row[:detached_sha]]
+      assert_equal "main", Busyyaks::API.head_label(row)
     end
   end
 

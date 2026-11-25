@@ -209,6 +209,7 @@ out.dig("config", "runner"))
                          dirty_paths: JSON.generate([" M app/a.rb", "?? db/migrate/1_x.rb"]))
     store.upsert_project(slug: "b", path: "/b", remote: "https://x/b", branch: "main", own: true, last_commit_at: t,
                          commits_window: 1, mine_window: 0, dirty: 0, unpushed: 2, scanned_at: t)
+    store.upsert_project(slug: "a", branch: nil, detached_sha: "d" * 40) # a detached HEAD
     row = ->(sha, ago, mine) { { sha: sha, author: "r", email: "r@x", committed_at: t - ago, subject: "s #{sha}", mine: mine } }
     store.replace_commits("a", [row.("a1", 3600, true), row.("a2", 7200, true), row.("a3", 30 * 3600, true)], t - (90 * 86_400))
     store.replace_commits("b", [row.("b1", 40 * 3600, false), row.("b2", 50 * 3600, false)], t - (90 * 86_400))
@@ -238,6 +239,9 @@ out.dig("config", "runner"))
     assert_equal({ "commits" => 2, "mine" => 1, "repos_active" => 2 }, f["previous_window"])
     assert_equal [["a", 2, 1, false]], f["repos"].map { |r| [r["repo"], r["commits"], r["prev"], r["upstream"]] }
     assert_equal ["a"], f["pending"]["no_upstream_active_own"]
+    assert_equal [nil, "d" * 40], f["repos"][0].values_at("branch", "detached_sha"), "detached, said"
+    listed = JSON.parse(tool("list_projects")["content"][0]["text"])
+    assert_equal [nil, "d" * 40], listed.find { |p| p["slug"] == "a" }.values_at("branch", "detached_sha")
     assert_equal [" M app/a.rb", "?? db/migrate/1_x.rb"], f["repos"][0]["dirty_paths"], "uncommitted paths come over MCP"
     assert_equal [4, 2], [f["pending"]["dirty_files"], f["pending"]["unpushed_commits"]]
     assert_equal [[id, "check me"]], f["human_check"].map { |c| [c["card"], c["title"]] }

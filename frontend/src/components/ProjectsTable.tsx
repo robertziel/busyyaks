@@ -3,7 +3,7 @@
 import { ProjectIcon } from "./ProjectIcon";
 import { useCallback, useMemo, useState, type CSSProperties, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
-import { ago, at, now, projectPath } from "../lib/format";
+import { ago, at, headTitle, now, projectPath } from "../lib/format";
 import * as store from "../lib/store";
 import { filtering, visible, type Filter, type Row } from "../lib/tree";
 import type { LaunchesData, TreeNode } from "../types";
@@ -181,8 +181,8 @@ export function ProjectsTable({ rows, expanded, active, shown, onToggle, launche
                   )}
                 </td>
                 <td role="cell" className="branch">
-                  <span className="mono" title={p.branch ?? "—"}>
-                    {p.branch ?? "—"}
+                  <span className="mono" title={headTitle(p)}>
+                    {p.head_label ?? "—"}
                   </span>
                 </td>
                 <td role="cell" className={`n when${lc && lc < month ? " old" : ""}`} title={at(lc)}>

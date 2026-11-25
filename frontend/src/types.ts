@@ -14,7 +14,9 @@ export type Project = {
   path: string;
   remote: string | null;
   repo_url: string | null;
-  branch: string | null;
+  branch: string | null; // null = detached (detached_sha) or not read
+  detached_sha: string | null; // the commit a detached HEAD points at
+  head_label: string | null; // the API's label: branch or "detached @ <sha7>"; null = not read
   own: boolean;
   last_commit_at: number | null;
   commits_window: number;

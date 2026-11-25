@@ -14,7 +14,7 @@ import { leaveRefusal } from "../lib/projectRules";
 import { Sessions } from "../components/Sessions";
 import { useStopSessions } from "../components/StopSessions";
 import { ErrorState, Loading } from "../components/States";
-import { ago, at, num } from "../lib/format";
+import { ago, at, headTitle, num } from "../lib/format";
 import { useTitle } from "../lib/title";
 import type { Note, ProjectData, ProjectSessionsData } from "../types";
 
@@ -114,7 +114,9 @@ export function Project() {
         <>
           <section className="stats">
             <div>
-              <b className="mono">{p.branch ?? "—"}</b>
+              <b className="mono" title={headTitle(p)}>
+                {p.head_label ?? "—"}
+              </b>
               <span>Branch</span>
             </div>
             <div>
