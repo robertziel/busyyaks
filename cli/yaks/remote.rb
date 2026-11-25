@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "base64"
 require "etc"
 require "fileutils"
 require "io/console"
@@ -8,6 +7,9 @@ require "json"
 require "optparse"
 require "socket"
 require "yaml"
+
+# base64 through pack("m0") / unpack1("m"), never the base64 library: Ruby 3.4 moved it to a bundled gem that a distro's
+# ruby may not carry (Alpine's: scripts/ci/host-distros), and yaks is stdlib only
 
 module Busyyaks
   module CLI
@@ -354,7 +356,7 @@ module Busyyaks
           raise Refused, "#{@target}: #{hello['error']}" unless hello["ok"]
 
           note("attached to #{hello['session']} on #{@target}, read-only — Ctrl-] t: take control · Ctrl-] q: detach")
-          @ctx.out.write(Base64.decode64(hello["screen"].to_s))
+          @ctx.out.write(hello["screen"].to_s.unpack1("m"))
           raw { loop_frames }
           0
         rescue JSON::ParserError
@@ -381,7 +383,7 @@ module Busyyaks
 
         # → false when the stream ends
         def frame(f)
-          if f.key?("o") then @ctx.out.write(Base64.decode64(f["o"].to_s))
+          if f.key?("o") then @ctx.out.write(f["o"].to_s.unpack1("m"))
           elsif f.key?("control")
             @control = f["control"] == true
             note(@control ? "control taken: your keys reach the agent" : "control released: read-only")
@@ -416,7 +418,7 @@ module Busyyaks
         def key(bytes)
           return note("read-only: Ctrl-] t takes control first") unless @control
 
-          put(i: Base64.strict_encode64(bytes))
+          put(i: [bytes].pack("m0"))
         end
 
         def put(frame)

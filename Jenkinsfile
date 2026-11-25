@@ -36,10 +36,13 @@ pipeline {
   // or that the controller's job restrictions do not let this job run on, never builds: it fails or waits in the queue.
   agent { label requiredAgentLabel() }
 
+  // Builds of one branch run side by side (card #573: a push to `local` no longer queues behind the build before it,
+  // each lands on any free trusted agent). What two overlapping builds share is made safe where
+  // it is shared: each posts the status of its OWN commit; the README badges are published only by the build of the
+  // branch's current head (an older build that finishes last never writes over a newer one's numbers).
   options {
     timestamps()
-    disableConcurrentBuilds()
-    timeout(time: 30, unit: 'MINUTES')
+    timeout(time: 60, unit: 'MINUTES')   // the gates + the install machines (card #573)
     buildDiscarder(logRotator(numToKeepStr: '30'))
   }
 
@@ -89,7 +92,7 @@ pipeline {
           echo "Building ${env.GH_REPO}@${env.GIT_SHA} (${env.BRANCH_NAME}; default branch ${env.DEFAULT_BRANCH})"
           sh 'rm -rf "$WORKSPACE_TMP/ci-logs" "$WORKSPACE_TMP/badges"'
         }
-        notifyGitHub('pending', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + flake + audit + secrets + host Ruby running')
+        notifyGitHub('pending', 'Lint + Ruby suite (SQLite + PostgreSQL) + frontend + flake + audit + secrets + host Ruby + distros, then install running')
       }
     }
 
@@ -104,16 +107,42 @@ pipeline {
         stage('Audit')      { steps { withCredentials([string(credentialsId: 'github-pat', variable: 'CI_GITHUB_READ_TOKEN')]) { gate('audit') } } }
         stage('Secrets')    { steps { gate('secrets') } }
         stage('Host Ruby')  { steps { gate('host') } }
+        stage('Distros')    { steps { gate('distros') } }
       }
       post { success { script { env.GATES_PASSED = 'true' } } }
+    }
+
+    // Install FOR REAL (card #573): each its own disposable machine (scripts/ci/machine-run: systemd, a user
+    // manager and a Docker daemon of its own, in a privileged container of this agent's ROOTLESS daemon). The README
+    // Quickstart → the stack → the systemd --user installers → doctor → the desktop entry. After the gates, so a red
+    // gate costs no machine; two machines at a time per build (each peaks ~4 GB of memory and ~2.6 GB of disk); across builds the agent's
+    // executors bound them: at most 2 × its executors machines run on one agent at once. Screenshots
+    // and a failure's logs are archived with the build (ci-artifacts/).
+    // no credential is bound here: a machine runs the change's own code as its root
+    stage('Machine image') { steps { gate('machine-image') } }
+    stage('Install') {
+      environment { CI_ARTIFACTS = "${env.WORKSPACE}/ci-artifacts" }
+      parallel {
+        stage('Install (SQLite)')     { steps { gate('install') } }
+        stage('Install (PostgreSQL)') { steps { gate('install-pg') } }
+      }
+      post { success { script { env.MACHINES_PASSED = 'true' } } }
     }
 
     stage('Badges') {
       when { expression { env.BRANCH_NAME == env.DEFAULT_BRANCH && !env.CHANGE_ID } }
       steps {
+        script {
+          // read once, a few seconds before the publish: a newer head's build is ≥ 20 min behind this point, so it
+          // publishes after this one whenever the head moves in between
+          String head = branchHead(env.BRANCH_NAME)
+          env.BADGES_FROM_HEAD = (head == env.GIT_SHA) ? 'true' : 'false'
+          if (env.BADGES_FROM_HEAD != 'true') { echo "Badges NOT published by this build: ${env.BRANCH_NAME} is at ${head} now, this build is ${env.GIT_SHA}: the head's build publishes them" }
+        }
         withCredentials([string(credentialsId: env.BADGE_CREDENTIAL, variable: 'GIST_TOKEN')]) {
           sh '''#!/usr/bin/env bash
             set -euo pipefail
+            [ "$BADGES_FROM_HEAD" = true ] || exit 0
             scripts/ci/badges render "$WORKSPACE_TMP/badges" "$WORKSPACE_TMP/ci-logs/ruby.log" "$WORKSPACE_TMP/ci-logs/frontend.log"
             scripts/ci/badges publish "$BADGE_GIST_ID" "$WORKSPACE_TMP/badges"
           '''
@@ -123,9 +152,10 @@ pipeline {
   }
 
   post {
-    success  { notifyGitHub('success', 'Lint (RuboCop + ShellCheck) + Ruby suite (SQLite + PostgreSQL) + frontend + flake + audit + secrets passed') }
+    always   { archiveArtifacts artifacts: 'ci-artifacts/**', allowEmptyArchive: true }
+    success  { notifyGitHub('success', 'Gates (lint · ruby · ruby-pg · frontend · flake · audit · secrets · host · distros) + install passed') }
     failure  {
-      notifyGitHub('failure', env.GATES_PASSED ? 'Gates passed; README badge update failed — see the build log' : 'CI failed — see the build log')
+      notifyGitHub('failure', env.MACHINES_PASSED ? 'Gates + install passed; README badge update failed — see the build log' : env.GATES_PASSED ? 'Gates passed; machine image / install failed — see the build log' : 'CI failed — see the build log')
       script { if (dailyBuild()) { alertGitHub("Daily CI red on ${env.BRANCH_NAME}", 'The daily build of this branch failed; the build log says which stage and why.') } }
     }
     unstable { notifyGitHub('failure', 'CI unstable') }
@@ -154,6 +184,7 @@ void gate(String suite) {
   """
 }
 
+
 // A build the cron trigger started (the daily build), not a push or a PR
 boolean dailyBuild() {
   return !currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause').isEmpty()
@@ -165,6 +196,15 @@ void alertGitHub(String title, String text) {
   withCredentials([string(credentialsId: 'github-pat', variable: 'GH_TOKEN')]) {
     withEnv(["ALERT_TITLE=${title}", "ALERT_TEXT=${text}"]) {
       sh 'scripts/ci/github alert "$ALERT_TITLE" "$ALERT_TEXT"'
+    }
+  }
+}
+
+// The sha a branch points at now (scripts/ci/github branch-head). Unreadable fails the build.
+String branchHead(String branch) {
+  withCredentials([string(credentialsId: 'github-pat', variable: 'GH_TOKEN')]) {
+    withEnv(["HEAD_BRANCH=${branch}"]) {
+      return sh(returnStdout: true, script: 'scripts/ci/github branch-head "$HEAD_BRANCH"').trim()
     }
   }
 }

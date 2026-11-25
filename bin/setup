@@ -304,8 +304,10 @@ SHAPE
     /*)
       run_dir_rules "$run" "$root"
       if [ "$problems" -eq 0 ]; then
-        # created 0700 when missing; an existing one is left as it is (bin/launcher refuses one open to others, never repairs)
-        if [ ! -d "$run" ] && ! { mkdir -p "$(dirname "$run")" && mkdir -m 700 "$run"; }; then
+        # created 0700 when missing, its missing parents too: under the login umask (Ubuntu: 002, user-private groups) a
+        # bare mkdir -p left them group-writable, and bin/launcher refused the dir this made (card #573); an existing one
+        # is left as it is (bin/launcher refuses one open to others, never repairs)
+        if [ ! -d "$run" ] && ! (umask 077 && mkdir -p "$(dirname "$run")" && mkdir "$run"); then
           bad "LAUNCHER_RUN_DIR $run cannot be created"
         elif [ "$(stat -c %u "$(dirname "$run")")" != "$(id -u)" ]; then
           bad "LAUNCHER_RUN_DIR $run: its parent $(dirname "$run") is owned by uid $(stat -c %u "$(dirname "$run")"), not $(id -u)"
@@ -320,9 +322,10 @@ SHAPE
   esac
 
   if [ "$problems" -eq 0 ]; then
-    mkdir -p data
+    # made 0700 under any login umask (Ubuntu: 002): the database lives here (card #573)
+    (umask 077 && mkdir -p data)
     # the compose postgres service's binds (docker-compose.yml postgres): this user's too, before its first start
-    case ",$(value COMPOSE_PROFILES)," in *,postgres,*) mkdir -p data/postgres data/postgres-run ;; esac
+    case ",$(value COMPOSE_PROFILES)," in *,postgres,*) (umask 077 && mkdir -p data/postgres data/postgres-run) ;; esac
     [ "$(stat -c %u data)" = "$(id -u)" ] \
       || bad "./data is owned by uid $(stat -c %u data), not $(id -u): sudo chown -R $(id -u):$(id -g) data"
   fi

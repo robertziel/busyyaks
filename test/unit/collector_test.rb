@@ -604,8 +604,9 @@ class CollectorTest < Minitest::Test
     log = Queue.new
     C.supervised("accept", log: ->(m) { log << m }, die: ->(code) { died << code }) { raise Errno::EMFILE }
     assert_equal 1, Wait.pop(died, "the collector's exit", seconds: 10)
-    assert_equal "collector: the accept thread died (Errno::EMFILE: Too many open files): exiting so the unit restarts it",
-                 Wait.pop(log, "the log line", seconds: 10)
+    # the reason in this libc's own words (glibc "Too many open files", musl "No file descriptors available"), exact
+    assert_equal "collector: the accept thread died (Errno::EMFILE: #{Errno::EMFILE.new.message}): exiting so the unit " \
+                 "restarts it", Wait.pop(log, "the log line", seconds: 10)
     ok = C.supervised("connection", log: ->(m) { log << m }, die: ->(code) { died << code }) { :served }
     Wait.join(ok, "a served connection", seconds: 10)
     assert_empty died

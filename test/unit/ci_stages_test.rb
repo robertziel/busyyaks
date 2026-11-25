@@ -35,6 +35,7 @@ class CiStagesTest < Minitest::Test
     @log = File.join(@dir, "calls.log")
     { "scripts/ci/test.sh" => File.read(File.join(ROOT, "scripts/ci/test.sh")),
       "scripts/ci/runner.env" => File.read(File.join(ROOT, "scripts/ci/runner.env")),
+      "scripts/ci/host-tests" => File.read(File.join(ROOT, "scripts/ci/host-tests")),
       "scripts/lint/rubocop" => LINT, "scripts/lint/shellcheck" => LINT, "bin/docker" => DOCKER, }.each do |rel, body|
       FileUtils.mkdir_p(File.dirname(File.join(@dir, rel)))
       File.write(File.join(@dir, rel), body)

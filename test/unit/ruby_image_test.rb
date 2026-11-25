@@ -11,6 +11,13 @@ class RubyImageTest < Minitest::Test
   # re-vendored, never edited here) nor node_modules / build output (not this repo's code)
   DOCKERFILES = Dir.glob("**/Dockerfile*", base: ROOT)
                    .reject { _1.start_with?("vendor/", "node_modules/", "frontend/node_modules/", "public/app/") }.sort.freeze
+  # The rule is by what an image holds. One that COPYs / ADDs this repo's files runs busyyaks's code, so it pins the
+  # patched Ruby. One that copies nothing holds no busyyaks code (a stock OS: the disposable machine of card #573, whose
+  # point is the distro's own packaged Ruby, gets the change as a git bundle at run time), so it has exactly one FROM,
+  # pinned by digest, and that FROM is this release: the reader's box the README's install check stands for. Any other
+  # image without a COPY fails here, so code cannot enter an image some other way unnoticed.
+  READER_MACHINE = "ubuntu:24.04"
+  CARRIES_CODE, HOLDS_NO_CODE = DOCKERFILES.partition { File.read(File.join(ROOT, _1)).match?(/^(?:COPY|ADD)\s/) }.map(&:freeze)
   # the prose that names the image; `ruby:` there is either the pin or the CI host stage's floor (HOST_RUBY_IMAGE)
   # (CLAUDE.md names it too, but is mirror-only: .publish-ignore)
   DOCS = %w[README.md docs/LINT.md].freeze
@@ -22,7 +29,7 @@ class RubyImageTest < Minitest::Test
   end
 
   def test_every_dockerfile_pins_an_exact_patched_ruby
-    DOCKERFILES.each do |path|
+    CARRIES_CODE.each do |path|
       tags = ruby_froms(path)
       refute_empty tags, "#{path}: no FROM ruby: line"
       tags.each do |tag|
@@ -34,12 +41,23 @@ class RubyImageTest < Minitest::Test
   end
 
   def test_every_dockerfile_names_the_same_ruby
-    tags = DOCKERFILES.flat_map { ruby_froms(_1) }.uniq
+    tags = CARRIES_CODE.flat_map { ruby_froms(_1) }.uniq
     assert_equal 1, tags.size, "Dockerfiles disagree on the Ruby image: #{tags.join(' ')}"
   end
 
   def test_the_known_dockerfiles_are_found
-    assert_equal %w[Dockerfile scripts/harness-lab/Dockerfile scripts/hooks/Dockerfile scripts/lint/Dockerfile], DOCKERFILES
+    known = %w[Dockerfile scripts/ci/machine/Dockerfile scripts/harness-lab/Dockerfile scripts/hooks/Dockerfile
+               scripts/lint/Dockerfile]
+    assert_equal known, DOCKERFILES
+  end
+
+  def test_an_image_holding_no_code_is_one_from_pinned_by_digest
+    refute_empty HOLDS_NO_CODE, "the disposable machine's image copies nothing"
+    HOLDS_NO_CODE.each do |path|
+      froms = File.read(File.join(ROOT, path)).scan(/^FROM (\S+)/).flatten
+      assert_equal 1, froms.size, path
+      assert_match(/\A#{Regexp.escape(READER_MACHINE)}@sha256:\h{64}\z/, froms.first, "#{path}: #{READER_MACHINE} by digest")
+    end
   end
 
   def test_the_docs_name_the_pinned_image

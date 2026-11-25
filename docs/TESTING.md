@@ -19,7 +19,23 @@ docker compose run --rm --build test; s=$?; docker compose --profile test rm -sf
 | `flake` | each test file the change touches (vs `CI_BASE_REF`) run `CI_FLAKE_REPEATS` (5) times, in batches of `CI_RUNNER_CPUS` runs: a changed test file, and the tests that name a changed `lib/`, `bin/` or `cli/` file. Any other changed path (docs, `CHANGELOG.md`, config, the SPA, `test/support/`) or a deleted one repeats the whole suite. A heuristic, not coverage: an integration test that reaches a lib file only through the app is repeated only with the whole suite (`ruby` runs it once either way) |
 | `audit` | `bundle-audit check --update` + the image's libgit2 against its security releases + `npm audit --audit-level=low`; any advisory fails, fixed by upgrading |
 | `secrets` | gitleaks over the history |
-| `host` | the host-side programs' tests (`bin/yaks`, the launcher's rules, the installers) on the oldest host Ruby they support |
+| `host` | the host-side programs' tests (`bin/yaks`, the launcher's rules, the installers; the list: `scripts/ci/host-tests`) on the oldest host Ruby they support |
+| `distros` | the host-side tests (`scripts/ci/host-tests`) on Ubuntu 24.04, Debian 13, Fedora 42 and Alpine 3.22, each with its own packaged Ruby and `/bin/sh` and no locale (`scripts/ci/host-distros`) |
+| `install` · `install-pg` | busyyaks installed for real on SQLite / PostgreSQL (`scripts/ci/install-test install`): the README Quickstart as written, the image built, the stack up, `/up` + MCP, the collector / launcher / daily-timer installers against the real `systemctl --user`, `yaks doctor` + `server status`, the XDG desktop entry validated and the chooser opened in Chrome under Xvfb |
+| `update` · `update-pg` | the change's base (merge-base of HEAD and `CI_BASE_REF`) installed the same way, a note + a report written, `yaks update` refused on a dirty checkout and on a release that does not build, then that code's own `yaks update` to HEAD: migrations, a backup, the data kept (`scripts/ci/install-test update`) |
+
+The four machine stages run only by name (never in `all`); Jenkins runs `install` and `install-pg`, and `update` · `update-pg` join it in a follow-up (they install the change's base, which needs this card's fixes first). Each makes a disposable Linux machine for itself
+(`scripts/ci/machine-run`, image `scripts/ci/machine/Dockerfile`): a container with systemd as PID 1, a lingering user
+`ci` with its own systemd user manager and its own Docker daemon (on the **cgroupfs** cgroup driver, where a reader's
+Ubuntu runs systemd's: nested, the systemd driver lost a scope race now and then — card #573), started `--privileged` on a **rootless** Docker
+daemon (the Jenkins agents'), so its root is the CI user's subordinate uid. A rootful daemon is refused. The change goes
+in as a git bundle; the screenshots and, on a failure, the stack's logs come out into `CI_ARTIFACTS/<stage>`; the
+machine and its volumes are removed. No credential goes in (the stack's `.env` GitHub token is one GitHub refuses); they need
+only `CI_ARTIFACTS` and `CI_REGISTRY_MIRROR` (the CI host's Docker Hub pull-through cache URL — each machine's own
+dockerd pulls through it, and the daemon running the machine must use the same one — or `none`; required, no default;
+a Jenkins agent gets it from its own environment). `machine-image` builds the machines' image once, before they run side by side.
+
+macOS: `yaks desktop` is covered only by `cli_test` with Darwin faked on Linux, never on a real Mac (no macOS CI node).
 
 What a run needs (CI passes the same; `.env.example` § CI):
 

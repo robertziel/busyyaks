@@ -1,6 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+# every file this program reads is UTF-8 (.env, config/*.yml, skills, screens), never the locale's encoding: on a host
+# with no UTF-8 locale (LANG unset → US-ASCII) it broke on the first non-ASCII byte (scripts/ci/host-distros)
+Encoding.default_external = Encoding::UTF_8
+
 # busyyaks's agent-session collector (card #479; systemd --user, deploy/busyyaks-collector.service). Every
 # Collector::INTERVAL_S: this uid's tmux panes + /proc → the snapshot of every pane running a coding agent (Claude Code,
 # Hermes: lib/busyyaks/collector/families.rb), replaced atomically at config/busyyaks.yml agents.collector.snapshot;

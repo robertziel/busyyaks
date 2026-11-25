@@ -3,6 +3,7 @@
 require "json"
 require "fileutils"
 require "rubygems"
+require "time" # Time#iso8601 (checked_at): stdlib, not loaded by a bare host Ruby
 require "yaml"
 
 module Busyyaks

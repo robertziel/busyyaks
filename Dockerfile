@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 # Stage 1: the SPA (frontend/ → public/app). `npm run build` type-checks (tsc --noEmit) then bundles;
 # the lockfile is required (npm ci) — generate it in a node container, never on the host.
 FROM node:22-bookworm-slim AS frontend

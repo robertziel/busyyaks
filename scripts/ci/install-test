@@ -1,0 +1,341 @@
+#!/usr/bin/env bash
+# busyyaks installed and updated FOR REAL on a disposable Linux machine (scripts/ci/machine-run's, on Jenkins).
+# scripts/ci/quickstart-test (the host stage) stops at `compose config -q` and the installer tests run against a
+# fake systemctl; this runs what a reader runs, end to end, and checks what they would see. Its only stand-ins:
+#   EDITOR          `$EDITOR .env` is a script filling the values a reader types (and config/busyyaks.yml's /home/you)
+#   hermes          a `hermes` on PATH that refuses to run: install-daily-timer.sh only checks the runner is there; the
+#                   daily tick itself is never run here (no LLM gateway)
+#   chooser-run     starts the desktop entry's Exec under Xvfb, screenshots it and closes the window, as a user would
+#
+#   scripts/ci/install-test install <checkout> sqlite|postgresql
+#       a clone of the checkout → README § Quickstart's block, line by line (EDITOR fills .env and the collector's
+#       paths) → the image built, the six services up → /up 200, MCP tools/list → deploy/install-collector.sh,
+#       deploy/install-launcher.sh, a daily report revision + deploy/install-daily-timer.sh against the real
+#       `systemctl --user` → yaks doctor, yaks server status → yaks desktop install (XDG) + desktop-file-validate, the
+#       entry's Exec run under Xvfb (the server chooser in Chrome's app window) → desktop uninstall
+#   scripts/ci/install-test update <checkout> sqlite|postgresql
+#       the code BEFORE the change (CI_UPDATE_FROM: the PR's base, the push's previous head) installed as above from a
+#       bare "remote", data written through MCP (a note, a report) → a dirty checkout refused · a release whose image
+#       does not build refused, the checkout back and the running stack untouched → `yaks update` (the OLD code's own)
+#       to a release tag on HEAD: the checkout at HEAD, update.json done, a database backup, /up, the data kept
+#
+# Refuses to run unless BUSYYAKS_DISPOSABLE_HOST=1: it installs systemd --user units for this user, binds
+# 127.0.0.1:<WEB_HOST_PORT>/<MCP_HOST_PORT> (.env) and leaves the stack running. Needs (the workflow installs them): Linux with a systemd user
+# manager (loginctl enable-linger), docker + compose, ruby >= MIN_RUBY, git, tmux, the claude CLI, curl, jq;
+# `install` also google-chrome, desktop-file-validate, xvfb-run, ImageMagick's import.
+# No credential: .env's GITHUB_TOKEN is a value GitHub refuses (the machine runs the change's own code; the github
+# service records the refusal and keeps serving — nothing here reads GitHub). Env: CI_ARTIFACTS (a dir:
+# screenshots and the logs of a failure land there); `update` also CI_UPDATE_FROM.
+set -euo pipefail
+
+usage() { echo "usage: scripts/ci/install-test install|update <checkout> sqlite|postgresql" >&2; exit 2; }
+[ "$#" -eq 3 ] || usage
+mode=$1 src=$2 adapter=$3
+case "$mode" in install | update) ;; *) usage ;; esac
+case "$adapter" in sqlite | postgresql) ;; *) usage ;; esac
+fail() { printf 'install-test: %s\n' "$*" >&2; exit 1; }
+step() { printf '\n══ %s\n' "$*"; }
+ok() { printf 'ok: %s\n' "$*"; }
+
+[ "${BUSYYAKS_DISPOSABLE_HOST:-}" = 1 ] \
+  || fail "BUSYYAKS_DISPOSABLE_HOST=1 not set: this installs systemd units and runs the stack for real (a CI runner only)"
+[ "$(uname -s)" = Linux ] || fail "Linux only (the stack, the launcher and the collector): this is $(uname -s)"
+[ -n "${CI_ARTIFACTS:-}" ] || fail "CI_ARTIFACTS is empty"
+tools=(docker git ruby tmux claude curl jq systemctl)
+[ "$mode" = update ] || tools+=(google-chrome desktop-file-validate xvfb-run import)
+for c in "${tools[@]}"; do command -v "$c" >/dev/null || fail "$c not on PATH"; done
+systemctl --user show-environment >/dev/null 2>&1 || fail "no systemd user manager (systemctl --user fails): loginctl enable-linger"
+docker compose version >/dev/null || fail "no docker compose plugin"
+src=$(cd "$src" && pwd)
+mkdir -p "$CI_ARTIFACTS"
+art=$(cd "$CI_ARTIFACTS" && pwd)
+
+# under $HOME, never /tmp: bin/setup check refuses a LAUNCHER_RUN_DIR below a dir others can write
+work=$HOME/busyyaks-ci
+[ ! -e "$work" ] || fail "$work exists: one run per machine"
+mkdir -p "$work/projects/demo" "$work/bin"
+# the harness's own dir, as a reader's home is (0700): the login session's umask (Ubuntu: 002, user-private groups)
+# would leave it group-writable, which bin/setup check rightly refuses as LAUNCHER_RUN_DIR's ancestor
+chmod 700 "$work"
+git -C "$work/projects/demo" init -q -b main
+git -C "$work/projects/demo" -c user.name=ci -c user.email=ci@localhost commit -q --allow-empty -m "first commit"
+co=$work/busyyaks   # the checkout under test (a clone)
+
+# on any failure: what a reader would look at, into the artifacts (and the tail on the log)
+diagnose() {
+  local status=$?
+  [ "$status" -ne 0 ] || return 0
+  echo "install-test: FAILED (exit $status) — diagnostics in $art" >&2
+  if [ -d "$co" ]; then
+    (cd "$co" && docker compose ps -a) > "$art/compose-ps.txt" 2>&1 || true
+    (cd "$co" && docker compose logs --no-color --tail 400) > "$art/compose-logs.txt" 2>&1 || true
+    tail -n 60 "$art/compose-logs.txt" >&2 || true
+    git -C "$co" log --oneline -3 > "$art/checkout.txt" 2>&1 || true
+  fi
+  # busyyaks's units only; from the launcher's state only its logs and the update records — never leads.json (the
+  # lead keys) or created.json: a public repo's artifacts are readable by anyone
+  journalctl --user --no-pager -n 400 -u 'busyyaks-*' > "$art/journal-busyyaks.txt" 2>&1 || true
+  if [ -d "$work/state/launcher" ]; then
+    mkdir -p "$art/launcher-state"
+    find "$work/state/launcher" -maxdepth 1 -type f \( -name '*.log' -o -name 'update.json' -o -name 'update-check.json' \) \
+      -exec cp {} "$art/launcher-state/" \; 2>/dev/null || true
+  fi
+}
+trap diagnose EXIT
+
+# EDITOR for `$EDITOR .env`: the values README § Quickstart's comment names + group 3 (the host launcher) + the
+# adapter, and config/busyyaks.yml's example paths (/home/you/…) → this user's. Values through ENVIRON, never argv.
+cat > "$work/bin/fill" <<'FILL'
+#!/bin/sh
+set -eu
+env_file=$1
+dir=$(dirname "$env_file")
+WEB_PORT=$(sed -n 's/^WEB_HOST_PORT=\([0-9][0-9]*\)$/\1/p' "$env_file")
+[ -n "$WEB_PORT" ] || { echo "fill: .env has no WEB_HOST_PORT=<port> line" >&2; exit 1; }
+export WEB_PORT
+awk '
+  BEGIN {
+    v["PROJECTS_ROOT"] = ENVIRON["W"] "/projects"; v["LAUNCHER_RUN_DIR"] = ENVIRON["W"] "/state/run"
+    v["LAUNCHER_STATE_DIR"] = ENVIRON["W"] "/state/launcher"; v["CLAUDE_SESSIONS_DIR"] = ENVIRON["HOME"] "/.claude/sessions"
+    v["GITHUB_LOGIN"] = "octocat"; v["GITHUB_TOKEN"] = "install-test-holds-no-github-token"
+    v["TEAM_TERMINAL_URL"] = "http://127.0.0.1:" ENVIRON["WEB_PORT"] "/"  # no team terminal UI: the dashboard (.env.example)
+    v["SSH_ATTACH_TEMPLATE"] = "\"ssh -t devbox tmux attach -t {session}\""
+    if (ENVIRON["ADAPTER"] == "postgresql") {
+      v["COMPOSE_PROFILES"] = "postgres"; v["DATABASE_ADAPTER"] = "postgresql"; v["POSTGRES_HOST"] = "/data/postgres-run"
+      v["POSTGRES_PORT"] = "5432"; v["POSTGRES_DB"] = "busyyaks"; v["POSTGRES_USER"] = "busyyaks"
+      v["POSTGRES_PASSWORD"] = "installtest0pg"; v["POSTGRES_LOCK_TIMEOUT_MS"] = "15000"
+    }
+  }
+  { k = $0; sub(/=.*/, "", k) }
+  (k in v) && /^[A-Z_]+=/ { print k "=" v[k]; seen[k] = 1; next }
+  { print }
+  END { for (k in v) if (!(k in seen)) { print "fill: .env has no " k "= line" > "/dev/stderr"; exit 1 } }
+' "$env_file" > "$env_file.new"
+cat "$env_file.new" > "$env_file" && rm "$env_file.new"
+sed -e "s|/home/you/|$HOME/|g" "$dir/config/busyyaks.yml" > "$dir/config/busyyaks.yml.new"
+cat "$dir/config/busyyaks.yml.new" > "$dir/config/busyyaks.yml" && rm "$dir/config/busyyaks.yml.new"
+FILL
+chmod +x "$work/bin/fill"
+
+# README § Quickstart's block of the checkout under test (an old release's own, for `update`), run as written: only
+# the clone line is stood in for (the clone exists), EDITOR is the fill. The compose line runs for real.
+quickstart() {
+  sed -n '/^<!-- quickstart:start/,/^<!-- quickstart:end -->/p' "$co/README.md" | sed '1,/^```bash$/d; /^```$/,$d' > "$work/block.sh"
+  head -n 1 "$work/block.sh" | grep -Eq '^git clone [^ ]+ && cd busyyaks$' \
+    || fail "the Quickstart block's first line is not 'git clone <url> && cd busyyaks'"
+  grep -q '^docker compose up ' "$work/block.sh" || fail "the Quickstart block has no 'docker compose up' line"
+  { echo "cd '$co'"; sed 1d "$work/block.sh"; } > "$work/run.sh"
+  W=$work ADAPTER=$adapter EDITOR=$work/bin/fill bash -euo pipefail -x "$work/run.sh"
+}
+
+# one .env value, through bin/env (the one .env reader: `export KEY='value'` lines for eval)
+envv() { (cd "$co" && eval "$(bin/env "$1")" && printf '%s' "${!1}"); }
+
+# one MCP tools/call (or tools/list) with the full bearer from .env as a header file (never in argv)
+# (scripts/ci's one way a bearer reaches curl, as lib/github-api.sh's gh_curl: a process substitution of a named var)
+# The bearer is exported (env: readable by this uid only, as gh_curl's token), never an argument.
+mcp() {
+  local body=$1 var=MCP_BEARER port
+  MCP_BEARER=$(envv MCP_TOKEN) port=$(envv MCP_HOST_PORT)
+  export MCP_BEARER
+  curl -H @<(printf 'Authorization: Bearer %s' "${!var}") \
+    -sfS -m 30 -X POST "http://127.0.0.1:$port/mcp" -H 'Content-Type: application/json' -d "$body"
+}
+tool() { mcp "$(jq -cn --arg n "$1" --argjson a "$2" '{jsonrpc: "2.0", id: 1, method: "tools/call", params: {name: $n, arguments: $a}}')"; }
+
+check_stack() {
+  local code tools
+  code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "http://127.0.0.1:$(envv WEB_HOST_PORT)/up")
+  [ "$code" = 200 ] || fail "/up answered $code, not 200"
+  ok "/up 200"
+  tools=$(mcp '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq -r '.result.tools[].name')
+  grep -qx kanban_board <<<"$tools" || fail "MCP tools/list has no kanban_board: $tools"
+  ok "MCP tools/list: $(wc -l <<<"$tools") tools"
+}
+
+# the host side: collector, launcher, the daily report timer — each installer against the real systemctl --user
+install_host() {
+  step "deploy/install-collector.sh"
+  "$co/deploy/install-collector.sh"
+  step "deploy/install-launcher.sh"
+  "$co/deploy/install-launcher.sh"
+  for u in busyyaks-collector busyyaks-launcher; do
+    systemctl --user is-active --quiet "$u.service" || fail "$u.service is not active"
+  done
+  [ -S "$(envv LAUNCHER_RUN_DIR)/launcher.sock" ] || fail "no launcher socket in LAUNCHER_RUN_DIR"
+  ok "collector + launcher units active, launcher socket there"
+
+  step "a daily report revision + deploy/install-daily-timer.sh"
+  # the timer installer only installs: hermes must be on PATH (daily_report_runners), the tick itself is not run here
+  printf '#!/bin/sh\necho "install-test: hermes is not installed here; the daily tick is not run" >&2\nexit 1\n' > "$work/bin/hermes"
+  chmod +x "$work/bin/hermes"
+  cat > "$work/daily.yml" <<YML
+schedule: "*-*-* 07:00:00"
+cutoff: "12:00"
+probe_timeout: 10
+run_timeout: 90m
+gateway: http://127.0.0.1:9/v1
+model: install-test
+agent_model: install-test
+context_length: 32768
+runner: { type: hermes, command: hermes, home: $HOME/.hermes-busyyaks, max_children: 2 }
+YML
+  (cd "$co" && docker compose exec -T web bin/daily-report-settings import) < "$work/daily.yml"
+  PATH="$work/bin:$PATH" "$co/deploy/install-daily-timer.sh"
+  systemctl --user is-enabled --quiet busyyaks-daily.timer || fail "busyyaks-daily.timer is not enabled"
+  [ -f "$co/data/daily-timer.json" ] || fail "data/daily-timer.json was not written"
+  ok "busyyaks-daily.timer enabled: $(cat "$co/data/daily-timer.json")"
+
+  step "yaks doctor · yaks server status"
+  PATH="$work/bin:$PATH" "$co/bin/yaks" doctor
+  "$co/bin/yaks" server status
+}
+
+# a screenshot of the dashboard as a browser renders it (a local preview: no analytics)
+dashboard_shot() {
+  google-chrome --headless=new --no-first-run --disable-gpu --window-size=1280,900 --virtual-time-budget=8000 \
+    --screenshot="$art/$1" "http://127.0.0.1:$(envv WEB_HOST_PORT)/" >/dev/null 2>&1 || fail "headless Chrome could not screenshot the dashboard"
+  [ -s "$art/$1" ] || fail "no screenshot written to $art/$1"
+  ok "screenshot $1"
+}
+
+# yaks desktop (XDG): the entry, validated; its Exec started under Xvfb opens the chooser in Chrome's app window
+desktop_xdg() {
+  local entry=$HOME/.local/share/applications/busyyaks.desktop state=$HOME/.local/state/busyyaks/desktop.json exec_line pid
+  step "yaks desktop install --browser google-chrome (XDG)"
+  "$co/bin/yaks" desktop install --browser google-chrome
+  [ -f "$entry" ] || fail "no $entry"
+  desktop-file-validate "$entry" || fail "desktop-file-validate refused $entry"
+  grep -qx "X-Busyyaks-Checkout=$co" "$entry" || fail "the entry does not name this checkout"
+  ok "entry valid: $(grep '^Exec=' "$entry")"
+  # Exec= as the menu runs it (Desktop Entry quoting: the arguments yaks writes are plain or "-quoted), under Xvfb;
+  # the helper is a file of its own so no process's argv but Chrome's carries the --app= URL it looks for
+  exec_line=$(sed -n 's/^Exec=//p' "$entry")
+  # its argv, unquoted without evaluating anything (Desktop Entry quoting = double-quoted words), and it must be
+  # the chooser of THIS checkout: <ruby> <checkout>/bin/yaks desktop open --browser <chrome>
+  local -a cmd
+  mapfile -t cmd < <(ruby -rshellwords -e 'puts Shellwords.split(ARGV[0])' "$exec_line")
+  if [ "${#cmd[@]}" -ne 6 ] || [ "${cmd[1]}" != "$co/bin/yaks" ] || [ "${cmd[*]:2:3}" != "desktop open --browser" ]; then
+    fail "the entry's Exec is not this checkout's chooser: $exec_line"
+  fi
+  cat > "$work/bin/chooser-run" <<'RUN'
+#!/usr/bin/env bash
+# chooser-run STATE SHOT CMD...: start CMD (the entry's Exec), wait for the chooser's state file and Chrome's app
+# window (a chrome process whose argv has --app=http://127.0.0.1:<port>), screenshot the screen, close that window,
+# return at once (the chooser keeps running until it sees its window gone)
+set -u
+state=$1 shot=$2; shift 2
+"$@" & app=$!
+wins() { for p in $(pgrep -x chrome); do tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q -- "--app=http://127.0.0.1:" && echo "$p"; done; }
+for _ in $(seq 1 60); do [ -s "$state" ] && [ -n "$(wins)" ] && break; sleep 0.5; done
+[ -n "$(wins)" ] || { echo "chooser-run: no Chrome app window after 30 s" >&2; exit 1; }
+sleep 4   # the chooser page paints
+import -window root "$shot"
+for p in $(wins); do kill "$p" 2>/dev/null; done
+# never `wait` on the chooser here: whether it ends after its last window is the caller's bounded check (30 s)
+disown "$app" 2>/dev/null || true
+exit 0
+RUN
+  chmod +x "$work/bin/chooser-run"
+  xvfb-run -a -s "-screen 0 1280x800x24" "$work/bin/chooser-run" "$state" "$art/desktop-chooser-linux.png" "${cmd[@]}" \
+    || fail "the entry's Exec did not open the chooser in Chrome's app window"
+  [ -s "$state" ] || fail "the chooser wrote no $state: it did not start"
+  pid=$(jq -r .pid "$state")
+  [ -s "$art/desktop-chooser-linux.png" ] || fail "no screenshot of the chooser window"
+  ok "chooser started (pid $pid), screenshot desktop-chooser-linux.png"
+  for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+  if kill -0 "$pid" 2>/dev/null; then kill "$pid"; fail "the chooser (pid $pid) still runs 30 s after its last window closed"; fi
+  ok "chooser ended after its window closed"
+  step "yaks desktop uninstall"
+  "$co/bin/yaks" desktop uninstall
+  [ ! -e "$entry" ] || fail "$entry is still there after uninstall"
+  ok "entry removed"
+}
+
+case "$mode" in
+  install)
+    step "git clone (the checkout under test, $(git -C "$src" rev-parse --short HEAD))"
+    git clone -q "$src" "$co"
+    git -C "$co" checkout -q --detach "$(git -C "$src" rev-parse HEAD)"
+    step "README § Quickstart, as written ($adapter)"
+    quickstart
+    check_stack
+    dashboard_shot "dashboard-$adapter.png"
+    install_host
+    desktop_xdg
+    ;;
+  update)
+    head=$(git -C "$src" rev-parse HEAD)
+    # what an install of the code before this change updates from: the PR's base, the push's previous head
+    # (CI_UPDATE_FROM, set by the workflow per event) — a commit HEAD contains, never HEAD itself
+    prev=$(git -C "$src" rev-parse --verify -q "${CI_UPDATE_FROM:?CI_UPDATE_FROM is empty: the commit to update from}^{commit}") \
+      || fail "CI_UPDATE_FROM $CI_UPDATE_FROM is not a commit of this checkout (fetch-depth 0)"
+    [ "$prev" != "$head" ] || fail "CI_UPDATE_FROM is HEAD itself: nothing to update"
+    git -C "$src" merge-base --is-ancestor "$prev" "$head" || fail "HEAD does not contain CI_UPDATE_FROM $prev: not a fast-forward"
+    step "$(git -C "$src" rev-parse --short "$prev") (before the change) → HEAD $(git -C "$src" rev-parse --short HEAD), through a bare remote"
+    git init -q --bare "$work/remote.git"
+    git -C "$src" push -q "$work/remote.git" "$head:refs/heads/main"
+    git clone -q "$work/remote.git" "$co"
+    git -C "$co" checkout -q --detach "$prev"
+    step "README § Quickstart of $prev, as written ($adapter)"
+    quickstart
+    check_stack
+    install_host
+
+    step "data written on $prev"
+    mark="install-test $prev $(date -u +%Y%m%dT%H%M%SZ)"
+    tool add_note "$(jq -cn --arg b "$mark" '{body: $b, author: "install-test"}')" | jq -e '.result.isError == false' >/dev/null
+    tool post_report "$(jq -cn --arg t "$mark" '{title: $t, body_markdown: "kept across the update", author: "install-test"}')" \
+      | jq -e '.result.isError == false' >/dev/null
+    ok "a note + a report: $mark"
+
+    step "refused: a dirty checkout"
+    # a release to update to: with no tag `yaks update` refuses for that first and never reaches the dirty check
+    git -C "$src" push -q "$work/remote.git" "$head:refs/tags/v9997.0.0"
+    echo "# a local edit" >> "$co/README.md"
+    if "$co/bin/yaks" update > "$work/dirty.log" 2>&1; then cat "$work/dirty.log"; fail "yaks update ran on a dirty checkout"; fi
+    cat "$work/dirty.log"
+    grep -qF "tracked files changed: README.md" "$work/dirty.log" || fail "yaks update refused, but not for the dirty checkout"
+    git -C "$co" checkout -q README.md
+    [ "$(git -C "$co" rev-parse HEAD)" = "$(git -C "$co" rev-parse "$prev^{commit}")" ] || fail "the checkout moved"
+    ok "refused, the checkout still at $prev"
+
+    step "refused: a release whose image does not build"
+    image_before=$(docker image inspect -f '{{.Id}}' busyyaks:local)
+    git clone -q "$work/remote.git" "$work/broken"
+    git -C "$work/broken" checkout -q --detach "$head"
+    printf '\nRUN echo "install-test: this release does not build" && exit 1\n' >> "$work/broken/Dockerfile"
+    git -C "$work/broken" -c user.name=ci -c user.email=ci@localhost commit -q -am "a release that does not build"
+    git -C "$work/broken" tag v9998.0.0
+    git -C "$work/broken" push -q origin refs/tags/v9998.0.0
+    if "$co/bin/yaks" update > "$work/broken.log" 2>&1; then cat "$work/broken.log"; fail "yaks update reported success on a broken build"; fi
+    tail -n 20 "$work/broken.log"
+    grep -qF "docker build failed" "$work/broken.log" || fail "yaks update failed, but not on the release's image build"
+    [ "$(git -C "$co" rev-parse HEAD)" = "$(git -C "$co" rev-parse "$prev^{commit}")" ] || fail "the checkout did not go back to $prev"
+    [ "$(docker image inspect -f '{{.Id}}' busyyaks:local)" = "$image_before" ] || fail "busyyaks:local changed after a failed build"
+    check_stack
+    ok "refused, checkout back at $prev, busyyaks:local untouched, the stack still serves"
+
+    step "yaks update $prev → v9999.0.0 (= HEAD), run by $prev's own yaks"
+    git -C "$src" push -q "$work/remote.git" "$head:refs/tags/v9999.0.0"
+    "$co/bin/yaks" update --check --json > "$work/check.json" || { cat "$work/check.json"; fail "yaks update --check failed"; }
+    jq -e '.tag.name == "v9999.0.0" and .tag.state == "available"' "$work/check.json" >/dev/null \
+      || { cat "$work/check.json"; fail "yaks update --check does not offer v9999.0.0 as available"; }
+    ok "yaks update --check: v9999.0.0 available"
+    "$co/bin/yaks" update
+    [ "$(git -C "$co" rev-parse HEAD)" = "$head" ] || fail "the checkout is at $(git -C "$co" rev-parse --short HEAD), not HEAD"
+    rec=$(envv LAUNCHER_STATE_DIR)/update.json
+    jq -e '.state == "done"' "$rec" >/dev/null || { cat "$rec"; fail "update.json is not done"; }
+    backups=("$co"/data/backups/busyyaks-update-*)
+    [ -e "${backups[0]}" ] || fail "no database backup in data/backups"
+    check_stack
+    notes=$(tool list_notes '{"limit": 50}' | jq -r '.result.content[0].text')
+    grep -qF "$mark" <<<"$notes" || fail "the note written on $prev is gone after the update"
+    reports=$(tool list_reports '{"limit": 50}' | jq -r '.result.content[0].text')
+    grep -qF "$mark" <<<"$reports" || fail "the report written on $prev is gone after the update"
+    ok "at HEAD, update.json done, backup ${backups[0]##*/}, note + report kept"
+    "$co/bin/yaks" server status
+    dashboard_shot "dashboard-after-update-$adapter.png"
+    ;;
+esac
+step "install-test $mode $adapter: ok"

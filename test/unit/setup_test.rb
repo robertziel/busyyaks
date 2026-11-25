@@ -37,9 +37,10 @@ class SetupTest < Minitest::Test
     FileUtils.rm_rf(@tmp)
   end
 
-  def setup!(*args, docker: true, exit_code: 0)
+  def setup!(*args, docker: true, exit_code: 0, umask: "022")
     path = [(@bin if docker), "/usr/local/bin", "/usr/bin", "/bin"].compact.join(":")
     out, err, st = Open3.capture3({ "PATH" => path, "DOCKER_EXIT" => exit_code.to_s, "HOME" => @home },
+                                  "/bin/sh", "-c", "umask #{umask}; exec \"$0\" \"$@\"",
                                   File.join(@dir, "bin/setup"), *args, chdir: @tmp)
     [st.exitstatus, out, err]
   end
@@ -98,6 +99,19 @@ class SetupTest < Minitest::Test
     assert_includes err, "6 problem(s)"
     refute File.exist?(File.join(@dir, "data"))
     refute File.exist?(File.join(@tmp, "docker.log")), "compose is not asked while .env is incomplete"
+  end
+
+  # Ubuntu's login umask is 002 (user-private groups): the run dir's missing parents are made 0700 all the same, so
+  # bin/launcher's ancestor rule accepts the dir check made (card #573: install-launcher.sh refused it)
+  def test_check_under_a_group_writable_umask_makes_the_run_dir_and_its_parents_0700
+    setup!
+    fill(v = filled.merge("LAUNCHER_RUN_DIR" => File.join(@tmp, "state/busyyaks/run"), "COMPOSE_PROFILES" => "postgres"))
+    code, _out, err = setup!("check", umask: "002")
+    assert_equal [0, ""], [code, err]
+    [v["LAUNCHER_RUN_DIR"], File.join(@tmp, "state/busyyaks"), File.join(@tmp, "state"),
+     *%w[data data/postgres data/postgres-run].map { File.join(@dir, _1) },].each do |d|
+      assert_equal 0o700, File.stat(d).mode & 0o777, d
+    end
   end
 
   def test_check_with_every_value_creates_data_and_the_run_dir_then_asks_compose
