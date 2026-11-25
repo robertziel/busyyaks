@@ -338,7 +338,7 @@ err("kanban_move", id: c["id"], column: "qa", author: "lead"))
     # only busyyaks's own start (the Launch bar → Api#launch → register_session) makes the lead; it adopts the work
     reg = k.register_session(session: "tl_g_r", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
     assert_equal ["claude-tl_g_r", [a]], reg.values_at(:agent, :adopted)
-    assert_equal %w[claude-tl_g_r tl_g_r], k.card(a).values_at(:assignee, :owner_session)
+    assert_equal [nil, "tl_g_r"], k.card(a).values_at(:assignee, :owner_session), "card 612: a lead is no assignee"
     c = ok("kanban_create", project: "g/r", title: "D", author: "claude-tl_g_r")
     assert_equal "tl_g_r", c["owner_session"]
 

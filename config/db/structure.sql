@@ -126,7 +126,9 @@ CREATE TABLE `cards`(
   `progress_stale_at` integer,
   `progress_error` text,
   `on_hold_at` integer,
-  `on_hold_by` varchar(255)
+  `on_hold_by` varchar(255),
+  `worker_wait_at` integer,
+  `worker_wait_told_at` integer
 );
 CREATE INDEX `cards_project_slug_column_position_index` ON `cards`(
   `project_slug`,
@@ -556,4 +558,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261221584000_gate_requires_green_ci.rb'),
 ('20261224600000_busyyaks_session_prefix.rb'),
 ('20261225000000_team_lead_label.rb'),
-('20261225100000_launch_bar_keys.rb');
+('20261225100000_launch_bar_keys.rb'),
+('20261225612000_lead_never_assignee.rb');

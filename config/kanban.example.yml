@@ -86,6 +86,11 @@ idle_watch: { ci_ping_after_minutes: 10, ci_comment_after_minutes: 20, owner_idl
 # naming the last evidence; stale_minutes later still nothing → one busyyaks comment; stale_minutes after that the card
 # counts as waiting for you ("no progress for N min") until progress resets it. Required; null = off.
 progress_watch: { stale_minutes: 30 }
+# waiting-for-a-worker watch (card 612; engine: Store#worker_watch_pass): a lead is never a card's assignee — a card in a
+# column the lead takes with no assignee waits for a worker (its face, the board header, the waiting list's
+# `workerless`); the lead gives it to an idle worker (kanban_assign_worker) or starts one (kanban_spawn). Waiting
+# wait_minutes → one ping to the lead, then it counts as waiting for you ("no worker for N min"). Required; null = off.
+worker_watch: { wait_minutes: 15 }
 # the handoff gate's requirements on a board with a gate column (e.g. Human Check): kanban_handoff needs how to QA it
 # (≥ 20 chars), the PR URL, and screenshots attached first for a UI change. requires_ci_url: true also demands the CI
 # run's URL — turn it on once your repos have CI (any system whose run has a URL)

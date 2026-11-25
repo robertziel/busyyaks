@@ -74,6 +74,7 @@ theme:
 # system comments on the card; an alive owner with no card activity and no commit for 4 h is flagged with a comment.
 idle_watch: { ci_ping_after_minutes: 10, ci_comment_after_minutes: 20, owner_idle_hours: 4 }
 progress_watch: { stale_minutes: 30 }
+worker_watch: { wait_minutes: 15 }
 # the handoff gate's requirements on a board with a gate column (Human Check / Ready to merge; the local boards' Human
 # review / Local: Deploy check / Awaiting merge): kanban_handoff needs how to QA it (≥ 20 chars), the PR and CI URLs,
 # and screenshots attached first for a UI change
