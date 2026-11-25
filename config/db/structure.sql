@@ -382,7 +382,8 @@ CREATE TABLE `board_transitions`(
   `name` varchar(255) NOT NULL,
   `from_keys` text NOT NULL,
   `to_key` varchar(255) NOT NULL,
-  `by` varchar(255) NOT NULL
+  `by` varchar(255) NOT NULL,
+  `comment` integer
 );
 CREATE INDEX `board_transitions_project_slug_index` ON `board_transitions`(
   `project_slug`
@@ -559,4 +560,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261224600000_busyyaks_session_prefix.rb'),
 ('20261225000000_team_lead_label.rb'),
 ('20261225100000_launch_bar_keys.rb'),
-('20261225612000_lead_never_assignee.rb');
+('20261225612000_lead_never_assignee.rb'),
+('20261225613000_comment_actions.rb');

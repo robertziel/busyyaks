@@ -60,7 +60,8 @@ export function busyyaksKanbanApi(): KanbanApi {
     // the operator takes an assigned PR off the card, with the reason (the rail row's ×)
     prUnassign: (id, prUrl, reason) => apiPost<CardData>(`/api/cards/${id}/pr-unassign`, { pr_url: prUrl, reason }),
     dialogAnswer: (id, key) => apiPost<CardData>(`/api/cards/${id}/dialog-answer`, { key }),
-    comment: (id, body) => apiPost<CardData>(`/api/cards/${id}/comment`, { body }),
+    // move: a comment action — {transition, column} beside the body, the card moved along it in one go
+    comment: (id, body, move) => apiPost<CardData>(`/api/cards/${id}/comment`, move ? { body, ...move } : { body }),
     commentUpdate: (id, body) => apiPost<CardData>(`/api/comments/${id}`, { body }),
     commentDelete: (id) => apiDelete<CardData>(`/api/comments/${id}`),
     checklistCreate: (cardId, title) => apiPost<CardData>(`/api/cards/${cardId}/checklists`, { title }),
