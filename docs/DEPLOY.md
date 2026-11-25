@@ -780,8 +780,32 @@ newer security release). No long-lived process runs the git CLI on a scanned rep
 | anything that still hangs or grows (a FIFO named by `core.excludesFile`, a huge diff) | the child is killed at `GIT_READ_TIMEOUT_SECONDS` / `GIT_READ_CPU_SECONDS` / `GIT_READ_MEMORY_BYTES`; a file over `GIT_READ_MAX_BLOB_BYTES` is never loaded (binary, said so) |
 
 The child starts with an empty environment (no token or secret of its service: a repo's config can make libgit2 read
-any file the child can, `/proc/self/environ` included) and cwd `/`. A failed read keeps the repo's last good row with
+any file the child can, `/proc/self/environ` included) and cwd `/`. **Global excludes** (card #280): with no HOME the
+child would never see your global excludes file, and every file it lists (editor swap files, `.claude/settings.local.json`)
+would count as dirty although `git status` on the host says clean. `.env` `GIT_EXCLUDES_FILE` names that file — the one
+`git config --global core.excludesFile` names, else git's default `~/.config/git/ignore`, written out; none → an empty
+file you create — and compose mounts it read-only into every service as the only file of `GIT_EXCLUDES_DIR`
+(`/etc/busyyaks/git/ignore`, `create_host_path: false`: a missing file stops the services). The child hands that dir
+to libgit2 as its XDG config dir and refuses it holding anything but `ignore` (an XDG `config` would be read as git
+config), an `ignore` that is a symlink, a FIFO or over 1 MiB. Never guessed: `bin/setup check` refuses an empty,
+relative, missing or symlinked value. A repo's own `core.excludesFile` still wins, as in git. A single-file bind
+mount keeps the inode it was given: an editor that saves by rename (write a new file, move it over) leaves the
+containers on the old content — after editing it, `docker compose up -d --force-recreate --no-build web mcp scanner
+github notifier writer`. A failed read keeps the repo's last good row with
 the reason (`projects.git_error`) and names the repo in the scan's error on the dashboard.
+
+**Upgrading a deployment** (one with no `GIT_EXCLUDES_FILE` yet) — before the update, or compose stops every service
+on `${GIT_EXCLUDES_FILE:?}` (neither `yaks update` nor a by-hand `docker build` + `docker compose up` runs `bin/setup check`):
+
+```sh
+git config --global --type=path core.excludesFile   # prints the file → use it; prints nothing → ~/.config/git/ignore if it exists
+: >> /path/to/that/ignore                 # none at all → create an empty one
+readlink -f /path/to/that/ignore        # a symlink (dotfiles) → use the file it prints: the value must be the plain file
+echo "GIT_EXCLUDES_FILE=/path/to/that/ignore" >> .env   # absolute, a plain file (no symlink)
+bin/setup check                           # refuses an empty, relative, missing or symlinked value
+```
+
+Then update / deploy as usual.
 
 **Remaining risk.** The containment checks run before libgit2 opens the repo and again after it; a process on the
 host that can write under `PROJECTS_ROOT` can still swap a symlink between them. What it reaches then is what the

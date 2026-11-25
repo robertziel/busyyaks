@@ -64,6 +64,21 @@ class ComposeTest < Minitest::Test
     refute_match(/git config .*safe\.directory/, File.read(File.expand_path("../../Dockerfile", __dir__)))
   end
 
+  # card #280: every live service reads repos through a GitRead child, so every one mounts the operator's global git
+  # excludes (.env GIT_EXCLUDES_FILE) read-only as the only file of GIT_EXCLUDES_DIR — never a dir Docker would create
+  def test_every_live_service_mounts_the_global_git_excludes
+    env = COMPOSE.dig("x-app", "environment")
+    assert_equal "/etc/busyyaks/git", env.fetch("GIT_EXCLUDES_DIR")
+    mount = { "type" => "bind", "source" => "${GIT_EXCLUDES_FILE:?}", "target" => "/etc/busyyaks/git/ignore",
+              "read_only" => true, "bind" => { "create_host_path" => false }, }
+    live = COMPOSE.fetch("services").reject { |_, s| s.key?("profiles") }
+    live.each do |name, s|
+      assert_includes Array(s["volumes"] || COMPOSE.dig("x-app", "volumes")), mount, name
+    end
+    assert_equal "/app/test/fixtures/git-excludes", COMPOSE.dig("services", "test", "environment", "GIT_EXCLUDES_DIR")
+    assert_equal ["ignore"], Dir.children(File.expand_path("../fixtures/git-excludes", __dir__))
+  end
+
   # card #429: the writer is the ONE service that mounts the projects read-write (it writes <repo>/.busyyaks/workflow.yml
   # and nothing else); every other one gets x-app's read-only mount. It asks no launcher.
   def test_only_the_writer_mounts_the_projects_read_write
@@ -165,8 +180,11 @@ class ComposeTest < Minitest::Test
     sources = COMPOSE.fetch("services").values.flat_map { |svc| Array(svc["volumes"]) }.filter_map do |v|
       v.is_a?(Hash) ? v.fetch("source") : v[/\A(\$\{[^}]+\}|[^:]+):/, 1]
     end.uniq
-    kinds = sources.map do |src|
+    kinds = sources.filter_map do |src|
       case src
+      # one FILE, not a dir (card #280): a container sees that file and nothing beside it, so no state dir can be in
+      # it, and one around it shows the container nothing else
+      when "${GIT_EXCLUDES_FILE:?}" then nil
       when ".", %r{\A\./} then "the busyyaks checkout"
       when "${PROJECTS_ROOT:?}" then "PROJECTS_ROOT"
       when "${LAUNCHER_RUN_DIR:?}" then "the launcher socket dir"

@@ -1,0 +1,2 @@
+# the suite's global git excludes (docker-compose.yml test GIT_EXCLUDES_DIR; card #280)
+*.excluded-globally

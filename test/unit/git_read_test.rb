@@ -55,8 +55,9 @@ class GitReadTest < Minitest::Test
   # the child's library run in this (test) process: the same request, the same answer
   def in_process(op, dir, root: @root, host_root: GR.host_root, mount: GR.mount, **args)
     require "busyyaks/git_reader"
-    req = args.merge(op: op, path: dir, root: root, host_root: host_root, mount: mount,
-                     max_blob: GR.limits[:max_blob], memory: GR.limits[:memory])
+    req = { excludes_dir: GR.excludes_dir }.merge(args).merge(op: op, path: dir, root: root, host_root: host_root,
+                                                               mount: mount, max_blob: GR.limits[:max_blob],
+                                                               memory: GR.limits[:memory])
     JSON.parse(Busyyaks::GitReader.serve(JSON.generate(req)))
   end
 
@@ -317,11 +318,58 @@ touch(v)) }
     assert_equal "main", read("head", sep)["branch"]
   end
 
+  # card #280: the operator's global excludes (compose mounts .env GIT_EXCLUDES_FILE as <GIT_EXCLUDES_DIR>/ignore) count
+  # as git status counts them — an ignored file, and an untracked dir holding only ignored files, are not dirty
+  def test_the_global_excludes_file_is_honoured
+    d = repo
+    commit(d, "a.txt", "a\n")
+    File.write(File.join(d, "x.excluded-globally"), "x")
+    FileUtils.mkdir_p(File.join(d, "only-ignored"))
+    File.write(File.join(d, "only-ignored", "y.excluded-globally"), "y")
+    File.write(File.join(d, "new.txt"), "n")
+    assert_equal [1, ["?? new.txt"]], read("scan", d, **SCAN).values_at("dirty", "dirty_paths")
+    assert_equal [true, false], read("ignored", d, file: "x.excluded-globally").values_at("ignored", "tracked")
+
+    none = File.join(@root, "SENTINELS", "none")
+    Dir.mkdir(none)
+    File.write(File.join(none, "ignore"), "")
+    scan = read("scan", d, excludes_dir: none, **SCAN)
+    assert_equal ["?? new.txt", "?? only-ignored/", "?? x.excluded-globally"], scan["dirty_paths"]
+    assert_equal scan, in_process("scan", d, excludes_dir: none, **SCAN)
+  end
+
+  # the excludes dir holds the file `ignore` only (an XDG `config` beside it would be read as git config), a regular
+  # file — never a symlink, a FIFO or a huge file — and the request always names it
+  def test_an_excludes_dir_that_is_not_one_plain_ignore_file_is_refused
+    d = repo
+    x = File.join(@sentinels, "x")
+    Dir.mkdir(x)
+    File.write(File.join(x, "ignore"), "*.log\n")
+    File.write(File.join(x, "config"), "[core]\n")
+    refused("head", d, /must hold only the file ignore \(holds \["config", "ignore"\]\)/, excludes_dir: x)
+    File.delete(File.join(x, "config"))
+    File.delete(File.join(x, "ignore"))
+    File.symlink(File.join(GR.excludes_dir, "ignore"), File.join(x, "ignore"))
+    refused("head", d, /ignore must be a regular file \(not a symlink\)/, excludes_dir: x)
+    File.delete(File.join(x, "ignore"))
+    File.mkfifo(File.join(x, "ignore"))
+    refused("head", d, /ignore must be a regular file/, excludes_dir: x)
+    File.delete(File.join(x, "ignore"))
+    File.write(File.join(x, "ignore"), "#" * ((1024 * 1024) + 1))
+    refused("head", d, /ignore is larger than 1048576 bytes/, excludes_dir: x)
+    refused("head", d, /excludes_dir .*missing is not a directory/, excludes_dir: File.join(x, "missing"))
+    refused("head", d, /excludes_dir must be an absolute path/, excludes_dir: "rel")
+
+    require "busyyaks/git_reader"
+    req = { op: "head", path: d, root: @root, host_root: GR.host_root, mount: GR.mount, max_blob: 1 }
+    assert_match(/KeyError.*excludes_dir/, JSON.parse(Busyyaks::GitReader.serve(JSON.generate(req)))["error"])
+  end
+
   # the mount and its host side are part of every request: never assumed
   def test_a_request_without_an_absolute_host_root_is_refused
     require "busyyaks/git_reader"
     d = repo
-    req = { op: "head", path: d, root: @root, max_blob: 1 }
+    req = { op: "head", path: d, root: @root, excludes_dir: GR.excludes_dir, max_blob: 1 }
     assert_match(/KeyError.*host_root/, JSON.parse(Busyyaks::GitReader.serve(JSON.generate(req)))["error"])
     out = JSON.parse(Busyyaks::GitReader.serve(JSON.generate(req.merge(host_root: "projects"))))
     assert_match(/KeyError.*mount/, out["error"])

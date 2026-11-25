@@ -48,17 +48,18 @@ module Busyyaks
       raise Refused, "the request is not an object" unless req.is_a?(Hash)
 
       reader = new(root: req["root"], host_root: req.fetch("host_root"), mount: req.fetch("mount"), path: req["path"],
-                   max_blob: Integer(req["max_blob"]), memory: req["memory"])
+                   excludes_dir: req.fetch("excludes_dir"), max_blob: Integer(req["max_blob"]), memory: req["memory"])
       JSON.generate({ ok: true }.merge(reader.run(req)))
     rescue Refused, Rugged::Error, JSON::ParserError, ArgumentError, TypeError, KeyError, SystemCallError, IOError,
            NoMemoryError => e
       JSON.generate(ok: false, error: "#{e.class.name.split('::').last}: #{e.message}"[0, 2000])
     end
 
-    def initialize(root:, host_root:, mount:, path:, max_blob:, memory: nil)
+    def initialize(root:, host_root:, mount:, path:, excludes_dir:, max_blob:, memory: nil)
       @root = real!(root.to_s, "root")
       @host_root = absolute!(host_root, "host_root")
       @mount = absolute!(mount, "mount")
+      excludes!(excludes_dir)
 
       @path = inside!(path.to_s, "repo dir")
       @max_blob = max_blob
@@ -118,6 +119,26 @@ module Busyyaks
 "sparse checkout is not supported (every skipped file would count as changed)" if bool(r.config["core.sparseCheckout"])
 
       r
+    end
+
+    # The operator's global excludes (card #280: `git status` on the host skips them, so the dirty count must too):
+    # libgit2 reads `<dir>/ignore` as the default core.excludesFile when its XDG search path is dir. The child has no
+    # HOME, so nothing else is ever found there. dir holds `ignore` ONLY — an XDG `config` beside it would be read as
+    # git config (includes, any key) — and `ignore` is a regular file (never a symlink or a FIFO) of at most MAX_CONFIG
+    # bytes; no global excludes = an empty file. A repo's own core.excludesFile still wins, as in git.
+    def excludes!(dir)
+      d = absolute!(dir, "excludes_dir")
+      raise Refused, "excludes_dir #{d} is not a directory" unless File.directory?(d)
+
+      names = Dir.children(d).sort
+      raise Refused, "excludes_dir #{d} must hold only the file ignore (holds #{names.inspect})" unless names == ["ignore"]
+
+      file = File.join(d, "ignore")
+      st = File.lstat(file)
+      raise Refused, "#{file} must be a regular file (not a symlink)" unless st.file?
+      raise Refused, "#{file} is larger than #{MAX_CONFIG} bytes" if st.size > MAX_CONFIG
+
+      Rugged::Settings["search_path_xdg"] = d
     end
 
     def git_dir!

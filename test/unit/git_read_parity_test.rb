@@ -13,7 +13,10 @@ require "busyyaks/git_read"
 # no number on the dashboard. The CLI runs here only on fixtures this test built, with no hostile config.
 class GitReadParityTest < Minitest::Test
   GR = Busyyaks::GitRead
-  CLI_ENV = { "GIT_CONFIG_GLOBAL" => "/dev/null", "GIT_CONFIG_NOSYSTEM" => "1" }.freeze
+  # the CLI honours the same global excludes file the child reads (card #280: GIT_EXCLUDES_DIR/ignore)
+  CLI_ENV = { "GIT_CONFIG_GLOBAL" => "/dev/null", "GIT_CONFIG_NOSYSTEM" => "1", "GIT_CONFIG_COUNT" => "1",
+              "GIT_CONFIG_KEY_0" => "core.excludesFile",
+              "GIT_CONFIG_VALUE_0" => File.join(GR.excludes_dir, "ignore"), }.freeze
 
   def setup = @root = File.realpath(Dir.mktmpdir("parity"))
   def teardown = FileUtils.rm_rf(@root)
@@ -56,7 +59,8 @@ class GitReadParityTest < Minitest::Test
     require "busyyaks/git_reader"
     out = GR.call(op, path: dir, root: @root, **args)
     req = args.merge(op: op, path: dir, root: @root, host_root: GR.host_root, mount: GR.mount,
-                     max_blob: GR.limits[:max_blob], memory: GR.limits[:memory])
+                     excludes_dir: GR.excludes_dir, max_blob: GR.limits[:max_blob],
+                     memory: GR.limits[:memory])
     assert_equal out, JSON.parse(Busyyaks::GitReader.serve(JSON.generate(req)))
     out
   end
@@ -153,6 +157,10 @@ class GitReadParityTest < Minitest::Test
     File.write(File.join(d, "newdir/deep/x"), "x")
     File.write(File.join(d, ".gitignore"), "*.log\n")
     File.write(File.join(d, "noise.log"), "x")
+    # the global excludes (card #280): an ignored file, and an untracked dir holding only ignored files
+    File.write(File.join(d, "editor.excluded-globally"), "x")
+    FileUtils.mkdir_p(File.join(d, "scratch"))
+    File.write(File.join(d, "scratch/s.excluded-globally"), "x")
     assert_parity(d, "dirty, ahead of upstream")
     got = read("scan", d, **SCAN)
     assert_equal({ "branch.main.pushRemote" => "mirror", "remote.pushDefault" => nil, "branch.main.remote" => "origin",

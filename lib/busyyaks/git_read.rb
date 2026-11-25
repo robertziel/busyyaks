@@ -56,6 +56,11 @@ module Busyyaks
     # The projects mount every listed repo lives under (compose PROJECTS_MOUNT) — the containment root of a read.
     def mount = ENV.fetch("PROJECTS_MOUNT")
 
+    # The dir holding the operator's global git excludes as `ignore` and nothing else (compose mounts .env
+    # GIT_EXCLUDES_FILE there, card #280): the child reads it as libgit2's XDG config dir, so the dirty count skips
+    # what host `git status` skips. Required, no default and never a guessed home path (the child has no HOME).
+    def excludes_dir = ENV.fetch("GIT_EXCLUDES_DIR") { raise Invalid, "GIT_EXCLUDES_DIR is not set (docker-compose.yml)" }
+
     # Where the projects mount is on the host (compose PROJECTS_ROOT): the absolute paths git writes into a repo's
     # files (a linked worktree's `gitdir:`) are under it; the child reads them at their place under the mount.
     def host_root = ENV.fetch("PROJECTS_ROOT")
@@ -64,9 +69,11 @@ module Busyyaks
     # answer Hash (string keys); Failed with the reason otherwise. (bin: the child's script — the tests run stand-in
     # children through the same spawn, limits and parsing.)
     # host_root is where mount is on the host; root may be a dir under the mount (a nested `roots` entry, card #268)
-    def call(op, path:, root:, host_root: self.host_root, mount: self.mount, limits: self.limits, bin: BIN, **args)
+    # excludes_dir: the global excludes (excludes_dir above)
+    def call(op, path:, root:, host_root: self.host_root, mount: self.mount, excludes_dir: self.excludes_dir,
+             limits: self.limits, bin: BIN, **args)
       req = JSON.generate(args.merge(op: op, path: path.to_s, root: root.to_s, host_root: host_root.to_s,
-                                     mount: mount.to_s,
+                                     mount: mount.to_s, excludes_dir: excludes_dir.to_s,
                                      max_blob: limits[:max_blob], memory: limits[:memory]))
       out, status = run(req, limits, bin)
       answer = parse(out, status, limits)
