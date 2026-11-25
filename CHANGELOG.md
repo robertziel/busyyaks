@@ -3,6 +3,12 @@
 One line per change a user would notice. Format: [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/);
 versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Card dialog: the comment box stays at the bottom of the card while it scrolls, so writing a comment needs no scrolling; a long draft scrolls inside the box, and a "Write a comment" button (keyboard focus, top of the card) jumps to it.
+
 ## [0.1.0] - 2026-11-25
 
 ### Added
