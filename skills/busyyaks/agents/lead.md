@@ -33,6 +33,10 @@
   what still needs the operator.
 - A card the operator approved whose owner is gone comes back to you: spawn its worker (above); never merge it
   yourself.
+- **Priority first**: wherever you choose an order — which card gets its worker
+  first, which idle owner you nudge first, which ping you act on first — take the cards by priority (high → medium →
+  low → none), then the oldest. The board adopts and pings in that order already; a cap that leaves room for one
+  more worker goes to the highest-priority card waiting.
 
 ## Orchestration
 

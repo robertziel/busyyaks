@@ -33,3 +33,8 @@ You are the AUTHOR AGENT of the cards you were started for (comment role `Author
    The only serial points: push → CI → merge on one card, and the operator's gates.
 8. **After the operator's approval**: the default board (… Human Check → Ready to merge → Merged): merge as the
    repo's rules say, then the card's transition to Merged. A local-repo board: the flow of its skill (the entry's "Load when needed" list).
+9. **Merge in priority order**: `kanban_card` → `approved_queue` = the card's place
+   among the cards approved into the same column (by priority, then the oldest approval; the approve ping names the
+   cards ahead). A card ahead that can merge now (green, unflagged, owned) goes first: merge yours once it has moved
+   on, then rebase onto the new base. One ahead that is held (red CI, a question, no owner) does not hold yours. Order
+   only: nothing refuses the merge, and never idle while waiting — prepare the rebase, the next step.
