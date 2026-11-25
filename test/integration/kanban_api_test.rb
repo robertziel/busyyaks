@@ -415,6 +415,31 @@ ans.values_at("body", "author")
     refute(AgentsKanban::Tools::NAMES.any? { |n| n.match?(/dialog|answer|press/) }, "agents have no tool to answer a dialog")
   end
 
+  # A transition with comment: true is a comment action — saved through the workflow API (and the writer's
+  # file), on the card JSON, and POST /comment {body, transition} posts and moves in one go; a refusal posts nothing
+  def test_a_comment_action_posts_and_moves_in_one_request
+    tpl = JSON.parse(File.read(File.join(__dir__, "../../vendor/agents_kanban/fixtures/boards/coding.board.json")))
+    trs = tpl["transitions"].map { |t| t["name"] == "Fixes needed" ? t.merge("comment" => true) : t }
+    j = api(:post, "/api/projects/g/r/workflow", tpl.merge("transitions" => trs))
+    assert_equal [200, true], [last_response.status, j["transitions"].find { |t| t["name"] == "Fixes needed" }["comment"]]
+    stored = api(:get, "/api/projects/g/r/workflow")["transitions"].find { |t| t["name"] == "Fixes needed" }
+    assert_equal true, stored["comment"]
+
+    id = api(:post, "/api/projects/g/r/board", { title: "c", column: "qa" })["card"]["id"]
+    card = api(:get, "/api/cards/#{id}")["card"]
+    assert_equal [true], card["transitions"].select { |t| t["name"] == "Fixes needed" }.map { |t| t["comment"] }
+    c = api(:post, "/api/cards/#{id}/comment", { body: "the footer overlaps", transition: "Fixes needed" })
+    assert_equal [201, "doing"], [last_response.status, c["card"]["column"]]
+    assert_equal %w[comment move], c["activity"].last(2).map { |e| e["kind"] }
+    assert c["counts"], "a move brings the columns' counts"
+
+    n = c["activity"].size
+    j = api(:post, "/api/cards/#{id}/comment", { body: "x", transition: "Send for QA" })
+    assert_equal 422, last_response.status
+    assert_match(/is no comment action from In progress/, j["error"])
+    assert_equal n, api(:get, "/api/cards/#{id}")["activity"].size, "refused: nothing posted"
+  end
+
   def test_backlog_md_tasks_in_board_json
     FileUtils.mkdir_p(File.join(@dir, "backlog/tasks"))
     File.write(File.join(@dir, "backlog/tasks/task-7 - Y.md"), "---\nid: TASK-7\ntitle: Y\nstatus: Done\n---\n")

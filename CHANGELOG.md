@@ -8,6 +8,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Card dialog: the comment box stays at the bottom of the card while it scrolls, so writing a comment needs no scrolling; a long draft scrolls inside the box, and a "Write a comment" button (keyboard focus, top of the card) jumps to it.
+- Comment actions: a card's comment box offers **Comment** (pings the owner, no move) and one **Comment & <transition> → <column>** button per workflow transition marked `comment: true` out of the card's column — the comment is posted and the card moved in one step. Marked per transition in the board (`.busyyaks/workflow.yml` or the Workflow editor's "Comment action" checkbox), never in code.
 
 ## [0.1.0] - 2026-11-25
 

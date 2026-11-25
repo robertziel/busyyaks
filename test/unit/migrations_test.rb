@@ -33,6 +33,7 @@ class MigrationsTest < Minitest::Test
   BEFORE_TEAM_LEAD = 20_261_224_600_000 # the last migration before the lead's label became its name
   BEFORE_LAUNCH_BAR = 20_261_225_000_000 # the last migration before the Launch bar's keys (launchable, launch_label)
   BEFORE_LEAD_UNASSIGNABLE = 20_261_225_100_000 # the last migration before v17 (card 612: a lead is never an assignee)
+  BEFORE_COMMENT_ACTIONS = 20_261_225_612_000 # the last migration before v18 (comment actions)
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -663,6 +664,41 @@ class MigrationsTest < Minitest::Test
     @db[:card_activity].where(card_id: lead).delete
     migrate(BEFORE_LEAD_UNASSIGNABLE)
     refute_includes @db.schema(:cards, reload: true).map(&:first), :worker_wait_at
+  end
+
+  # v18 adds board_transitions.comment (null = no comment action); the rollback drops it, the transitions kept
+  def test_v18_adds_comment_actions_and_the_rollback_drops_it
+    migrate(BEFORE_COMMENT_ACTIONS)
+    refute_includes @db.schema(:board_transitions, reload: true).map(&:first), :comment
+    migrate
+    assert_includes @db.schema(:board_transitions, reload: true).map(&:first), :comment
+    n = @db[:board_transitions].count
+    assert_operator n, :>, 0, "the template's transitions"
+    assert_equal [nil], @db[:board_transitions].distinct.select_map(:comment), "no comment action after the step"
+    @db[:board_transitions].update(comment: 1)
+    migrate(BEFORE_COMMENT_ACTIONS)
+    refute_includes @db.schema(:board_transitions, reload: true).map(&:first), :comment
+    assert_equal n, @db[:board_transitions].count, "the transitions themselves are kept"
+  end
+
+  # v17 then v18 in one upgrade on a live DB, open cards assigned to a worker and to a lead — v18
+  # re-runs v17's lead-assignee step with the agent settings' lead types (never an ArgumentError), the worker's card
+  # keeps its assignee, the lead's is cleared once (v18 adds no second line)
+  def test_v17_then_v18_with_worker_assigned_open_cards
+    migrate(BEFORE_LEAD_UNASSIGNABLE)
+    project("p")
+    %w[lead worker].each do |type|
+      @db[:agent_sessions].insert(session: "p_#{type}", socket: "default", project_slug: "p", type_key: type,
+                                  launcher_key: "x", agent_name: "#{type}-p", launched_by: "op", launched_at: 1,
+                                  needs_lead: 0)
+    end
+    worker = card("p", "doing", "worker's", assignee: "worker-p", owner_session: "p_worker")
+    lead = card("p", "doing", "lead's", assignee: "lead-p", owner_session: "p_lead")
+    migrate
+    assert_includes @db.schema(:board_transitions, reload: true).map(&:first), :comment
+    assert_equal "worker-p", @db[:cards].where(id: worker).get(:assignee), "a worker stays the assignee"
+    assert_nil @db[:cards].where(id: lead).get(:assignee)
+    assert_equal 1, @db[:card_activity].where(card_id: lead, author: "migration").count, "cleared once"
   end
 
   # v14 turns each card's prs {role => url} into a list (by / at from its own "PR <role>: <url>" line);
