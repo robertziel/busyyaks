@@ -7,14 +7,17 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
-import { buildLanes, CHIP_START, QUIET_LIMIT, type ChipState } from "../lib/sessionLanes";
-import type { AgentSession, TmuxSession } from "../types";
+import { buildLanes, CHIP_START, liveIssue, QUIET_LIMIT, type ChipState } from "../lib/sessionLanes";
+import type { AgentSession, AgentsData, TmuxSession } from "../types";
 import type { RegisteredSession } from "../vendor/agents_kanban";
 import { SessionLanesView, sessionMenuItems, type ViewProps } from "./SessionLanes";
 
 // every fixture session is one busyyaks runs (an open registration): the lanes show nothing else
 const registered = (list: TmuxSession[]) =>
   list.map((t) => ({ session: t.name, type: "worker", launcher: "fullclaude" }) as RegisteredSession);
+
+const agentsData = () =>
+  ({ stale: false, age_s: 1, interval_s: 5, collector_error: null, groups: [] }) as unknown as AgentsData;
 
 const tmux = (name: string, created = 1): TmuxSession => ({
   name,
@@ -227,6 +230,14 @@ describe("SessionLanesView", () => {
     const fresh = view();
     expect(fresh).toContain('class="lanes"');
     expect(fresh).toMatch(/title="Press 1 in p_dialog"/);
+  });
+  it("card 614: a failed session-list refresh is said above the lanes, dimmed: the last read, nothing answerable", () => {
+    const issue = liveIssue(agentsData(), null, "503 launcher down");
+    expect(issue?.kind).toBe("old");
+    const html = view({ issue });
+    expect(html).toMatch(/role="alert">.*showing the last snapshot: session list refresh failed: 503 launcher down/);
+    expect(html).toContain('class="lanes stale"');
+    expect(html.match(/<button[^>]*title="(Press [^"]*|Post this as your answer on the card)"/g) ?? []).toEqual([]);
   });
 
   // the phase word is its own never-cut span; the tool's name a separate suffix the chip shortens first

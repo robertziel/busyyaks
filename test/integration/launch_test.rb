@@ -634,8 +634,8 @@ req.values_at("path", "sessions")
     assert_match(/\{dir\}/, req["prompt_template"])
     assert_equal [nil, "by_group_repo_teamlead"], k.card(orphan).values_at(:assignee, :owner_session),
                  "the lead owns the orphan by rule, and is never its assignee (card 612)"
-    j = api(:get, "/api/projects/group/repo")
-    assert_equal ["group_repo"], j["project"]["sessions"].map { |s| s["name"] }
+    j = api(:get, "/api/projects/group/repo/sessions")
+    assert_equal ["group_repo"], j["sessions"].map { |s| s["name"] }
     assert_equal 1, j["launches"]["types"][0]["running"]
     # a second lead for the same board: refused (one lead per board), nothing started
     j = api(:post, "/api/launch", { slug: "group/repo", type: "lead" })
@@ -644,7 +644,7 @@ req.values_at("path", "sessions")
     assert_equal 1, @requests.count { |r| r["op"] == "launch" }
     # the lead runs localclaude → a sub team and a worker for this board run it too, with no --model (it
     # would override the gateway's); the Launch bar locks the menu to it; another launcher asked for is refused
-    l = api(:get, "/api/projects/group/repo")["launches"]
+    l = api(:get, "/api/projects/group/repo/sessions")["launches"]
     assert_equal "lead", l["types"].find { |t| t["key"] == "team" }["under"]
     assert_equal [%w[by_group_repo_teamlead lead localclaude group/repo]],
                  l["concurrency"]["sessions"].map { |s| s.values_at("session", "type", "launcher", "project") },
@@ -716,6 +716,48 @@ req.values_at("path", "sessions")
     template["agent_types"].each do |t|
       assert Busyyaks::LauncherRules.busyyaks_session?(t["session_name"]), "#{t['key']}: #{t['session_name']}"
     end
+  end
+
+  # card 614: the project page polls its sessions — a session started (the lead's spawn, another tab, by hand) or ended
+  # anywhere shows on the next read; each read asks the launcher afresh; nothing of the page's commits / notes
+  def test_project_sessions_is_the_live_list_read_afresh_each_time
+    fake_launcher
+    j = api(:get, "/api/projects/group/repo/sessions")
+    assert_equal 200, last_response.status
+    assert_equal %w[launcher_error launches sessions], j.keys.sort, "only the live part of the page"
+    assert_equal ["group_repo"], j["sessions"].map { |s| s["name"] }
+    assert_nil j["launcher_error"]
+    assert_equal %w[lead worker team plain], j["launches"]["types"].map { |t| t["key"] }
+    assert_equal "no-store", last_response.headers["Cache-Control"]
+
+    @live_extra = ["group_repo_worker_9"] # the lead spawned a worker
+    j = api(:get, "/api/projects/group/repo/sessions")
+    assert_equal %w[group_repo group_repo_worker_9], j["sessions"].map { |s| s["name"] }
+    assert_equal %w[name created attached terminal_url claude_url ssh_attach], j["sessions"][1].keys
+
+    @live_extra = nil # it ended
+    j = api(:get, "/api/projects/group/repo/sessions")
+    assert_equal ["group_repo"], j["sessions"].map { |s| s["name"] }
+    assert_operator @requests.count { |r| r["op"] == "sessions" }, :>=, 3, "each read asks the launcher"
+
+    api(:get, "/api/projects/no/such/sessions")
+    assert_equal 404, last_response.status
+
+    # the page's one-off read carries no session list or launches (never refreshed) and asks the launcher nothing
+    asked = @requests.size
+    j = api(:get, "/api/projects/group/repo")
+    assert_equal 200, last_response.status
+    assert_equal %w[commits notes project year], j.keys.sort
+    refute_includes j["project"].keys, "sessions"
+    assert_equal asked, @requests.size, "no launcher op for the page's one-off read"
+  end
+
+  def test_project_sessions_says_the_launcher_is_down_never_no_sessions_quietly
+    j = api(:get, "/api/projects/group/repo/sessions")
+    assert_equal 200, last_response.status
+    assert_equal [], j["sessions"]
+    assert_includes j["launcher_error"], "launcher not reachable"
+    assert_includes j["launches"]["sessions_error"], "launcher not reachable"
   end
 
   def test_launcher_down_is_reported_and_launch_is_503

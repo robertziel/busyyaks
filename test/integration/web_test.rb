@@ -68,7 +68,7 @@ class WebTest < Minitest::Test
       assert_equal 302, last_response.status, path
       assert_equal "/login", URI(last_response.location).path
     end
-    %w[/api/today /api/today/rev /api/projects /api/reports /api/agents /api/setup].each do |path|
+    %w[/api/today /api/today/rev /api/projects /api/reports /api/agents /api/setup /api/projects/x/sessions].each do |path|
       j = api(:get, path)
       assert_equal 401, last_response.status, path
       assert_equal "not signed in", j["error"]

@@ -10,10 +10,22 @@
 // focus shows its detail strip (full name · type · launcher · age, tool, time · tokens) — a hover never does; on touch
 // the first tap only shows the strip, whose "Open terminal" button opens it. `⋯` holds the rest: Open in Claude app · Copy iTerm
 // attach · Open external terminal · Copy tmux attach · Stop session; the section's `⋯` holds Stop all.
-// Live state is the Agents sidebar's read (/api/agents, shared, refreshed every 10 s by the sidebar): no extra poll here.
+// Live state is the Agents sidebar's read (/api/agents, shared, refreshed every 10 s by the sidebar); the session list is
+// the project page's own poll (/api/projects/:slug/sessions, card 614). Either read listing a name the other does not
+// asks that other again at once (behindKey): a session started or ended anywhere enters / leaves the lanes on the next
+// read of either, not on a reload.
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
-import { useResource } from "../api";
-import { buildLanes, CHIP_START, chipReducer, inTerminal, liveIssue, refocusAfterTerminal } from "../lib/sessionLanes";
+import { invalidate, useResource } from "../api";
+import {
+  behindKey,
+  buildLanes,
+  catchUpTracker,
+  CHIP_START,
+  chipReducer,
+  inTerminal,
+  liveIssue,
+  refocusAfterTerminal,
+} from "../lib/sessionLanes";
 import type { AgentsData, LaunchesData, TmuxSession } from "../types";
 import { LiveTerminal } from "./LiveTerminal";
 import { SessionLanesView } from "./SessionLanes";
@@ -24,10 +36,27 @@ type Props = {
   busy: string | null;
   stop: (names: string[], what: string) => void;
   launch: ReactNode; // the compact launch bar, shown in the Quiet lane
+  reloadSessions: () => unknown; // read the session list again now
+  sessionsError: string | null; // the session list's last refresh failed: the lanes show its last read
 };
 
-export function Sessions({ sessions, launches, busy, stop, launch }: Props) {
+// Ask a read again when the other one names something it does not — once per new difference (the first render only
+// records: both reads are fresh then)
+function useCatchUp(key: string | null, ask: () => unknown) {
+  const [step] = useState(catchUpTracker);
+  useEffect(() => {
+    if (step(key)) ask();
+  }, [step, key, ask]);
+}
+
+const askAgents = () => invalidate("/api/agents");
+
+export function Sessions({ sessions, launches, busy, stop, launch, reloadSessions, sessionsError }: Props) {
   const { data: agents, error } = useResource<AgentsData>("/api/agents");
+  const agentNames = agents ? agents.groups.flatMap((g) => g.sessions.map((s) => s.name)) : null;
+  const tmuxNames = sessions.map((s) => s.name);
+  useCatchUp(agentNames && behindKey(agentNames, tmuxNames), reloadSessions); // a new session the list has not seen yet
+  useCatchUp(agentNames && behindKey(tmuxNames, agentNames), askAgents); // a listed session the Agents read lacks
   const lanes = buildLanes(
     sessions,
     agents ? agents.groups.flatMap((g) => g.sessions) : null,
@@ -66,7 +95,7 @@ export function Sessions({ sessions, launches, busy, stop, launch }: Props) {
         busy={busy}
         stop={stop}
         launch={launch}
-        issue={liveIssue(agents, error?.message ?? null)}
+        issue={liveIssue(agents, error?.message ?? null, sessionsError)}
       />
       {open?.agent && (
         <LiveTerminal

@@ -16,7 +16,10 @@ import { useStopSessions } from "../components/StopSessions";
 import { ErrorState, Loading } from "../components/States";
 import { ago, at, num } from "../lib/format";
 import { useTitle } from "../lib/title";
-import type { Note, ProjectData } from "../types";
+import type { Note, ProjectData, ProjectSessionsData } from "../types";
+
+// the session list's poll: the Agents read's cadence (Agents.tsx), so the two lanes' reads age alike (card 614)
+export const SESSIONS_EVERY = 10_000;
 
 export function Project() {
   const slug = useParams()["*"] ?? "";
@@ -27,7 +30,11 @@ export function Project() {
   useTitle(slug);
   const key = `/api/projects/${slug.split("/").map(encodeURIComponent).join("/")}`;
   const { data, error, loading, reload } = useResource<ProjectData>(key);
-  const { busy: stopping, stop } = useStopSessions(slug, () => void reload());
+  // the sessions section + its launch bar + the launcher banner read the polled list only — never the page's one-off
+  // read: a session the lead spawned, another tab started or that ended shows without a reload (card 614)
+  const live = useResource<ProjectSessionsData>(`${key}/sessions`, { every: SESSIONS_EVERY });
+  const reloadLive = live.reload;
+  const { busy: stopping, stop } = useStopSessions(slug, () => void reloadLive());
   // the Settings tab's unsaved edits (ProjectRules reports them): leaving the tab would drop them without a word
   const unsaved = useRef(0);
   const onUnsaved = useCallback((n: number) => {
@@ -38,7 +45,7 @@ export function Project() {
   if (error && !data) return <ErrorState error={error} what={slug} retry={reload} />;
   if (!data) return null;
   const p = data.project;
-  const live = [...p.sessions].sort((a, b) => b.created - a.created);
+  const ls = live.data;
   const setTab = (t: "overview" | "board" | "settings") => {
     const refusal = leaveRefusal(tab, t, unsaved.current);
     if (refusal) {
@@ -57,10 +64,16 @@ export function Project() {
   return (
     <>
       {error && <ErrorState error={error} what="refresh" retry={reload} />}
-      {data.launcher_error && (
+      {ls?.launcher_error && (
         <div className="flash bad">
           <i className="dot bad" />
-          <span>Launcher down: {data.launcher_error}</span>
+          <span>Launcher down: {ls.launcher_error}</span>
+        </div>
+      )}
+      {live.error && !ls && (
+        <div className="flash bad">
+          <i className="dot bad" />
+          <span>Sessions unknown: {live.error.message}</span>
         </div>
       )}
       <h1 className="proj-title">
@@ -80,14 +93,16 @@ export function Project() {
           Settings
         </button>
       </div>
-      {data.launches.types.length > 0 && (
+      {ls && ls.launches.types.length > 0 && (
         <section className="launchbar card">
           <Sessions
-            sessions={live}
-            launches={data.launches}
+            sessions={[...ls.sessions].sort((a, b) => b.created - a.created)}
+            launches={ls.launches}
             busy={stopping}
             stop={(names, what) => void stop(names, what)}
-            launch={<Launch slug={p.slug} launches={data.launches} launcherError={data.launcher_error} compact />}
+            launch={<Launch slug={p.slug} launches={ls.launches} launcherError={ls.launcher_error} compact />}
+            reloadSessions={reloadLive}
+            sessionsError={live.error?.message ?? null}
           />
         </section>
       )}

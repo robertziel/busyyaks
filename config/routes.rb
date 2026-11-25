@@ -38,6 +38,7 @@ module Busyyaks
     delete "/api/projects/*slug/workflow", to: "api.workflow.reset"
     get "/api/projects/*slug/agent-rules", to: "api.project_agent_rules.show" # the project's Settings tab: rules per agent type
     post "/api/projects/*slug/agent-rules", to: "api.project_agent_rules.save"
+    get "/api/projects/*slug/sessions", to: "api.projects.sessions" # the page polls it (card 614)
     post "/api/projects/*slug/stop", to: "api.projects.stop"   # operator: Stop / Stop all of a project's tmux sessions
     get "/api/projects/*slug", to: "api.projects.show"          # slugs of nested roots carry a "/" (acme/x)
     post "/api/notes", to: "api.projects.note"

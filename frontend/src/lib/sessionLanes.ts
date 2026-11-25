@@ -232,9 +232,24 @@ export function nextChip(names: string[], current: string, key: string): string 
 // show the LAST snapshot — dimmed, no pulse, no answer button (a key pressed on an old screen is a guess)
 export type LiveIssue = { kind: "none" | "old"; text: string } | null;
 
-export function liveIssue(data: AgentsData | undefined, error: string | null): LiveIssue {
-  if (!data) return error ? { kind: "none", text: `live state unknown: ${error}` } : null;
+// sessionsError = the project's session list (/api/projects/:slug/sessions) failed its last refresh: the lanes are that
+// list's last read — a session started or ended since is missing or still shown (card 614)
+export function liveIssue(
+  data: AgentsData | undefined,
+  error: string | null,
+  sessionsError: string | null = null,
+): LiveIssue {
+  if (!data) {
+    if (error) {
+      const list = sessionsError ? ` · session list refresh failed: ${sessionsError}` : "";
+      return { kind: "none", text: `live state unknown: ${error}${list}` };
+    }
+    return sessionsError
+      ? { kind: "old", text: `showing the last snapshot: session list refresh failed: ${sessionsError}` }
+      : null;
+  }
   const why = [
+    sessionsError ? `session list refresh failed: ${sessionsError}` : null,
     error ? `refresh failed: ${error}` : null,
     data.stale ? `collector snapshot ${Math.round(data.age_s)}s old` : null,
     data.collector_error ? `collector: ${data.collector_error}` : null,
@@ -279,4 +294,35 @@ export function triggerHidden(
   viewHeight: number,
 ): boolean {
   return trigger.bottom <= headerBottom || trigger.top >= viewHeight;
+}
+
+// The lanes join two reads polled apart: the project's tmux sessions and the Agents read. A name one lists and the other
+// does not = that other read is behind (a session just started or ended): it is asked again at once instead of at its
+// next tick (card 614). The key changes only when that set changes, so each new difference asks once, never in a loop.
+// Names are sorted: the key does not depend on either read's order.
+export function behindKey(listed: string[], other: string[]): string {
+  const known = new Set(other);
+  return [...new Set(listed.filter((n) => !known.has(n)))].sort().join("\n");
+}
+
+// Whether a read is asked again: the difference gained a name it did not hold before (a session just started or ended).
+// The first key only records (both reads are fresh then); a difference that shrank — the other read caught up — or
+// closed ("" = they agree) asks nothing.
+export function catchUpAsks(before: string | null, key: string): boolean {
+  if (before === null || key === "") return false;
+  const had = new Set(before === "" ? [] : before.split("\n"));
+  return key.split("\n").some((n) => !had.has(n));
+}
+
+// The catch-up of one read, as the page runs it (Sessions' useCatchUp): fed the difference key on every render — null
+// while the Agents read has not answered (nothing recorded, nothing asked) — it says whether to ask again now. The first
+// key only records; the same key again (a re-render, a new `ask` function) asks nothing; each new name asks once.
+export function catchUpTracker(): (key: string | null) => boolean {
+  let prev: string | null = null;
+  return (key) => {
+    if (key === null) return false;
+    const before = prev;
+    prev = key;
+    return catchUpAsks(before, key);
+  };
 }
