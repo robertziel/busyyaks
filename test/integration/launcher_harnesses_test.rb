@@ -110,10 +110,10 @@ class LauncherHarnessesTest < Minitest::Test
   # the version run gets only PATH + HOME: the launcher's SECRET never reaches it
   def test_the_version_run_gets_only_path_and_home
     seen = File.join(@base, "seen")
-    stub("claude", "echo \"${SECRET:-none} $HOME\" > #{seen}; echo 1.0.0")
+    stub("claude", "echo \"${SECRET:-none} $HOME\" > #{seen}; echo 2.1.0")
     stub("codex", 'echo "codex-cli 0.1.0"')
     res = ask(op: "harnesses")
-    assert_equal %w[1.0.0 0.1.0], [res["harnesses"].first["version"], res["harnesses"].last["version"]]
+    assert_equal %w[2.1.0 0.1.0], [res["harnesses"].first["version"], res["harnesses"].last["version"]]
     assert_equal "none #{@home}", File.read(seen).strip
   end
 end

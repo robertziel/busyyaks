@@ -83,7 +83,7 @@ class McpGithubTest < Minitest::Test
     db[:gh_runs].where(login: login).update(feed_ok: true, feed_added: 2, feed_calls: 3, feed_not_modified: 0, feed_gap: false)
     db[:gh_events].insert(login: login, id: "901", type: "ReleaseEvent", action: "published", actor: "alice", actor_avatar: AV,
                           repo: "alice/lib", public: true, created_at: now - 600, first_seen_at: now,
-                          digest: JSON.generate("tag" => "v1.0.0", "name" => "One"))
+                          digest: JSON.generate("tag" => "v2.0.0", "name" => "One"))
     db[:gh_events].insert(login: login, id: "902", type: "PushEvent", actor: "bob", actor_avatar: AV, repo: "bob/app",
                           public: true, created_at: now - 700, first_seen_at: now,
                           digest: JSON.generate("ref" => "refs/heads/main"))
@@ -91,7 +91,7 @@ class McpGithubTest < Minitest::Test
     f = out["feed"]
     assert_equal true, f.dig("status", "ok")
     assert_equal({ "ReleaseEvent" => 1, "PushEvent" => 1 }, f["counts"])
-    assert_equal [["release", "alice", "alice/lib", "v1.0.0"]],
+    assert_equal [["release", "alice", "alice/lib", "v2.0.0"]],
                  f["items"].map { |i| i.values_at("kind", "actor", "repo", "tag") }
     assert_match(/\A\d{4}-/, f["items"][0]["at"])
     assert_equal [["bob/app", 1, ["bob"]]], f["pushes"].map { |x| x.values_at("repo", "pushes", "actors") }
@@ -100,7 +100,7 @@ class McpGithubTest < Minitest::Test
     assert_includes md, "kind: release"
     check = JSON.parse(tool("check_report", body_markdown: md)["content"][0]["text"])
     assert_equal [[], []], [check["broken"], check["github_unverified"]]
-    check = JSON.parse(tool("check_report", body_markdown: md.sub("tag: v1.0.0", "tag: v6.6.6"))["content"][0]["text"])
+    check = JSON.parse(tool("check_report", body_markdown: md.sub("tag: v2.0.0", "tag: v6.6.6"))["content"][0]["text"])
     assert_equal ["tl:github (block 1): feed release alice/lib (event \"901\") — tag not as stored"], check["github_unverified"]
   end
 

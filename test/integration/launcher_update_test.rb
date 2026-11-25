@@ -36,8 +36,8 @@ class LauncherUpdateTest < Minitest::Test
     # what the checkout keeps untracked: the copied programs, config, .env, data (an update never touches them)
     File.write(File.join(@work, ".gitignore"), "/*\n!/.gitignore\n!/release*.txt\n")
     @v1 = commit("release1")
-    sh(@work, "git", "tag", "v1.0.0")
-    sh(@work, "git", "push", "-q", "origin", "main", "v1.0.0")
+    sh(@work, "git", "tag", "v0.1.0")
+    sh(@work, "git", "push", "-q", "origin", "main", "v0.1.0")
     sh(@base, "git", "clone", "-q", @remote, @co)
     COPY.each do |f|
       FileUtils.mkdir_p(File.dirname(File.join(@co, f)))
