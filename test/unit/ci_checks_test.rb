@@ -1601,7 +1601,8 @@ class CiChecksTest < Minitest::Test
   def approved_card(gate)
     id = gated_cards.fetch(gate)
     @conn[:projects].where(slug: "o-r").update(scanned_at: @now, branch_tips: "{}", remote_heads: "{}")
-    @kb.register_session(session: "shop", project: "o-r", type: "lead", launcher: "fullclaude", by: "lead")
+    # the card's own session (card 612: a lead owns a card only to hand it to a worker — never its quiet-card agent)
+    @kb.register_session(session: "shop", project: "o-r", type: "plain", launcher: "fullclaude", by: "lead")
     @kb.set_owner(id, session: "shop", by: "lead")
     hand_in(id) if gate == "local_human_review"
     try_read { @kb.approve(id, by: "operator") }

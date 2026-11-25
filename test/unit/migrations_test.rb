@@ -32,6 +32,7 @@ class MigrationsTest < Minitest::Test
   BEFORE_BY_PREFIX = 20_261_221_584_000 # the last migration before the by_ session names
   BEFORE_TEAM_LEAD = 20_261_224_600_000 # the last migration before the lead's label became its name
   BEFORE_LAUNCH_BAR = 20_261_225_000_000 # the last migration before the Launch bar's keys (launchable, launch_label)
+  BEFORE_LEAD_UNASSIGNABLE = 20_261_225_100_000 # the last migration before v17 (card 612: a lead is never an assignee)
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -634,6 +635,34 @@ class MigrationsTest < Minitest::Test
     migrate(BEFORE_GREEN_CI)
     refute_includes @db.schema(:board_columns, reload: true).map(&:first), :requires_green_ci
     assert_equal n, @db[:board_columns].count, "the columns themselves are kept"
+  end
+
+  # card 612: v17 clears every open card's lead assignee (the agent settings' lead types; owner kept, a line by
+  # "migration"), adds the worker watch's columns; the rollback is refused once it cleared one, else drops the columns
+  def test_v17_clears_lead_assignees_and_refuses_a_rollback_that_would_restore_one
+    migrate(BEFORE_LEAD_UNASSIGNABLE)
+    project("p")
+    reg = ->(s, type, agent) do
+      @db[:agent_sessions].insert(session: s, socket: "default", project_slug: "p", type_key: type, launcher_key: "x",
+                                  agent_name: agent, launched_by: "op", launched_at: 1, needs_lead: 0)
+    end
+    reg.("p_lead", "lead", "claude-p_lead")
+    reg.("p_plain", "plain", "claude-p_plain")
+    lead = card("p", "doing", "lead's", assignee: "claude-p_lead", owner_session: "p_lead")
+    plain = card("p", "doing", "plain's", assignee: "claude-p_plain", owner_session: "p_plain")
+    migrate
+    assert_includes @db.schema(:cards, reload: true).map(&:first), :worker_wait_at
+    assert_equal [nil, "p_lead"], @db[:cards].where(id: lead).get(%i[assignee owner_session])
+    assert_equal "claude-p_plain", @db[:cards].where(id: plain).get(:assignee), "not a lead: kept"
+    line = @db[:card_activity].where(card_id: lead).get(%i[author body])
+    assert_equal "migration", line[0]
+    assert_match(/assignee cleared by the v17 migration: claude-p_lead is a lead/, line[1])
+    e = assert_raises(StandardError) { migrate(BEFORE_LEAD_UNASSIGNABLE) }
+    assert_match(/step 17 cleared a lead assignee on cards #{lead}: rolling back would restore a lead/, e.message)
+    assert_includes @db.schema(:cards, reload: true).map(&:first), :worker_wait_at, "a refused rollback drops nothing"
+    @db[:card_activity].where(card_id: lead).delete
+    migrate(BEFORE_LEAD_UNASSIGNABLE)
+    refute_includes @db.schema(:cards, reload: true).map(&:first), :worker_wait_at
   end
 
   # v14 turns each card's prs {role => url} into a list (by / at from its own "PR <role>: <url>" line);

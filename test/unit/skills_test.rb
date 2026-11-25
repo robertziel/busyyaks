@@ -67,6 +67,18 @@ class SkillsTest < Minitest::Test
     assert_empty S.select(layers, "plain").parts, "plain = core alone"
   end
 
+  # card 612: the lead skill carries the rule — never a card's assignee; each card waiting for a worker goes to an
+  # idle worker (kanban_assign_worker) or a new one (kanban_spawn); Backlog is not the lead's to hand out (card 610)
+  def test_the_lead_skill_says_the_lead_is_never_an_assignee_and_how_it_dispatches
+    lead = File.read(File.join(ROOT, "skills/busyyaks/agents/lead.md"))
+    assert_includes lead, "**You are never a card's assignee** (card 612)"
+    assert_match(/IDLE worker of the board first — `mcp__busyyaks__kanban_assign_worker\(id,\s+worker_session/, lead)
+    assert_match(/else a new one with\s+`mcp__busyyaks__kanban_spawn\(id, type "worker"/, lead)
+    assert_includes lead, "`dispatch.idle_workers`"
+    assert_match(/Backlog cards are never yours to hand\s+out \(card 610\)/, lead)
+    refute_match(/never owns or works a card itself/, lead, "the old wording (it owns, for routing) is gone")
+  end
+
   # busyyaks's own repo layer (.busyyaks/skills, committed): only additions for agent types, nothing replaced
   def test_the_repos_own_project_layer_loads
     sel, status = S.plan!(checkout: ROOT, repo: ROOT, type: "worker", types: TYPES, settings: SET, trust_refusal: nil)

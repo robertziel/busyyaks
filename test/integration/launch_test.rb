@@ -632,8 +632,8 @@ req.values_at("path", "sessions")
                    "type" => "lead", "cards" => "##{orphan}", },
                  req["vars"])
     assert_match(/\{dir\}/, req["prompt_template"])
-    assert_equal %w[claude-by_group_repo_teamlead by_group_repo_teamlead], k.card(orphan).values_at(:assignee, :owner_session),
-                 "the lead owns the orphan by rule"
+    assert_equal [nil, "by_group_repo_teamlead"], k.card(orphan).values_at(:assignee, :owner_session),
+                 "the lead owns the orphan by rule, and is never its assignee (card 612)"
     j = api(:get, "/api/projects/group/repo")
     assert_equal ["group_repo"], j["project"]["sessions"].map { |s| s["name"] }
     assert_equal 1, j["launches"]["types"][0]["running"]
