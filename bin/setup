@@ -4,9 +4,11 @@
 #
 #   bin/setup          copies each example that is missing (.env, config/busyyaks.yml, config/kanban.yml — an existing
 #                      file is kept, never overwritten), writes the secrets that are EMPTY in .env (SESSION_SECRET 64
-#                      bytes, MCP_TOKEN and MCP_REPORT_TOKEN 32 bytes, hex from /dev/urandom; a value already there is
+#                      bytes, MCP_TOKEN, MCP_REPORT_TOKEN and MCP_BOARD_TOKEN 32 bytes, hex from /dev/urandom; a value already there is
 #                      kept), HOST_UID / HOST_GID = this user into a .env it just copied, makes .env 0600, then lists
 #                      every key compose requires that is still empty: fill those in .env.
+#   bin/setup secrets  only the secrets of an existing .env: a missing line appended, an empty one written, a set one
+#                      kept (what `yaks update` runs: a version that adds a secret never stops an update).
 #   bin/setup check    every value compose requires is set (each empty one named), HOST_UID:HOST_GID is this user,
 #                      PROJECTS_ROOT is an existing directory written as its real path, LAUNCHER_RUN_DIR is absolute,
 #                      .env is readable by you only; creates ./data and LAUNCHER_RUN_DIR (0700) as this user (and, with
@@ -23,7 +25,7 @@ set -eu
 
 # the app's own minimums, refused at its boot (test/unit/setup_test.rb holds them equal to the Ruby constants)
 MIN_SESSION_SECRET_BYTES=64   # lib/busyyaks/session_cookie.rb SessionCookie::MIN_SECRET_BYTES
-MIN_MCP_TOKEN_CHARS=32        # lib/busyyaks/mcp_server.rb McpServer::MIN_TOKEN_CHARS (MCP_TOKEN and MCP_REPORT_TOKEN)
+MIN_MCP_TOKEN_CHARS=32        # lib/busyyaks/mcp_server.rb McpServer::MIN_TOKEN_CHARS (MCP_TOKEN, MCP_REPORT_TOKEN, MCP_BOARD_TOKEN)
 # the .env keys moved to Settings → Runtime (lib/busyyaks/runtime_settings.rb RuntimeSettings::KEYS): `check`
 # refuses a .env that still has one
 RUNTIME_MOVED="SCAN_INTERVAL_SECONDS WRITER_SYNC_SECONDS GITHUB_INTERVAL_SECONDS GITHUB_CI_INTERVAL_SECONDS NOTIFIER_INTERVAL_SECONDS NOTIFIER_WATCH_SECONDS WATCHDOG_GRACE_SECONDS"
@@ -137,6 +139,28 @@ run_dir_rules() {
   done
 }
 
+# the secrets in .env: a missing line is appended (a key a newer busyyaks added), an empty one written; a value
+# already there is kept. `bin/setup` runs it; so does `yaks update` (`bin/setup secrets`) before it moves the stack
+secrets() {
+  for pair in SESSION_SECRET:64 MCP_TOKEN:32 MCP_REPORT_TOKEN:32 MCP_BOARD_TOKEN:32; do
+    k=${pair%%:*} n=${pair#*:}
+    # a secret a newer busyyaks added (an .env written by an older one has no line for it): the line is appended,
+    # then filled below like any empty one — an update never stops on a key it can make itself
+    if ! grep -q "^$k=" "$env_file"; then
+      # a last line with no newline would swallow the new key into its value
+      [ -z "$(tail -c 1 "$env_file")" ] || printf '\n' >> "$env_file"
+      printf '%s=\n' "$k" >> "$env_file"
+      say "added    $k= (new in this version)"
+    fi
+    if [ -n "$(value "$k")" ]; then
+      say "kept     $k (set)"
+    else
+      put "$k" "$(secret "$n")"
+      say "wrote    $k ($n random bytes, hex)"
+    fi
+  done
+}
+
 init() {
   fresh=
   for pair in .env.example:.env config/busyyaks.example.yml:config/busyyaks.yml config/kanban.example.yml:config/kanban.yml; do
@@ -159,16 +183,7 @@ init() {
     chmod 600 "$env_file"
     say "chmod    .env 600 (it holds the secrets)"
   fi
-  for pair in SESSION_SECRET:64 MCP_TOKEN:32 MCP_REPORT_TOKEN:32; do
-    k=${pair%%:*} n=${pair#*:}
-    grep -q "^$k=" "$env_file" || die "$env_file has no $k= line: copy it from .env.example"
-    if [ -n "$(value "$k")" ]; then
-      say "kept     $k (set)"
-    else
-      put "$k" "$(secret "$n")"
-      say "wrote    $k ($n random bytes, hex)"
-    fi
-  done
+  secrets
   if [ -n "$fresh" ]; then
     put HOST_UID "$(id -u)"
     put HOST_GID "$(id -g)"
@@ -206,7 +221,7 @@ SHAPE
 
   for k in $(empty_required); do
     case "$k" in
-      SESSION_SECRET | MCP_TOKEN | MCP_REPORT_TOKEN) bad "$k is empty in .env: run bin/setup (it writes the secrets)" ;;
+      SESSION_SECRET | MCP_TOKEN | MCP_REPORT_TOKEN | MCP_BOARD_TOKEN) bad "$k is empty in .env: run bin/setup (it writes the secrets)" ;;
       *) bad "$k is empty in .env: fill it (its comment in .env says what it is)" ;;
     esac
   done
@@ -216,8 +231,8 @@ SHAPE
   if [ -n "$s" ] && [ "${#s}" -lt "$MIN_SESSION_SECRET_BYTES" ]; then
     bad "SESSION_SECRET is ${#s} bytes, the web app needs at least $MIN_SESSION_SECRET_BYTES: empty it in .env and run bin/setup"
   fi
-  t=$(value MCP_TOKEN) r=$(value MCP_REPORT_TOKEN)
-  for pair in "MCP_TOKEN:$t" "MCP_REPORT_TOKEN:$r"; do
+  t=$(value MCP_TOKEN) r=$(value MCP_REPORT_TOKEN) b=$(value MCP_BOARD_TOKEN)
+  for pair in "MCP_TOKEN:$t" "MCP_REPORT_TOKEN:$r" "MCP_BOARD_TOKEN:$b"; do
     k=${pair%%:*} v=${pair#*:}
     if [ -n "$v" ] && [ "${#v}" -lt "$MIN_MCP_TOKEN_CHARS" ]; then
       bad "$k is ${#v} characters, the MCP server needs at least $MIN_MCP_TOKEN_CHARS: empty it in .env and run bin/setup"
@@ -225,6 +240,9 @@ SHAPE
   done
   if [ -n "$r" ] && [ "$r" = "$t" ]; then
     bad "MCP_REPORT_TOKEN equals MCP_TOKEN, the MCP server refuses that: empty it in .env and run bin/setup"
+  fi
+  if [ -n "$b" ] && { [ "$b" = "$t" ] || [ "$b" = "$r" ]; }; then
+    bad "MCP_BOARD_TOKEN equals MCP_TOKEN or MCP_REPORT_TOKEN, the MCP server refuses that: empty it in .env and run bin/setup"
   fi
   if [ "$(value DATABASE_ADAPTER)" = postgresql ]; then
     for k in POSTGRES_HOST POSTGRES_PORT POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD POSTGRES_LOCK_TIMEOUT_MS; do
@@ -326,5 +344,6 @@ SHAPE
 case "${1:-}" in
   '') init ;;
   check) check ;;
-  *) say "usage: bin/setup [check]" >&2; exit 2 ;;
+  secrets) [ -f "$env_file" ] || die "$env_file is missing: run bin/setup"; secrets ;;
+  *) say "usage: bin/setup [check|secrets]" >&2; exit 2 ;;
 esac

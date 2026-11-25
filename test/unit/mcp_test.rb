@@ -10,9 +10,13 @@ class McpTest < Minitest::Test
   include Rack::Test::Methods
 
   TOKEN = "t" * 40
+  BOARD_TOKEN = "b" * 40
   REPORT_TOKEN = "r" * 40
-  def app = Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: -> { 60 }, store: store,
+  def app
+    Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, board_token: BOARD_TOKEN, scan_interval: -> {
+ 60 }, store: store,
                                     config: nil, sessions: -> { %w[proj_2] })
+  end
 
   def rpc(method, params = {}, id: 1, auth: TOKEN)
     header "Authorization", "Bearer #{auth}"
@@ -20,7 +24,9 @@ class McpTest < Minitest::Test
     last_response.content_type == "application/json" ? JSON.parse(last_response.body) : nil
   end
 
-  def tool(name, args = {}) = rpc("tools/call", { name: name, arguments: args })["result"]
+  def tool(name, args = {})
+    rpc("tools/call", { name: name, arguments: args }, auth: name.start_with?("kanban_") ? BOARD_TOKEN : TOKEN)["result"]
+  end
 
   def test_requires_bearer
     rpc("ping", auth: "wrong")
@@ -50,9 +56,13 @@ class McpTest < Minitest::Test
   end
 
   def test_short_token_refused_at_boot
-    assert_raises(KeyError) { Busyyaks::McpServer.new(token: "short", report_token: REPORT_TOKEN, scan_interval: -> { 60 }) }
-    assert_raises(KeyError) { Busyyaks::McpServer.new(token: TOKEN, report_token: "short", scan_interval: -> { 60 }) }
-    assert_raises(KeyError) { Busyyaks::McpServer.new(token: TOKEN, report_token: TOKEN, scan_interval: -> { 60 }) }
+    assert_raises(KeyError) { Busyyaks::McpServer.new(token: "short", report_token: REPORT_TOKEN, board_token: BOARD_TOKEN, scan_interval: -> { 60 }) }
+    assert_raises(KeyError) { Busyyaks::McpServer.new(token: TOKEN, report_token: "short", board_token: BOARD_TOKEN, scan_interval: -> { 60 }) }
+    assert_raises(KeyError) { Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, board_token: "short", scan_interval: -> { 60 }) }
+    assert_raises(KeyError) { Busyyaks::McpServer.new(token: TOKEN, report_token: TOKEN, board_token: BOARD_TOKEN, scan_interval: -> { 60 }) }
+    [TOKEN, REPORT_TOKEN].each do |same|
+      assert_raises(KeyError) { Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, board_token: same, scan_interval: -> { 60 }) }
+    end
   end
 
   # The daily report's token (MCP_REPORT_TOKEN) lists and calls only REPORT_TOOLS: a model that read a prompt-injected
@@ -70,9 +80,51 @@ class McpTest < Minitest::Test
     refute r["isError"], r.dig("content", 0, "text")
     init = ->(auth) { rpc("initialize", { protocolVersion: "2025-06-18" }, auth: auth).dig("result", "instructions") }
     refute_includes init.(REPORT_TOKEN), "kanban_handoff", "the report token is told only what it may call"
-    assert_includes init.(TOKEN), "kanban_handoff"
-    full = rpc("tools/list").dig("result", "tools").map { |t| t["name"] }
-    assert_includes full, "kanban_comment", "the full token keeps every tool"
+    assert_includes init.(BOARD_TOKEN), "busyyaks skill"
+    full = rpc("tools/list", auth: BOARD_TOKEN).dig("result", "tools").map { |t| t["name"] }
+    assert_includes full, "kanban_comment", "the board token keeps every tool"
+  end
+
+  # The operator (2026-11-24): "a session started from the terminal, not from busyyaks, should have no idea about any
+  # rules we've got related to busyyaks." Its MCP (MCP_TOKEN, the operator's `claude mcp add`) lists no board tool,
+  # refuses one by name as if it did not exist, and its instructions say nothing of the board.
+  def test_a_terminal_session_sees_no_board_tool_and_no_board_text
+    names = rpc("tools/list").dig("result", "tools").map { |t| t["name"] }
+    assert_empty names.grep(/\Akanban_/), names.inspect
+    assert_includes names, "whats_new"
+    r = rpc("tools/call", { name: "kanban_board", arguments: { project: "p" } })["result"]
+    assert r["isError"]
+    assert_match(/kanban_board: no such tool/, r.dig("content", 0, "text"))
+    text = rpc("initialize", { protocolVersion: "2025-06-18" }).dig("result", "instructions")
+    %w[kanban board lead skill card].each { |w| refute_match(/#{w}/i, text, w) }
+  end
+
+  # no default scope: a caller that names none, or an unknown one, gets nothing (never the board's tools)
+  def test_an_unknown_scope_is_refused
+    [:full, nil, :admin].each do |scope|
+      assert_raises(ArgumentError) { app.dispatch({ "id" => 1, "method" => "tools/list" }, scope: scope) }
+    end
+    assert_raises(ArgumentError) { app.dispatch({ "id" => 1, "method" => "tools/list" }) }
+  end
+
+  # …while a session busyyaks launched (its own --mcp-config / overlay carries MCP_BOARD_TOKEN) has the whole board
+  def test_a_session_busyyaks_launched_has_the_board_tools
+    names = rpc("tools/list", auth: BOARD_TOKEN).dig("result", "tools").map { |t| t["name"] }
+    %w[kanban_board kanban_claim kanban_handoff kanban_spawn].each { |t| assert_includes names, t }
+  end
+
+  # U2, the live run: MCP_BOARD_TOKEN listed 49 tools (35 kanban_*), MCP_TOKEN 14 (0 kanban_*). Stated as what it means,
+  # never as counts that change with the tools: the board token = the terminal token's tools + every kanban_* tool the
+  # engine serves; the terminal token = every tool but those
+  def test_the_board_token_lists_the_terminal_tokens_tools_and_every_board_tool
+    names = ->(auth) { rpc("tools/list", auth: auth).dig("result", "tools").map { |t| t["name"] } }
+    board = names.(BOARD_TOKEN)
+    terminal = names.(TOKEN)
+    kanban = board.grep(/\Akanban_/)
+    assert_operator kanban.size, :>=, 30, kanban.inspect
+    assert_equal (terminal + kanban).sort, board.sort
+    assert_empty terminal.grep(/kanban/)
+    %w[kanban_register kanban_spawn kanban_handoff kanban_claim kanban_ask].each { assert_includes kanban, _1 }
   end
 
   def test_initialize_and_list
@@ -96,7 +148,7 @@ class McpTest < Minitest::Test
              "skills" => SKILLS_SETTINGS, "updates" => UPDATES_SETTINGS,
              "launch" => LAUNCH_CLAUDE, }
     runners = [{ "type" => "hermes", "command" => "hermes", "home" => "/h" }]
-    server = ->(cfg) { Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: -> { 60 }, store: store, config: cfg) }
+    server = ->(cfg) { Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, board_token: BOARD_TOKEN, scan_interval: -> { 60 }, store: store, config: cfg) }
     with = server.(Busyyaks::Config.new(base.merge("daily_report_runners" => runners)))
     call = ->(s) { JSON.parse(s.send(:call_tool, "daily_report_config", {})) }
 

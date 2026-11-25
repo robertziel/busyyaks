@@ -151,7 +151,9 @@ launch:
 #                ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills in its config's skills.external_dirs), never installed for
 #                every session of the user, read at every launch (nothing to install after an update). busyyaks's own
 #                = skills/busyyaks/ of this checkout: core/ (every session) · agents/<type>.md · <name>/ (on demand).
-#                  max_bytes        one skill dir's / agents file's size limit (bytes)
+#                  max_bytes        one skill dir's / agents file's size limit (bytes) — a project's
+#                                   .busyyaks/skills/agents/<type>.md too, read and written by the project
+#                                   page's Settings tab (DEPLOY.md § Project rules)
 #                  max_start_bytes  core + the agents/<type>.md files of one launch together (the entry skill)
 #                  project          allow | deny: a repo's own .busyyaks/skills (agents/<type>.md + on-demand skills)
 #                                   load (allow) — only in a repo the folder trust trusts (launch.trusted_paths, or

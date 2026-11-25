@@ -4,6 +4,7 @@ require "json"
 require "yaml"
 require_relative "../../vendor/agents_kanban/ruby/lib/agents_kanban/host_config"
 require_relative "clock"
+require_relative "launcher_rules"
 
 module Busyyaks
   # The agent settings: the engine host config's `launchers` (the commands that start an agent session) and
@@ -115,8 +116,65 @@ module Busyyaks
     def invocation(l) = { "kind" => l.kind, "command" => l.command, "args" => l.args.to_a, "via_shell" => l.via_shell }
     def line(inv) = [inv["command"], *inv["args"]].join(" ") + (inv["via_shell"] ? " (via shell)" : "")
 
+    # The revision with every agent type's session_name carrying LauncherRules::SESSION_PREFIX (the `by_` rename,
+    # 2026-11-24) → the new doc, or nil when every name has it already (nothing to write).
+    def prefixed(doc)
+      types = doc.fetch("agent_types")
+      return nil if types.all? { |t| t["session_name"].to_s.start_with?(LauncherRules::SESSION_PREFIX) }
+
+      doc.merge("agent_types" => types.map do |t|
+        name = t["session_name"].to_s
+        name.start_with?(LauncherRules::SESSION_PREFIX) ? t : t.merge("session_name" => "#{LauncherRules::SESSION_PREFIX}#{name}")
+      end)
+    end
+
+    # The lead's NAME (2026-11-25, the operator: "what's sub team? where is lead?"): a type's label is what it IS — the
+    # pages, the Launch bar and the board's "no lead: press …" all show it — and "Launch" was the old lead type's label,
+    # a button text, not a name. The revision with every lead type (one another type runs `under`) labelled "Launch"
+    # renamed TEAM_LEAD → the new doc, or nil when none is (nothing to write).
+    TEAM_LEAD = "Team lead"
+    OLD_LEAD_LABEL = "Launch"
+
+    def lead_named(doc)
+      types = doc.fetch("agent_types")
+      leads = types.map { |t| t["under"] }.compact
+      renamed = types.map do |t|
+        leads.include?(t["key"]) && t["label"] == OLD_LEAD_LABEL ? t.merge("label" => TEAM_LEAD) : t
+      end
+      renamed == types ? nil : doc.merge("agent_types" => renamed)
+    end
+
+    # The Launch bar (2026-11-25, the operator: workers come only from the lead's kanban_spawn; the lead's button says
+    # what it does): the template's worker type (key WORKER, under a lead, no launch_label) gets `launchable: false`, and
+    # every lead type named TEAM_LEAD with no launch_label gets LAUNCH_LEAD as its button text → the new doc, or nil
+    # when nothing changes (a revision that says either key already is the operator's: left alone).
+    WORKER = "worker"
+    LAUNCH_LEAD = "Launch team lead"
+
+    def launch_bar(doc)
+      types = doc.fetch("agent_types")
+      leads = types.map { |t| t["under"] }.compact
+      out = types.map do |t|
+        if t["key"] == WORKER && t["under"] && !t.key?("launchable") && !t.key?("launch_label")
+          t.merge("launchable" => false)
+        elsif leads.include?(t["key"]) && t["label"] == TEAM_LEAD && !t.key?("launch_label")
+          t.merge("launch_label" => LAUNCH_LEAD)
+        else
+          t
+        end
+      end
+      out == types ? nil : doc.merge("agent_types" => out)
+    end
+
     # Every launcher equals one allowlisted invocation, else refused with the ones that do not.
     def allowed!(cfg, commands)
+      # the same test as bin/launcher's (LauncherRules.busyyaks_session?): the prefix and a name after it
+      unnamed = cfg.agent_types.reject { |t| LauncherRules.busyyaks_session?(t.session_name) }
+      if unnamed.any?
+        raise Refused, unnamed.map { |t| "agent type #{t.key}: session_name #{t.session_name.inspect}" }.join(", ") +
+                       " must start with \"#{LauncherRules::SESSION_PREFIX}\" — every session busyyaks starts is " \
+                       "named so, and busyyaks touches no tmux session without it"
+      end
       off = cfg.launchers.reject { |l| commands.include?(invocation(l)) }
       return cfg if off.empty?
 

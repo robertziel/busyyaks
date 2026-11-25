@@ -89,7 +89,7 @@ docker exec -d -e BOARD_E2E_MODEL_PORT="$model_port" "$box" sh -c "node '$base/a
 docker exec "$box" ruby "$driver" await-file "$base/mock/up"
 docker exec -e BOARD_E2E_MODEL_PORT="$model_port" "$box" ruby "$driver" run "$base"
 # the services' own logs, read here: the token through grep's pattern FILE, never on a command line
-sed -n 's/^MCP_TOKEN=//p' "$base/app/.env" > "$base/token"
+sed -n -e 's/^MCP_TOKEN=//p' -e 's/^MCP_BOARD_TOKEN=//p' "$base/app/.env" > "$base/token"   # both bearers: neither in a log
 if compose logs --no-color 2>&1 | grep -q -F -f "$base/token"; then
   echo "FAIL token_not_in_service_logs" | tee -a "$base/out/steps.log"
   exit 1

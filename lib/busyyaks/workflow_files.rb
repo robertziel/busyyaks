@@ -8,6 +8,8 @@ require "yaml"
 require_relative "clock"
 require_relative "git_read"
 require_relative "runtime_settings"
+require_relative "agent_rule_files"
+require_relative "skill_files"
 
 module Busyyaks
   # A project's workflow — its board's columns (key, label, type, fold-after hours) and named transitions — lives in
@@ -148,14 +150,16 @@ module Busyyaks
       file = File.join(info, "exclude")
       raise Refused, ".git/info/exclude is a symlink: not written" if File.symlink?(file)
 
-      body = File.exist?(file) ? File.read(file) : ""
+      # read and compared as BYTES: the file is the user's, and any byte that is not UTF-8 is kept as it is (a String#strip
+      # of such a line raised, and stopped the writer's sync pass at that repo every turn)
+      body = File.exist?(file) ? File.binread(file) : "".b
       lines = body.lines.map(&:strip)
-      return if lines.include?(EXCLUDE) && !lines.include?(OLD_EXCLUDE)
+      return if lines.include?(EXCLUDE.b) && !lines.include?(OLD_EXCLUDE.b)
 
-      body = body.lines.reject { |l| l.strip == OLD_EXCLUDE }.join
-      return File.write(file, body) if lines.include?(EXCLUDE)
+      body = body.lines.reject { |l| l.strip == OLD_EXCLUDE.b }.join.b
+      return File.binwrite(file, body) if lines.include?(EXCLUDE.b)
 
-      File.write(file, "#{body}#{"\n" unless body.empty? || body.end_with?("\n")}#{EXCLUDE}\n")
+      File.binwrite(file, body + ("\n" unless body.empty? || body.end_with?("\n")).to_s.b + "#{EXCLUDE}\n".b)
     end
 
     # Write the text atomically (a temp file in the dir, renamed over the file) — only over the bytes the caller last
@@ -209,10 +213,20 @@ module Busyyaks
     # The writer: the sync pass and the editor's saves, one at a time (a Mutex: the socket thread and the sync loop).
     class Writer
       # store: -> { a fresh kanban Store } (each call reads the current agent settings revision); api: ->(store) { Api }
-      def initialize(db:, store:, api:, root: GitRead.mount, clock: -> { Clock.epoch }, log: ->(_) {})
+      # skills: -> { config/busyyaks.yml `skills` (Skills::Settings) }: the limits a project's agent rule files are
+      # written within (agent_rules)
+      # checkout: this busyyaks checkout (its skills/busyyaks + skills.local_dir: the layers a project's own layer is
+      # read after — and checked against — on a save, as a launch reads them)
+      # own_skills: this busyyaks checkout's skills/ dir as mounted here read-only (compose: ./skills), nil = none — what
+      # identifies the checkout among the scanned repos (skills_save)
+      def initialize(db:, store:, api:, skills:, checkout:, root: GitRead.mount, clock: -> { Clock.epoch },
+                     log: ->(_) {}, own_skills: nil)
         @db = db
         @store = store
         @api = api
+        @skills = skills
+        @checkout = checkout
+        @own_skills = own_skills
         @root = root
         @clock = clock
         @log = log
@@ -222,8 +236,15 @@ module Busyyaks
 
       # Every project in the projects table. → {slug => "exported" | "applied" | "unchanged" | "refused: …"}
       # a project whose repo the scanner no longer finds (present: false) is left alone: nothing to read or write
+      # one repo's failure never stops the pass: it is recorded on that repo (its board says so) and the next is synced
       def sync_all
-        @db[:projects].where(present: true).order(:slug).all.to_h { |p| [p[:slug], sync(p)] }
+        @db[:projects].where(present: true).order(:slug).all.to_h do |p|
+          [p[:slug], begin
+            sync(p)
+          rescue StandardError => e
+            @lock.synchronize { refused(p, "#{e.class}: #{e.message}") }
+          end,]
+        end
       end
 
       def sync(project)
@@ -235,6 +256,85 @@ module Busyyaks
 
       # The editor's Reset to template, the same way.
       def reset(slug, by:) = change(slug) { |st| @api.call(st).board_shape_reset(slug, by: by) }
+
+      # The project page's Settings tab's Save: any file of the repo's own .busyyaks/skills (agents/<type>.md, on-demand
+      # skills and their reference files: AgentRuleFiles.write!) — the layer as it would be after the save read the way
+      # a launch reads it, against busyyaks's own layers of this checkout (Skills.busyyaks! + project + select +
+      # check_selection! for every agent type: the override rule, frontmatter, sizes, max_start_bytes), then written.
+      # → [status, body]: 200 {written: [paths]} · 404 · 409 a file changed on disk since the editor read it · 422 refused
+      def agent_rules(slug, files, by:)
+        @lock.synchronize do
+          project = @db[:projects].where(slug: slug.to_s).first or return [404, { error: "no project #{slug}" }]
+          types = @store.call.config.agent_type_keys
+          settings = @skills.call
+          own = Skills.busyyaks!(@checkout, types: types, settings: settings)
+          check = lambda do |repo|
+            layer = Skills.project(repo, types: types, settings: settings)
+            types.each { |t| Skills.check_selection!(Skills.select(own + [layer].compact, t), settings) }
+          end
+          # the old `/.busyyaks/` exclude line would hide the files written here from git: replaced first
+          WorkflowFiles.exclude!(project)
+          written = AgentRuleFiles.write!(project, files, types: types, settings: settings, check: check)
+          written.each { |f| @log.call("#{project[:slug]}: #{AgentRuleFiles.rel(f)} #{by_word(project, f)} (#{by})") }
+          [200, { written: written }]
+        end
+      rescue AgentRuleFiles::Conflict => e
+        [409, { error: "#{e.message} — load the newest, then save again" }]
+      rescue AgentRuleFiles::Refused => e
+        [422, { error: e.message }]
+      rescue Refused => e
+        [422, { error: "not written: #{e.message}" }]
+      rescue Skills::Invalid => e
+        [422, { error: "not written: busyyaks's own skills cannot be read (#{e.message})" }]
+      end
+
+      def by_word(project, path) = File.exist?(File.join(project[:path], AgentRuleFiles.rel(path))) ? "written" : "removed"
+
+      # Settings → Agent rules' Save: busyyaks's own skills files (SkillFiles.write!: the launch's checks on the tree as
+      # it would be — and on every scanned project's launch with it — then written). The checkout is never the client's
+      # word: it is the scanned repo whose skills/ dir IS the one this writer was started with (own_skills: the
+      # checkout's ./skills mounted read-only — the same directory, by device and inode); a clone or fork carrying the
+      # same files is another directory and never written. None found (the checkout is not under PROJECTS_ROOT) →
+      # refused, saying so. → [status, body]: 200 {written: [paths]} · 409 a file changed on disk since the editor read
+      # it · 422 refused
+      def skills_save(files, by:)
+        @lock.synchronize do
+          checkout, why = own_checkout
+          return [422, { error: "not written: #{why}" }] unless checkout
+
+          projects = @db[:projects].where(present: true).order(:slug).select(:slug, :path).all
+          written = SkillFiles.write!(checkout, files, types: @store.call.config.agent_type_keys, settings: @skills.call,
+                                                       projects: projects)
+          written.each { |f| @log.call("busyyaks skills: #{f} written (#{by})") }
+          [200, { written: written }]
+        end
+      rescue SkillFiles::Conflict => e
+        [409, { error: "#{e.message} — load the newest, then save again" }]
+      rescue SkillFiles::Refused => e
+        [422, { error: e.message }]
+      end
+
+      # → [the scanned repo that is this busyyaks checkout, nil] or [nil, why there is none]
+      def own_checkout
+        return [nil, "this writer has no busyyaks checkout to write (own_skills is not set)"] unless @own_skills
+
+        mine = File.stat(@own_skills)
+        rows = @db[:projects].where(present: true).select(:path).map { |r| r[:path] }
+        hit = rows.find do |path|
+          st = File.stat(File.join(path, "skills"))
+          st.dev == mine.dev && st.ino == mine.ino
+        rescue SystemCallError
+          false
+        end
+        return [hit, nil] if hit
+
+        why = "the busyyaks checkout is not a repo the scanner found under PROJECTS_ROOT (no scanned repo's skills/ is " \
+              "the checkout's own): the writer cannot reach it — edit the files in the checkout and commit them, or " \
+              "move the checkout under PROJECTS_ROOT"
+        [nil, why]
+      rescue SystemCallError => e
+        [nil, "the busyyaks checkout's skills/ cannot be read here (#{e.message}): its read-only mount is missing"]
+      end
 
       private
 
@@ -298,6 +398,9 @@ module Busyyaks
       end
 
       def sync_one(project, st)
+        # every pass, not only when the file is written: a repo still holding the old `/.busyyaks/` line (it hid the
+        # repo's committed .busyyaks/skills from git) gets it replaced even while its workflow.yml never changes
+        WorkflowFiles.exclude!(project)
         bytes = WorkflowFiles.read_bytes(project)
         row = WorkflowFiles.status(@db, project[:slug])
         if bytes.nil?
@@ -376,7 +479,8 @@ module Busyyaks
       end
     end
 
-    # The writer's socket side: one JSON line in ({op: workflow_save | workflow_reset, slug, board?, by}), one out
+    # The writer's socket side: one JSON line in ({op: workflow_save | workflow_reset | agent_rules_save, slug, board? /
+    # files?, by}), one out
     # ({status, body}). bin/writer runs it; the tests run it on a thread.
     class Server
       def initialize(writer, socket)
@@ -420,6 +524,8 @@ module Busyyaks
         case req["op"]
         when "workflow_save" then @writer.save(req.fetch("slug"), req.fetch("board"), by: req.fetch("by"))
         when "workflow_reset" then @writer.reset(req.fetch("slug"), by: req.fetch("by"))
+        when "agent_rules_save" then @writer.agent_rules(req.fetch("slug"), req.fetch("files"), by: req.fetch("by"))
+        when "skills_save" then @writer.skills_save(req.fetch("files"), by: req.fetch("by"))
         else [400, { error: "unknown op #{req['op'].inspect}" }]
         end
       rescue KeyError => e

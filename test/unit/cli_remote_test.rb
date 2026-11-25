@@ -166,7 +166,7 @@ class CliRemoteTest < Minitest::Test
     code, out, = yaks("remote", "connect", "box", "--mcp")
     assert_equal 0, code
     assert_includes @runner.calls.last[1], "127.0.0.1:#{mcp}:127.0.0.1:#{mcp}"
-    assert_includes out, %(claude mcp add --transport http --scope user busyyaks-srv "http://127.0.0.1:#{mcp}/mcp" ) +
+    assert_includes out, %(claude mcp add --transport http --scope local busyyaks-srv "http://127.0.0.1:#{mcp}/mcp" ) +
                          %(--header "Authorization: Bearer $MCP_TOKEN")
     refute_includes out, "secret-token"
   end

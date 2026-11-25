@@ -12,11 +12,15 @@ class McpGithubTest < Minitest::Test
   include Rack::Test::Methods
 
   TOKEN = "t" * 40
+  BOARD_TOKEN = "b" * 40
   REPORT_TOKEN = "r" * 40
   AV = "https://avatars.githubusercontent.com/u/1?v=4"
 
-  def app = Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: -> { 60 }, store: store,
+  def app
+    Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, board_token: BOARD_TOKEN, scan_interval: -> {
+ 60 }, store: store,
                                     config: nil)
+  end
 
   def tool(name, args = {})
     header "Authorization", "Bearer #{TOKEN}"

@@ -64,11 +64,15 @@ class LauncherAttachTest < Minitest::Test
       echo "$*" >> #{b}/tmux.log
       echo "TMUX=${TMUX:-unset}" >> #{b}/tmux.env
       t=""; for a; do case "$a" in =*) t=${a#=}; t=${t%:} ;; esac; done
+      # another tmux server (-L <socket>): the same sessions answer there, so only the socket rule can refuse them
+      [ "$1" = -L ] && shift 2
       case "$1" in
-        has-session) [ -e #{b}/gone ] && exit 1; [ "$t" = agent_s ] || [ "$t" = plain_s ]; exit $? ;;
+        has-session) [ -e #{b}/gone ] && exit 1; [ "$t" = by_agent_s ] || [ "$t" = by_plain_s ]; exit $? ;;
+        # the launcher's record check (launched?): every session's first pane pid
+        list-panes) [ -e #{b}/gone ] && exit 0; printf 'by_agent_s\t%s\nby_plain_s\t%s\n' #{@agent} #{@plain}; exit 0 ;;
         display-message)
           case "$*" in
-            *pane_pid*) [ "$t" = agent_s ] && echo #{@agent} || echo #{@plain} ;;
+            *pane_pid*) [ "$t" = by_agent_s ] && echo #{@agent} || echo #{@plain} ;;
             *window_width*) cat #{b}/size 2>/dev/null || echo "80 23 on" ;;
           esac; exit 0 ;;
         capture-pane) printf 'SCREEN\\nline2\\n'; exit 0 ;;
@@ -89,12 +93,19 @@ class LauncherAttachTest < Minitest::Test
           shift 6; l=""; for a; do l="$l[$a]"; done; printf '%s\\n' "$l" >> #{b}/sent; exit 0 ;;
         send-keys) echo "send-keys without the mode cancel: $*" >&2; exit 1 ;;
         list-clients)
-          [ -e #{b}/moves ] && echo lead_s > #{b}/client_session
+          [ -e #{b}/moves ] && echo by_lead_s > #{b}/client_session
           printf '%s %s\\n' "$(cat #{b}/client_tty)" "$(cat #{b}/client_session)"; exit 0 ;;
         detach-client) echo detached > #{b}/client_session; exit 0 ;;
       esac
       exit 1
     SH
+    # both sessions busyyaks launched: a stage each with the launch's record of its pane (pid + start time)
+    { "by_agent_s" => @agent, "by_plain_s" => @plain }.each do |n, pid|
+      dir = File.join(@base, "state/skills", n)
+      FileUtils.mkdir_p(dir, mode: 0o700)
+      ticks = Integer(File.read("/proc/#{pid}/stat").then { |t| t[(t.rindex(")") + 2)..].split[19] }, 10)
+      File.write(File.join(dir, "launched.json"), JSON.generate("pane_pid" => pid, "start_ticks" => ticks))
+    end
     start
   end
 
@@ -145,7 +156,7 @@ class LauncherAttachTest < Minitest::Test
     end
   end
 
-  # the keys each send-keys typed: its argv is -t =agent_s: -H <one hex byte per argument>, decoded back to the bytes
+  # the keys each send-keys typed: its argv is -t =by_agent_s: -H <one hex byte per argument>, decoded back to the bytes
   def sent
     path = File.join(@base, "sent")
     return [] unless File.exist?(path)
@@ -153,7 +164,7 @@ class LauncherAttachTest < Minitest::Test
     # complete lines only: a send still being written is not counted yet
     File.read(path).split("\n", -1)[0...-1].map do |l|
       args = l.scan(/\[([^\]]*)\]/).flatten
-      assert_equal ["-t", "=agent_s:", "-H"], args.first(3), l
+      assert_equal ["-t", "=by_agent_s:", "-H"], args.first(3), l
       args.drop(3).map { |h| h.to_i(16) }.pack("C*")
     end
   end
@@ -166,8 +177,25 @@ class LauncherAttachTest < Minitest::Test
   def send_frame(s, h) = s.puts(JSON.generate(h))
   def keys(s, text) = send_frame(s, "i" => Base64.strict_encode64(text))
 
+  # a session busyyaks did not start is never attached (no record of its pane), and no other tmux socket is busyyaks's
+  def test_a_session_busyyaks_did_not_start_is_never_attached
+    # its record intact, but on another tmux socket: busyyaks starts its sessions on the default server only
+    s, r = connect("op" => "attach", "session" => "by_agent_s", "socket" => "other")
+    assert_equal [false, 403], r.values_at("ok", "status"), r.inspect
+    assert_match(/not a session busyyaks started/, r["error"])
+    s.close
+    # on the default server, but no record of its pane
+    FileUtils.rm_f(File.join(@base, "state/skills/by_agent_s/launched.json"))
+    s, r = connect("op" => "attach", "session" => "by_agent_s")
+    assert_equal [false, 403], r.values_at("ok", "status"), r.inspect
+    assert_match(/not a session busyyaks started/, r["error"])
+    s.close
+    refute_match(/attach-session/, File.read(File.join(@base, "tmux.log")))
+  end
+
   def test_refusals_before_anything_is_attached
-    { { "session" => "a b" } => 400, { "session" => "gone_s" } => 404, { "session" => "plain_s" } => 403 }.each do |req, st|
+    { { "session" => "a b" } => 400, { "session" => "by_gone_s" } => 404,
+{ "session" => "by_plain_s" } => 403, }.each do |req, st|
       s, r = connect(req.merge("op" => "attach"))
       assert_equal [false, st], r.values_at("ok", "status"), "#{req}: #{r}"
       assert_nil s.gets, "a refusal closes the connection"
@@ -177,12 +205,12 @@ class LauncherAttachTest < Minitest::Test
   end
 
   def test_screen_then_keys_into_the_pane_only_in_control
-    s, hello = connect("op" => "attach", "session" => "agent_s")
-    assert_equal [true, "agent_s", 80, 24], hello.values_at("ok", "session", "cols", "rows"), hello.inspect
+    s, hello = connect("op" => "attach", "session" => "by_agent_s")
+    assert_equal [true, "by_agent_s", 80, 24], hello.values_at("ok", "session", "cols", "rows"), hello.inspect
     assert_equal "SCREEN\r\nline2\r\n", Base64.decode64(hello["screen"])
     seen = []
     await(s, seen) { output(seen).include?("DRAWN") }
-    assert_match(/attach-session -f ignore-size,read-only -t =agent_s/, File.read(File.join(@base, "tmux.log")))
+    assert_match(/attach-session -f ignore-size,read-only -t =by_agent_s/, File.read(File.join(@base, "tmux.log")))
 
     keys(s, "early\r")
     assert_equal({ "refused" => "input while not in control: nothing typed" }, await(s) { |f| f["refused"] })
@@ -201,26 +229,27 @@ class LauncherAttachTest < Minitest::Test
     s.puts("not json")
     assert_match(/bad frame/, await(s) { |f| f["refused"] }["refused"])
     s.close
-    Wait.for("the launcher's close line", seconds: 10, every: 0.1) { File.read(@log).include?("attach agent_s: closed") }
+    Wait.for("the launcher's close line", seconds: 10, every: 0.1) { File.read(@log).include?("attach by_agent_s: closed") }
     assert_equal 2, sent.size, "nothing typed before control or after release"
     assert_equal "", typed, "the tmux client never got a byte"
     log = File.read(@log)
-    ["opened", "control taken", "control released", "closed"].each { |w| assert_match(/attach agent_s: #{w}/, log) }
+    ["opened", "control taken", "control released", "closed"].each { |w| assert_match(/attach by_agent_s: #{w}/, log) }
   end
 
   # a key written into a tmux CLIENT goes through its key tables — the prefix + c (a host shell), + s (another
   # session), + : run-shell. In control, the prefix and a command line are bytes for the pane,
   # the client is never switched or made writable, and no tmux call acts relative to the launcher's own $TMUX.
   def test_tmux_prefix_keys_are_text_for_the_pane_never_a_client_command
-    s, = connect("op" => "attach", "session" => "agent_s")
+    s, = connect("op" => "attach", "session" => "by_agent_s")
     await(s) { |f| f["o"] }
     send_frame(s, "control" => true)
     await(s) { |f| f.key?("control") }
     keys(s, "\x02c\x02:run-shell id\r")
     assert_equal ["\x02c\x02:run-shell id\r".b], await_sent(1)
-    assert_equal ["cancel =agent_s:"], File.readlines(File.join(@base, "modes"), chomp: true), "the pane's mode cancelled first"
+    assert_equal ["cancel =by_agent_s:"], File.readlines(File.join(@base, "modes"), chomp: true),
+"the pane's mode cancelled first"
     s.close
-    Wait.for("the launcher's close line", seconds: 10, every: 0.1) { File.read(@log).include?("attach agent_s: closed") }
+    Wait.for("the launcher's close line", seconds: 10, every: 0.1) { File.read(@log).include?("attach by_agent_s: closed") }
     assert_equal "", typed, "the tmux client never got a byte"
     log = File.read(File.join(@base, "tmux.log"))
     refute_match(/^(switch-client|refresh-client|new-window|run-shell|command-prompt)/, log)
@@ -230,7 +259,7 @@ class LauncherAttachTest < Minitest::Test
   # every byte goes as typed: a trailing ";" (tmux's command separator: `-l` dropped it silently), a NUL, bytes that
   # are not UTF-8; a send tmux refuses comes back with its error
   def test_any_byte_is_typed_as_it_is
-    s, = connect("op" => "attach", "session" => "agent_s")
+    s, = connect("op" => "attach", "session" => "by_agent_s")
     await(s) { |f| f["o"] }
     send_frame(s, "control" => true)
     await(s) { |f| f.key?("control") }
@@ -238,14 +267,14 @@ class LauncherAttachTest < Minitest::Test
     assert_equal [";", "x;", "\\;", "a\0b", "\xff", "é"].map(&:b), await_sent(6)
     FileUtils.touch(File.join(@base, "pane_gone"))
     keys(s, "x")
-    assert_equal "tmux send-keys failed after 0 of 1 bytes: can't find pane: agent_s",
+    assert_equal "tmux send-keys failed after 0 of 1 bytes: can't find pane: by_agent_s",
                  await(s) { |f| f["refused"] }["refused"]
     s.close
   end
 
   # tmux refuses a command over 16 KB: a paste goes in 4 KB pieces, in order, each with its own mode cancel
   def test_a_long_paste_goes_in_ordered_pieces
-    s, = connect("op" => "attach", "session" => "agent_s")
+    s, = connect("op" => "attach", "session" => "by_agent_s")
     await(s) { |f| f["o"] }
     send_frame(s, "control" => true)
     await(s) { |f| f.key?("control") }
@@ -261,7 +290,7 @@ class LauncherAttachTest < Minitest::Test
   # the session ended and tmux moved our read-only client onto another one: that session is never streamed
   def test_a_client_moved_to_another_session_ends_the_stream
     FileUtils.touch(File.join(@base, "chatty")) # that session redraws all the time: the check runs anyway
-    s, = connect("op" => "attach", "session" => "agent_s")
+    s, = connect("op" => "attach", "session" => "by_agent_s")
     seen = []
     await(s, seen) { output(seen).include?("tick") }
     FileUtils.touch(File.join(@base, "moves"))
@@ -269,18 +298,18 @@ class LauncherAttachTest < Minitest::Test
     refute_includes output(seen), "OTHER-SESSION", "not one byte of the session tmux moved the client to"
     assert_nil s.gets, "the launcher's side of the stream ended (the web then closes it)"
     s.close
-    Wait.for("the launcher's close line", seconds: 10, every: 0.1) { File.read(@log).include?("attach agent_s: closed") }
-    assert_match(/attach agent_s: the client showed "lead_s", detached/, File.read(@log))
+    Wait.for("the launcher's close line", seconds: 10, every: 0.1) { File.read(@log).include?("attach by_agent_s: closed") }
+    assert_match(/attach by_agent_s: the client showed "by_lead_s", detached/, File.read(@log))
     assert_match(/detach-client -t \S+/, File.read(File.join(@base, "tmux.log")))
   end
 
   # taking control re-checks the session (it may have ended, or its agent exited, since the attach)
   def test_control_refused_when_the_session_is_gone
-    s, = connect("op" => "attach", "session" => "agent_s")
+    s, = connect("op" => "attach", "session" => "by_agent_s")
     await(s) { |f| f["o"] }
     FileUtils.touch(File.join(@base, "gone"))
     send_frame(s, "control" => true)
-    assert_equal "session agent_s is not running: control stays off", await(s) { |f| f["refused"] }["refused"]
+    assert_equal "session by_agent_s is not running: control stays off", await(s) { |f| f["refused"] }["refused"]
     keys(s, "x\r")
     assert_equal "input while not in control: nothing typed", await(s) { |f| f["refused"] }["refused"]
     s.close
@@ -288,7 +317,7 @@ class LauncherAttachTest < Minitest::Test
   end
 
   def test_a_resized_window_is_sent
-    s, = connect("op" => "attach", "session" => "agent_s")
+    s, = connect("op" => "attach", "session" => "by_agent_s")
     File.write(File.join(@base, "size"), "100 30 off\n")
     assert_equal({ "cols" => 100, "rows" => 30 }, await(s) { |f| f["size"] }["size"])
     s.close

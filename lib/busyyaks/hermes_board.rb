@@ -4,6 +4,7 @@ require "fileutils"
 require "json"
 require "tempfile"
 require "yaml"
+require_relative "board_mcp"
 
 module Busyyaks
   # What makes a Hermes session a board agent, per launch and never in the operator's own Hermes config: an
@@ -35,13 +36,11 @@ module Busyyaks
 
     module_function
 
+    # the board's endpoint + MCP_BOARD_TOKEN (BoardMcp): the board tools reach only the sessions busyyaks starts
     def mcp!(env)
-      host, port, token = %w[MCP_HOST MCP_HOST_PORT MCP_TOKEN].map do |k|
-        env.fetch(k) { raise Invalid, "#{k} missing in .env (a Hermes board session needs the busyyaks MCP)" }
-      end
-      raise Invalid, "MCP_TOKEN is empty in .env" if token.empty?
-
-      { url: "http://#{host}:#{port}/mcp", token: token }
+      BoardMcp.endpoint!(env)
+    rescue BoardMcp::Invalid => e
+      raise Invalid, e.message
     end
 
     # Writes <stage>/hermes-managed/config.yaml (dir 0700, file 0600) → the dir

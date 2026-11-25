@@ -36,6 +36,8 @@ const t = (key: string, follows: string | null) => ({
   running: 0,
   running_here: 0,
   under: follows,
+  launchable: true,
+  launch_label: null,
 });
 const all: LaunchesData = {
   types: [t("lead", null), t("team", "lead")],

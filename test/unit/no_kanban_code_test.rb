@@ -109,9 +109,9 @@ class NoKanbanCodeTest < Minitest::Test
     path = File.join(ROOT, "config/kanban.example.yml")
     ex = Busyyaks::AgentSettings.host(Busyyaks::AgentSettings.file_hash(path), Busyyaks::AgentSettings.template)
     assert_equal [["claude", "claude", [], false]], ex.launchers.map { |l| [l.key, l.command, l.args, l.via_shell] }
-    assert_equal %w[lead worker team plain], ex.agent_type_keys
+    assert_equal %w[lead worker team], ex.agent_type_keys
     assert(ex.agent_types.all? { |t| t.launchers == ["claude"] && t.model.nil? }, "one launcher, no model names")
-    assert_equal %w[claude] * 4, ex.agent_types.map { |t| t.launcher!(nil) }, "one launcher = unambiguous"
+    assert_equal %w[claude] * 3, ex.agent_types.map { |t| t.launcher!(nil) }, "one launcher = unambiguous"
     # a repo without CI must work: no CI URL demanded at handoff (a commented option); green CI at a gate is the board's
     # own setting (requires_green_ci), never this file's
     refute ex.handoff.requires_ci_url

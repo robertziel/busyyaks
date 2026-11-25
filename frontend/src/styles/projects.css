@@ -630,20 +630,13 @@ a.lane-card:hover span {
   border-color: #ffffff;
 }
 
-/* launch: two split pills — primary "Launch" (busyyaks session) and quiet "Plain", each + its launcher chooser */
+/* launch: the vendored LaunchBar's split pills (one per agent type the Launch bar offers), each + its launcher chooser */
 .launchpair {
   display: inline-flex;
   gap: 6px;
   align-items: stretch;
   flex-wrap: wrap;
 }
-div.launch {
-  display: inline-flex;
-  margin: 0;
-  align-items: stretch;
-  white-space: nowrap;
-}
-div.launch .split-main,
 .ak-launch .ak-launch-main {
   border-radius: var(--radius-pill) 0 0 var(--radius-pill);
   padding-right: 0.6rem;
@@ -661,6 +654,7 @@ div.launch .split-main,
   border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
   margin-left: -1px;
 }
+/* in the table 82 solid pills would shout: tinted at rest, solid on the hovered / focused row */
 table.tree .ak-launch .btn.primary {
   background: rgba(var(--accent-rgb), 0.12);
   color: var(--accent);
@@ -669,47 +663,6 @@ table.tree tr:hover .ak-launch .btn.primary:not(:disabled),
 table.tree .ak-launch:focus-within .btn.primary:not(:disabled) {
   background: var(--button-fill);
   color: #ffffff;
-}
-div.launch .split-menu {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 500;
-  font-size: 11.5px;
-  letter-spacing: 0;
-  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-  padding: 0.2rem 0.6rem 0.2rem 0.55rem;
-  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.28);
-}
-div.launch .split-menu .sel-label {
-  max-width: 110px;
-}
-div.launch .split-menu:not(.primary) {
-  box-shadow: inset 1px 0 0 var(--line-strong);
-}
-div.launch .split-menu:disabled {
-  opacity: 1;
-}
-div.launch .split-main:disabled + .split-menu {
-  opacity: 0.45;
-}
-/* in the table 82 solid pills would shout: tinted at rest, solid on the hovered / focused / open row */
-table.tree div.launch .btn.primary {
-  background: rgba(var(--accent-rgb), 0.12);
-  color: var(--accent);
-}
-table.tree div.launch .split-menu {
-  box-shadow: inset 1px 0 0 rgba(var(--accent-rgb), 0.22);
-}
-table.tree tr:hover div.launch .btn.primary:not(:disabled),
-table.tree div.launch:focus-within .btn.primary:not(:disabled),
-table.tree div.launch:has([aria-expanded="true"]) .btn.primary:not(:disabled) {
-  background: var(--button-fill);
-  color: #ffffff;
-}
-table.tree tr:hover div.launch .split-menu,
-table.tree div.launch:focus-within .split-menu {
-  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.28);
 }
 
 /* ── toolbar: search, count chips, match count, expand/collapse — sticky under the header ─────────── */

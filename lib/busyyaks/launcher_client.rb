@@ -18,7 +18,13 @@ module Busyyaks
     module_function
 
     def sessions = call(op: "sessions")["sessions"]
-    def session_names = sessions.map { |s| s["name"] }
+    # only the sessions busyyaks launched (the launcher's `launched`): what a page lists, stops or offers as an assignee
+    def launched_sessions = sessions.select { |s| s["launched"] }
+    # the engine's live sessions (claim, register, presence, terminals): only the ones busyyaks started — a session
+    # started by hand is never a card's live owner (a fresh launch counts through the engine's grace until its start is
+    # recorded). The `sessions` op itself already lists only `by_` sessions (a hand-run one never leaves the host); the
+    # notifier's watch reads that op, so it sees the same set
+    def session_names = launched_sessions.map { |s| s["name"] }
     # config/harnesses.yml + launch.commands resolved in the launch shell on the host:
     # {shell, harnesses: [{key, label, command, kind, launch_args, install_url, found, type, path, version, version_error}],
     #  commands: [{command, found, type, path}]}
@@ -28,6 +34,12 @@ module Busyyaks
     def projects_root(step:, path: nil, plan_id: nil) = raw(op: "projects_root", step: step, path: path, plan_id: plan_id)
     # updating this checkout (card 536): status | check | apply {mode, sha} — the launcher's answer as is
     def update(step:, mode: nil, sha: nil) = raw(op: "update", step: step, mode: mode, sha: sha)
+    # what a launch in the repo does with its own .busyyaks/skills (the project page's Settings tab): the launcher's
+    # answer as is — {ok, project_skills: "loaded" | "none" | "left: <why>"} or {ok: false, error}
+    def project_skills(path:, settings:) = raw(op: "project_skills", path: path, settings: settings)
+    # busyyaks's own skills layers as a launch of the host checkout reads them (Settings → Agent rules): the answer as
+    # is — {ok, files, types, creatable, checkout, limits} or {ok: false, error, status}
+    def skills_layers(settings:) = raw(op: "skills_layers", settings: settings)
     def create(root:, name:, url:) = call(op: "create", root: root, name: name, url: url)
     def jobs = call(op: "jobs")["jobs"]
     def agents = call(op: "agents")

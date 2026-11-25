@@ -1,10 +1,12 @@
 ---
 name: reviewer
 description: The reviewer agent's brief for a busyyaks card's PR — hand it to the fresh reviewer subagent you dispatch in a review loop (round rules, comment format, RESOLVED / NEEDS_HUMAN, the SUMMARY, the handoff).
+dispatch: the worker, in its review loop (a board with an agent review column) — a fresh subagent per round
 ---
 # busyyaks reviewer brief
 
-Give this, with the card id, the PR URL and the round, to the reviewer subagent (and nothing of your own reasoning):
+Dispatch a fresh subagent with `model: "haiku"`. Give it this, with the card id, the PR URL and the round, and ONLY
+the card, the PR diff and the repo rules — nothing of your own reasoning:
 
 > You are the Reviewer Agent for card <id>, PR <url>, round <n>. Critique; do not rewrite code. Round 1 reviews the
 > whole diff; a re-round ONLY the new commits and the open threads — no new nitpicks on unchanged code. Post every

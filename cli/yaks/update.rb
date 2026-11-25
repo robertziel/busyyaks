@@ -123,6 +123,9 @@ module Busyyaks
           built = "busyyaks:update-#{target[:sha][0, 12]}"
           back = -> { Updates.back!(target, git: @git) }
           step("checkout") { Updates.move!(target, git: @git) }
+          # the new version's secrets in .env (one it added is written, nothing set is touched) — before the backup, whose
+          # `docker compose` already reads the new compose file (a `${KEY:?}` it requires)
+          step("setup", undo: back) { run!("bin/setup secrets", File.join(@ctx.home, "bin", "setup"), "secrets") }
           step("build", undo: back) { run!("docker build", "docker", "build", "-t", built, @ctx.home) }
           # the image the running stack started from, named before anything replaces it (and a failed inspect is undone
           # like the backup: the checkout back, nothing tagged)

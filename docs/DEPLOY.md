@@ -155,7 +155,7 @@ rm -rf data/run                                   # the old socket dir: nothing 
 | daily runner's git | the runner's `git -C <repo> …` runs on the host, driven by a model that reads untrusted text, with SafeGit's environment only (pager `cat`, `diff.external` blanked). A repo-config `diff.<x>.textconv` (`log -p`), `diff.<x>.command` (`--ext-diff`) or `filter.<x>` (`status`) still runs there as the operator. Open |
 | git on untrusted repos | busyyaks runs the git CLI on repos it does not control in: the scanner container, **mcp** (the full scan through `scan_now` — the operator's own `MCP_TOKEN` only — and, under the daily report's token too, the daily facts' churn and the report rendering's card links in `check_report` / `post_report`) and **web** (the kanban engine's card links: plain git, without SafeGit's flags), and on the host in the launcher. SafeGit's flags are defence in depth only. A program a repo's own `.git/config` names in a way the flags miss (known: a filter name holding `=`. A promisor lazy fetch is turned off by `GIT_NO_LAZY_FETCH=1` plus `protocol.allow=never` and `protocol.<file|ssh|git|http|https|ext>.allow=never` in command scope (a repo's own `protocol.<name>.allow=always` beats the bare `protocol.allow`, not the named keys) — set by SafeGit for its own calls and, for every git in the containers including the engine's card links, in docker-compose.yml's `x-app` environment; on the host the launcher's git gets them from SafeGit; still only flags) runs with that process's access. mcp and web hold the launcher socket, so for them that is a path to the host (launch / type into a session as the operator); the scanner and github containers do **not** mount the socket (`test/unit/compose_test.rb` `test_launcher_socket_reaches_only_web_mcp_and_notifier`) but write the database (see shared database). Open, and a blocker for the beta: reading repos with a library that runs no repo-configured program (libgit2) removes this from mcp, web, the scanner and the launcher |
 | dialog answers | the launcher's `answer` op presses a key on any dialog a session shows — Claude Code's folder-trust prompt included — when the caller sends the dialog's current hash, which its `dialog` op returns. The web UI calls it for the operator only, but any client of the launcher socket (web · mcp · notifier, and code running in them) can call both ops: a prompt "left for the operator" is not a boundary against those containers. The socket mount is the boundary (§ git on untrusted repos). Open |
-| checkout under PROJECTS_ROOT | the `writer` container mounts `PROJECTS_ROOT` read-write. Every repo under it — its `.git/config` and `.git/hooks`, which the host's git and the agents run — and a busyyaks checkout inside it (`bin/launcher`, `bin/yaks`, `deploy/*.sh`, `.env`) are writable from that container: code the host runs. Keep the checkout outside `PROJECTS_ROOT` to close it; narrowing the writer to `<repo>/.busyyaks/workflow.yml` + `.git/info/exclude` is a follow-up. Open |
+| checkout under PROJECTS_ROOT | the `writer` container mounts `PROJECTS_ROOT` read-write. Every repo under it — its `.git/config` and `.git/hooks`, which the host's git and the agents run — and a busyyaks checkout inside it (`bin/launcher`, `bin/yaks`, `deploy/*.sh`, `.env`) are writable from that container: code the host runs. Keep the checkout outside `PROJECTS_ROOT` to close it; narrowing the writer to `<repo>/.busyyaks/` (`workflow.yml`, `skills/agents/<type>.md`) + `.git/info/exclude` is a follow-up. Open |
 | a hung git | a repo whose `.git` holds a FIFO (or anything git blocks reading) hangs the git that reads it, with no per-git timeout: the scanner's whole scan, a `scan_now` or churn in mcp, and the request in web (the kanban card links) that reads that repo. Open until repos are read with a library instead of the git CLI |
 | terminals | an open terminal shows the agent's screen to the browser, and in control types into it as the operator. The checks are the web's session + Origin + registration and the launcher's running-agent check; the launcher cannot read the database, so any client of the launcher socket (web · mcp · notifier, and code running in them) can call `attach` on any running agent session — the socket mount is the boundary, as for dialog answers. `attach` adds reading the screen to what such a client already has: `notify` types up to 8000 characters + Enter into any running agent session and `stop` ends one, with no registration check either (the launcher reads no database: every service writes it, so a row there would be no proof). Through `PUBLIC_HOST` only with `terminal.public_host: allow`. Open |
 
@@ -300,6 +300,20 @@ import-env < .env`. Every service reads the current revision at its next turn: a
 busyyaks's board workflow is a set of skills, handed to each session busyyaks launches or spawns — **for that session
 only**. Nothing is installed user-wide: a `claude` or `hermes` you start yourself on this host sees none of them.
 
+### Agent rules: edit, commit, no install
+
+| question | answer |
+|---|---|
+| Where do I edit them? | In the web. **Settings → Agent rules** (cog menu) = every file busyyaks's own sessions get, for all projects: the core skill, each agent type's file (Team lead `lead.md`, Worker, Sub team), the on-demand skills — `reviewer`, `qa`, `critic` (each with its "dispatched by" line) — and this deployment's layer (`skills.local_dir`). A project's page → **Settings** = EVERY file of that project's own `.busyyaks/skills/`: its `agents/<type>.md` (adds, or with `mode: replace` replaces — a switch on the card), its skills and their reference files, made and removed there too. One card per file; Write / Preview; Save. Or edit the same files in an editor — it is the same thing. |
+| Where is a save written? | The **writer** service writes it (the only container with the projects read-write): busyyaks's files into this checkout (`skills/busyyaks/…`, the `skills.local_dir` layer), a project's into `<repo>/.busyyaks/skills/…`. It checks the file as a launch would read it (size within the type's launch budget, frontmatter, no `` !` `` line, no link) and refuses anything a launch would refuse, naming why. |
+| Do I commit it? | Yes, like code: a save never commits. A changed busyyaks file is an uncommitted change in this checkout (the page lists it; `yaks update` refuses a dirty checkout until it is committed). A project's file is committed with that repo. |
+| Does it need installing? | **No.** Nothing is installed anywhere — no Claude Code plugin, no `~/.claude` / `~/.hermes` / `~/.codex` entry. `bin/launcher` reads the files at **every launch** from the working tree, so a save reaches the **next** session started (committed or not); a session already running keeps the copy it started with. |
+| How does a busyyaks session get them? | At each launch (web Launch, or the lead's `kanban_spawn`) the launcher selects the type's files in order — core → busyyaks's `agents/<type>.md` → this deployment's → the project's, by the override rule below — checks them, and copies them into the session's own stage `LAUNCHER_STATE_DIR/skills/<by_session>/` (0700, removed when the session ends). |
+| Can a project change busyyaks's own rules? | Yes, for its own launches only (the override rule, `Skills.select` — one place, every view and save check calls it): its `agents/<type>.md` **adds** after the global ones, or **replaces** them when the file starts with `---` / `mode: replace` / `---` (then core + this file start the type); its `<name>/SKILL.md` with a global skill's name (`reviewer`, `qa`, `critic`, …) **replaces** that skill. The deployment's layer follows the same rule over busyyaks's. **Core is not replaceable** by a layer: it is the one place the board's rules reach a session (the MCP sends none) and every board's sessions share it — edit it for all on Settings → Agent rules. The project page shows per type which global file is added to and which replaced, and by which layer (the launcher's own composition). |
+| How is it called? | **Claude Code**: `claude … --mcp-config <stage>/mcp.json --plugin-dir <stage> "/busyyaks:session <the type's prompt>" --remote-control <by_session>` — the stage is a plugin named `busyyaks`; the prompt's first word `/busyyaks:session` invokes the entry skill, which holds every selected file in order and lists the on-demand skills (`busyyaks:reviewer`, …). **Hermes**: `BUSYYAKS_SKILLS_DIR=<stage>` for that session only + `-s busyyaks-session-<token>`, and its per-launch overlay (`HERMES_MANAGED_DIR`) carries the board MCP. |
+| How do we know it was used? | The launcher checks the started agent before keeping it: Claude Code's running process must carry `--plugin-dir <stage>` and `--mcp-config <stage>/mcp.json` on its argv; Hermes must list `busyyaks-session` (`hermes skills list` with this launch's environment). Otherwise the session is killed and the launch refused with the reason. The launch result and the launcher log name each file with its source and sha256. |
+| And a session I start myself? | Gets none of it: no plugin dir, no board MCP, no busyyaks text — the files are only ever handed to a session busyyaks starts. |
+
 No manifests — the shape of a layer is the rule. Every layer is a dir of the same shape:
 
 | layer | where | committed in |
@@ -310,11 +324,12 @@ No manifests — the shape of a layer is the rule. Every layer is a dir of the s
 
 | in a layer | what | loads for |
 |---|---|---|
-| `core/SKILL.md` (+ reference `.md` files) | how a session works with the board and the kanban MCP. busyyaks's layer only, required | every session busyyaks starts, `plain` included |
-| `agents/<type>.md` | what a session of that agent type does (`lead.md`, `worker.md`, `team.md` — the agent settings' type KEYS; another file name is refused) | sessions of that type; each layer's file is appended after busyyaks's, in layer order |
-| `<name>/SKILL.md` (+ `.md` files) | an on-demand skill (e.g. `reviewer`) | every session: listed in the entry skill by the name its CLI loads it with (hermes: `busyyaks-<name>-<token>`), loaded when the work needs it. A name another layer has, `core`, `agents` or `session` is refused |
+| `core/SKILL.md` (+ reference `.md` files) | how a session works with the board and the kanban MCP. busyyaks's layer only, required; a `core/` in another layer is refused (not replaceable) | every session busyyaks starts |
+| `agents/<type>.md` | what a session of that agent type does (`lead.md`, `worker.md`, `team.md` — the agent settings' type KEYS; another file name is refused). Optional frontmatter: exactly `mode: add` (the default, = none) or `mode: replace`; `mode: replace` in busyyaks's own layer is refused (nothing before it) | sessions of that type; each later layer's file is appended after the earlier ones (add), or stands in for all of them (replace) |
+| `<name>/SKILL.md` (+ `.md` files) | an on-demand skill (`reviewer`, `qa`, `critic`, a deployment layer's own) | every session: listed in the entry skill by the name its CLI loads it with (hermes: `busyyaks-<name>-<token>`), loaded when the work needs it. A later layer's skill of the same name replaces it (the entry says `(project, replaces busyyaks's)`); `core`, `agents` or `session` is refused |
 
-A skill = regular `.md` files, `SKILL.md` with frontmatter exactly `name` (= its dir) + `description`. The entry skill
+A skill = regular `.md` files, `SKILL.md` with frontmatter `name` (= its dir) + `description` (+ an optional one-line
+`dispatch`: who dispatches it, when — shown on Settings → Agent rules; the staged copy carries name + description). The entry skill
 `session` the session opens with = core, then `agents/<type>.md` of each layer, then the on-demand list; core's
 reference files are staged beside it.
 
@@ -326,13 +341,13 @@ while a layer still has its file refuses every launch with that file named — d
 is in the launch result).
 
 Per launch, `bin/launcher` selects the type's skills, validates them (a missing core, an `agents/` file for no agent
-type, a stray file, a link, a size over `skills.max_bytes` / `max_start_bytes`, a skill named like another layer's →
+type, a stray file, a link, a size over `skills.max_bytes` / `max_start_bytes`, an agents file's frontmatter other than `mode` →
 the launch is refused, nothing started), stages a copy in `LAUNCHER_STATE_DIR/skills/<session>/` (0700; removed once the session is gone) and hands it
 to the CLI:
 
 | kind | how | checked after the start |
 |---|---|---|
-| claude_code | `--plugin-dir <stage>` (plugin `busyyaks`) + the prompt opens with `/busyyaks:session` | the `claude` process's argv carries `--plugin-dir <stage>` |
+| claude_code | `--mcp-config <stage>/mcp.json --plugin-dir <stage>` (plugin `busyyaks`; `--mcp-config` first — it takes several values, `--plugin-dir` ends them before the prompt) + the prompt opens with `/busyyaks:session` | the `claude` process's argv carries `--plugin-dir <stage>` and `--mcp-config <stage>/mcp.json` |
 | hermes | `tmux new-session -e BUSYYAKS_SKILLS_DIR=<stage>` + `-s busyyaks-session`; the skills in `<stage>/busyyaks-skills/`, reached by the line `- ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills` under `skills.external_dirs` of hermes's `config.yaml` | `hermes skills list`, run through the allowlisted command with this launch's environment (the running process is only read, to check it has that environment), lists `busyyaks-session`; else killed + refused with the file and the line to add |
 
 Hermes, measured on v0.21.5: an `external_dirs` entry passes `os.path.expandvars`, a relative one is anchored at
@@ -356,7 +371,7 @@ stage), through `HERMES_MANAGED_DIR`. `~/.hermes/config.yaml` is read, never wri
 | overlay key | value | why |
 |---|---|---|
 | `display.busy_input_mode` | `queue` | a ping typed mid-turn waits for the turn (Hermes's default cuts it) |
-| `mcp_servers.busyyaks` | `.env` `MCP_HOST` · `MCP_HOST_PORT` · `MCP_TOKEN` | the token only in this file: never on argv, in tmux's command or a log |
+| `mcp_servers.busyyaks` | `.env` `MCP_HOST` · `MCP_HOST_PORT` · `MCP_BOARD_TOKEN` | the board token only in this file: never on argv, in tmux's command or a log |
 | `tools.tool_search.enabled` | `false` | the MCP tools listed directly |
 | `display.language` · `display.skin` | `en` · `default` | what the screen rules were captured on |
 | `paste_collapse_char_threshold` | `1` | every paste is a one-line reference to its file, so a line left in the input is read back exactly |
@@ -376,6 +391,52 @@ lists a server (Hermes skips MCP discovery when the user's file has none). Inert
 Approval panel → card question, digits answer it. `clarify` is not relayed (a digit only locks a choice): the pane shows
 blocked; a board session asks with `kanban_ask`. Phase: `tool` from its running-tool row, else "working" (its verb is
 random). Adding Hermes to lead / worker / team is the operator's choice in Settings → Agents & launchers.
+
+### Agent rules (busyyaks's own layers, every busyyaks session)
+
+**Settings → Agent rules** (`/settings/agent-rules`) shows and edits every global markdown a session busyyaks launches
+gets: one full-width card per file, grouped by who gets it — *every session* (`skills/busyyaks/core/SKILL.md` + its
+refs), *per agent type* (`skills/busyyaks/agents/<type>.md`: the team lead, worker, sub team, plain — an empty card for
+a type with no file yet), *on demand* (`reviewer`, …) and *this deployment* (`skills.local_dir`). Above them each type's
+name, purpose (from its `under` / `takes` / `standalone`) and the files its entry skill holds in launch order, then
+"+ this project's `.busyyaks/skills/agents/<type>.md`".
+
+| | |
+|---|---|
+| Read | from `bin/launcher` (op `skills_layers` = `Skills.layers_answer`, the launch's own selection): the HOST checkout every launch reads, never the web image's copy. Launcher down or older → 503 "restart it" |
+| Written | by the `writer` service, through its projects mount, into the ONE scanned repo whose `skills/` is this checkout's own (compose mounts `./skills` read-only into the writer at `/busyyaks/skills`; same device + inode) — never a path from the request, never a clone or fork of busyyaks. The checkout must be under `PROJECTS_ROOT` (else refused, saying how to fix it). The tree as it would be after the save is read the way a launch reads it (frontmatter, sizes, `max_start_bytes` per type, no `` !`cmd` ``, no symlink), and so is every scanned project's launch with it (a project's own `agents/<type>.md` adds to the entry skill: a save that would push one over is refused naming the project and type; one already over is not counted): any refusal → 422 verbatim, nothing written; a failure half way puts back the files already written. 409 = changed on disk. CRLF kept. A skill file cannot be removed; a blank `agents/<type>.md` removes it |
+| Size | one number per card: what the file may hold so every launch still starts (`max_start_bytes` less the rest of the tightest type's entry skill; an on-demand skill: `max_bytes` less its other files); the breakdown is the tooltip |
+| Git | tracked in the busyyaks repo; a save never commits. The page lists the uncommitted files: `yaks update` refuses the checkout until they are committed |
+
+### Project rules (per project, per agent type)
+
+A project's own rules for each agent type — "the lead of this repo plans in the card before coding", "workers here run
+`make e2e` before a handoff" — are the project layer above: **`<repo>/.busyyaks/skills/agents/<type>.md`**. Write them in
+the repo, or on the web: project page → **Settings** tab, one markdown editor per agent type of the current agent
+settings — one full-width card per file, titled by the type's name (Team lead, Worker, …), each showing (folded) the
+global layers it adds to, linked to Settings → Agent rules. There is no database copy: the file is the rule, and a hand
+edit is what the page shows next.
+
+| | |
+|---|---|
+| Read | by the web, from the repo (mounted read-only). A file reached through a symlink, over `skills.max_bytes` or not UTF-8 is shown as an error on its editor, never read |
+| Written | only by the `writer` service (the one container with the repos mounted read-write), on Save: every key an agent type, each text UTF-8, not blank, within `skills.max_bytes`, no `` !`cmd` `` line, no symlink on the way — all checked, then each file replaced atomically (CRLF line endings kept). A blank editor removes its file |
+| Launch budget | a launch's entry skill — busyyaks's core + its `agents/<type>.md` + the project's file — must fit `skills.max_start_bytes`. Each card shows ONE figure, what is left for its type ("n / m B", the breakdown in its tooltip), and a Save that would go over is refused naming the type and the most the file may hold; a file put there by hand over the budget shows as *launches refused* |
+| Conflict | a file that changed, appeared or was removed on disk since the editor read it → 409, nothing written; **Load newest** reads the files again |
+| Git | not ignored: commit `.busyyaks/skills/` with the repo (only `.busyyaks/workflow.yml` is kept out of git). busyyaks writes the file and never commits: each editor says what git holds of its file — *tracked by git · committed*, *Save leaves an uncommitted change* while you edit a committed file, *uncommitted change* after, *not in git yet* for a new one, *ignored by git* when the repo's ignore rules hide it. When the project is busyyaks's own checkout the tab adds that `yaks update` is refused while a tracked file here is uncommitted |
+| Reaches a session | as every project skill does: `bin/launcher` reads the files at each launch and stages the type's file as an "Agent type" part of the entry skill `session` — **only when `skills.project: allow` and the repo is trusted** (`launch.trusted_paths`, or made by the launcher). The tab shows what a launch does with them, asked of the launcher itself: *read at launch* · *left out of launches* + why · *launches refused* + why (an invalid layer) · *unknown* (the launcher did not answer) |
+| Never | read by a `claude` / `hermes` / `codex` you start from a terminal in the directory: none of them loads `.busyyaks/` (they read `CLAUDE.md`, `.claude/`, `AGENTS.md`, their own dot dirs), nothing is installed user-wide, and no MCP tool returns the files |
+
+Every harness busyyaks can launch gets them the same way, because they are part of the skill, not of a CLI: Claude Code
+through `--plugin-dir`, Hermes through `BUSYYAKS_SKILLS_DIR`. Codex is detected but not launchable yet
+(`config/harnesses.yml` `kind: null`): once the engine has a launch kind for it and `lib/busyyaks/skills.rb` a
+`Delivery` class for that kind (where the stage goes and how the entry skill is named and invoked), a Codex session's
+entry skill carries the rules with no change to them.
+
+API: `GET /api/projects/<slug>/agent-rules` → `{project, dir, path, types, files, errors, max_bytes, launches}`;
+`global` (Settings → Agent rules' view, per type in launch order) + `global_error`; `POST` the same path with
+`{files: {<type>: {base, body}}}` (`base` = the sha the editor loaded, `null` when there was
+no file; `body: null` removes the file).
 
 Setup: add `skills:` to `config/busyyaks.yml` (example in `config/busyyaks.example.yml`), and for hermes launchers the
 line `- ${BUSYYAKS_SKILLS_DIR}/busyyaks-skills` under `skills.external_dirs` of the `config.yaml` hermes reads; restart
@@ -577,7 +638,7 @@ that only a verdict about the screen leaves the host: the screen and your keys n
 | config | `config/busyyaks.yml` `terminal: { public_host: allow \| deny, max_open: 1..64 }`, required, no default. `public_host: deny` refuses a terminal opened through `PUBLIC_HOST` (modes 2 and 3); `127.0.0.1` / `localhost` on `WEB_HOST_PORT` (an `ssh -L` forward included) always may. `max_open` = terminals open at once in the web process (each holds one thread); one more → 503 |
 | who | a signed-in session only (`Auth.identify`; with `provider: none` that is anyone who reaches the port, as for the rest of the dashboard); never the MCP bearer (the MCP server has no such route) |
 | page | the upgrade must carry an `Origin` equal to its Host's own origin (no Origin, or another site's → 403): a page elsewhere cannot open one |
-| which session | only a session with an open registration on a board (busyyaks launched it, or it ran `kanban_register`) → else 404; the launcher then attaches only a running session with an agent (claude, or a `launch.commands` command) in its pane → else 404 / 403 |
+| which session | only a session busyyaks launched, with an open registration on a board → else 404; the launcher then attaches only a running session with an agent (claude, or a `launch.commands` command) in its pane → else 404 / 403 |
 | keys | dropped unless in control, in the page, in the web relay and in the launcher (each refuses on its own). The viewer's tmux client is `read-only` for its whole life and never takes a key: in control a key is `tmux copy-mode -q ; send-keys -H <hex bytes>` into the session's pane in one tmux command — any mode of the pane (copy mode, choose-tree: their key tables take even literal keys) cancelled first, then each byte as typed with no key table (hex, so no argument tmux reads as its own), so the tmux prefix, `:` / `run-shell`, mode bindings, new windows and session switches are out of reach. Taking control re-checks the session runs with an agent in its pane; the client showing another session (the session ended, tmux moved it) ends the terminal |
 | audit | each open, take and release → a `terminal` event by you on every card the session works on (owns, or is assigned to its agent name; a session on no card: the launcher log line only), and a launcher log line (`journalctl --user -u busyyaks-launcher`) |
 | proxy | mode 2 / 3 with `public_host: allow`: the nginx template's `location = /api/terminal` passes the WebSocket upgrade (`bin/render-deploy` again after an update) |
@@ -730,6 +791,10 @@ places: the launcher's `create` (`git init` / `git clone` of a URL the operator 
 § Updates).
 
 ## Updates (`yaks update`, Settings → Updates; card 536)
+
+**Updating to the version with `MCP_BOARD_TOKEN` (2026-11-24), once:** the updater that runs is the one already
+installed, and it has no `setup` step yet — run `bin/setup secrets` in the checkout first (it appends and writes the new
+bearer, keeps every value set), then update. Every later update runs `bin/setup secrets` itself, before its backup.
 
 **One new required key** in the gitignored `config/busyyaks.yml` — every service refuses to boot without it (`Config`:
 "missing keys: updates"), the launcher's `update` op answers 422 naming it:

@@ -66,7 +66,49 @@ module Busyyaks
               else
                 scopes["session_memory_max"] ? ["-p", "MemoryMax=#{scopes['session_memory_max']}"] : []
               end
-      ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit=busyyaks-#{session}", *props, "--", *argv]
+      ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit=#{SCOPE_PREFIX}#{session}", *props, "--", *argv]
+    end
+
+    # Every tmux session busyyaks starts is named `by_…` (the agent settings' session_name templates; AgentSettings
+    # refuses a revision without it, bin/launcher a name without it). busyyaks stops, reaps, sweeps, lists and types
+    # into `by_` sessions only — a session the operator started by hand never carries it and is never touched
+    # (2026-11-24: a teardown killed every session on the box, hand-run ones included).
+    SESSION_PREFIX = "by_"
+
+    def busyyaks_session?(name) = name.to_s.start_with?(SESSION_PREFIX) && name.to_s.length > SESSION_PREFIX.length
+
+    # Before a ping is typed (bin/launcher `notify`): nil = go on, else the answer. Order matters (critic blocker,
+    # 2026-11-24): a session whose launch is still in flight has no launch record yet — retried, never dropped as "not
+    # busyyaks's" (the lead's first `assigned` ping); tmux unreadable → retried; a name tmux does not list → gone; a
+    # session busyyaks did not start → unsupported (the notifier fails that ping at once, nothing typed).
+    def notify_refusal(name, in_flight:, pids:, launched:)
+      return { ok: false, retry: true, error: "session #{name} is still starting" } if in_flight
+      return { ok: false, retry: true, error: "tmux unreadable: cannot tell whether #{name} is busyyaks's" } unless pids
+      return nil if launched
+      return { ok: false, gone: true, error: "session #{name} is not running" } unless pids.key?(name)
+
+      { ok: false, unsupported: true, error: "session #{name} is not a session busyyaks started: never typed into" }
+    end
+
+    SCOPE_PREFIX = "busyyaks-"
+    SCOPE_SUFFIX = ".scope"
+
+    def scope_unit(session) = "#{SCOPE_PREFIX}#{session}#{SCOPE_SUFFIX}"
+
+    # The session scopes to stop: every `busyyaks-<session>.scope` unit (the first word of each
+    # `systemctl --user list-units --plain --no-legend` line) whose session is not in `live` (tmux lists it, or its
+    # launch is in flight). A session that ended — stopped, reaped, its claude dead — leaves what it ran in the
+    # background (a supervisor loop, a Monitor) alive in its scope; the scope keeps the unit name, so the next launch
+    # under that name fails ("Unit busyyaks-<s>.scope was already loaded", 2026-11-24). Its processes belong to no
+    # session any more: stopped, never adopted by the next one.
+    def stale_scopes(list_units_out, live)
+      list_units_out.lines.filter_map do |line|
+        unit = line.split.first.to_s
+        next unless unit.start_with?(SCOPE_PREFIX) && unit.end_with?(SCOPE_SUFFIX)
+
+        session = unit.delete_prefix(SCOPE_PREFIX).delete_suffix(SCOPE_SUFFIX)
+        unit unless !busyyaks_session?(session) || live.include?(session)
+      end
     end
 
     # The leads THIS launcher started (lead-first boards): .env LAUNCHER_STATE_DIR/leads.json (the

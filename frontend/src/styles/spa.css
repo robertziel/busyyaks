@@ -167,14 +167,6 @@
   text-decoration: underline;
 }
 
-/* the launch split outside a form */
-div.launch {
-  display: inline-flex;
-  margin: 0;
-  align-items: stretch;
-  white-space: nowrap;
-}
-
 /* notes */
 .card.note .md > :first-child {
   margin-top: 6px;

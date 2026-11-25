@@ -9,7 +9,12 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { buildLanes, CHIP_START, QUIET_LIMIT, type ChipState } from "../lib/sessionLanes";
 import type { AgentSession, TmuxSession } from "../types";
+import type { RegisteredSession } from "../vendor/agents_kanban";
 import { SessionLanesView, sessionMenuItems, type ViewProps } from "./SessionLanes";
+
+// every fixture session is one busyyaks runs (an open registration): the lanes show nothing else
+const registered = (list: TmuxSession[]) =>
+  list.map((t) => ({ session: t.name, type: "worker", launcher: "fullclaude" }) as RegisteredSession);
 
 const tmux = (name: string, created = 1): TmuxSession => ({
   name,
@@ -96,7 +101,7 @@ const view = (o: Partial<ViewProps> = {}, list = sessions, live: AgentSession[] 
       MemoryRouter,
       null,
       createElement(SessionLanesView, {
-        lanes: buildLanes(list, live, []),
+        lanes: buildLanes(list, live, registered(list)),
         chip: CHIP_START,
         dispatch: () => {},
         quietOpen: false,
@@ -176,7 +181,7 @@ describe("SessionLanesView", () => {
     const chip: ChipState = { selected: "p_tool", by: "tap", open: null };
     const html = view({ chip });
     expect(html).toContain('id="lane-strip"');
-    expect(html).toContain("p_tool · not registered");
+    expect(html).toContain("p_tool · worker · fullclaude");
     expect(html).toContain("4m 12s · ↓ 38.2k");
     expect(html).toMatch(/<button[^>]*>Open terminal<\/button>/);
     expect(html).toContain('aria-describedby="lane-strip"');
@@ -252,7 +257,7 @@ describe("SessionLanesView", () => {
     );
     expect(pill).toMatch(/<button[^>]*class="lane-kebab"[^>]*aria-label="p_lead actions"[^>]*aria-haspopup="menu"/);
     const calls: [string[], string][] = [];
-    const lane = buildLanes(sessions, agents, []).quiet[0]!;
+    const lane = buildLanes(sessions, agents, registered(sessions)).quiet[0]!;
     const items = sessionMenuItems(lane, null, (n, w) => calls.push([n, w]));
     expect(items.map((i) => i.label)).toEqual([
       "Open in Claude app",

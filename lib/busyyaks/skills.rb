@@ -5,6 +5,7 @@ require "fileutils"
 require "json"
 require "securerandom"
 require "yaml"
+require_relative "board_mcp"
 
 module Busyyaks
   # The skills a session busyyaks launches gets — per launch only, never installed user-wide (an
@@ -12,9 +13,23 @@ module Busyyaks
   # merged into it applies from the next launch: nothing to install). Layers, each a dir of the same shape:
   #   busyyaks's own   <checkout>/skills/busyyaks            (busyyaks PRs)
   #   the deployment   <checkout>/<skills.local_dir>, or none
-  #   a project's      <repo>/.busyyaks/skills               (that repo's committers)
+  #   a project's      <repo>/.busyyaks/skills               (that repo's committers; its agents/<type>.md are also
+  #                                                           edited on the project page's Settings tab: AgentRuleFiles)
   # A layer: core/SKILL.md (+ .md files; busyyaks's layer only, required: every session) · agents/<type>.md (the
   # agent type keys of the agent settings: what a session of that type does) · <name>/SKILL.md (on-demand skills).
+  #
+  # THE OVERRIDE RULE (one place: `select`; every view and every save check calls it). Layers apply in order —
+  # busyyaks → the deployment → the project; a later layer:
+  #   agents/<type>.md  ADDS to the earlier layers' agents/<type>.md (default), or REPLACES them when the file starts
+  #                     with the frontmatter `---\nmode: replace\n---` (then only core + this file's body start the
+  #                     type's session; `mode: add` says the default). The frontmatter of an agents file is that one
+  #                     key or none. busyyaks's own layer has nothing before it: `mode: replace` there is refused.
+  #   <name>/SKILL.md   with the name of an earlier layer's on-demand skill REPLACES that skill (all its files) for
+  #                     the launches that read this layer; any other name adds a skill.
+  #   core              is NOT replaceable by a layer (a `core/` dir there is refused): the core skill is the one
+  #                     place the board's rules reach a session (the MCP server sends none) and every board's sessions
+  #                     share it, so a project changes what its sessions do through agents/<type>.md (add or replace)
+  #                     and its skills; core itself is edited for every session on Settings → Agent rules.
   # bin/launcher selects core + the launch's agents/<type>.md of every layer + the on-demand skills, validates them
   # (any failure refuses the launch), stages a COPY under LAUNCHER_STATE_DIR/skills/<session>/ (0700; the repo dir
   # itself is never handed to the CLI), writes the entry skill `session` (core, then each layer's agents/<type>.md,
@@ -30,6 +45,9 @@ module Busyyaks
     RESERVED = [ENTRY, CORE, AGENTS].freeze
     PROJECT = %w[allow deny].freeze
     FRONT_KEYS = %w[name description].freeze
+    # an on-demand skill's optional frontmatter key: who dispatches it and when, one line (Settings → Agent rules shows
+    # it; the staged SKILL.md carries name + description only)
+    OPTIONAL_FRONT_KEYS = %w[dispatch].freeze
     BUSYYAKS = "busyyaks"
     DEPLOYMENT = "deployment"
     PROJECT_SOURCE = "project"
@@ -47,13 +65,21 @@ module Busyyaks
     Settings = Struct.new(:max_bytes, :max_start_bytes, :project, :local_dir, keyword_init: true)
 
     # One on-demand skill (or core): the SKILL.md parts (frontmatter dropped from the body) + its files
-    Skill = Struct.new(:name, :source, :description, :body, :files, :sha, keyword_init: true)
-    # One agents/<type>.md of a layer
-    Part = Struct.new(:type, :source, :body, :sha, keyword_init: true)
+    # dir = the skill's dir relative to its layer's root (the checkout or the repo); replaces = the source of the
+    # earlier layer's skill of the same name it stands in for (select), or nil
+    Skill = Struct.new(:name, :source, :description, :body, :files, :sha, :dir, :replaces, :dispatch, keyword_init: true)
+    # One agents/<type>.md of a layer; path = relative to its layer's root; text = the file, body = the text after its
+    # frontmatter (what the entry skill holds); mode = "add" | "replace" (MODES); replaces = the sources of the
+    # earlier parts it stands in for (select)
+    Part = Struct.new(:type, :source, :text, :body, :sha, :path, :mode, :replaces, keyword_init: true)
     # One layer: its source, core (busyyaks's only), agents (type → Part), on-demand skills
     Layer = Struct.new(:source, :core, :agents, :skills, keyword_init: true)
-    # What one launch of `type` gets: core, the type's parts (busyyaks → deployment → project), the on-demand skills
-    Selection = Struct.new(:type, :core, :parts, :skills, keyword_init: true)
+    # What one launch of `type` gets: core, the type's parts (busyyaks → deployment → project, a replace dropping the
+    # earlier ones), the on-demand skills (one per name, the latest layer's) and what the override rule left out:
+    # replaced = [{kind: "agent" | "skill", path (an agents file's path · a skill's dir), source, by (the source that
+    # replaced it)}], in layer order
+    Selection = Struct.new(:type, :core, :parts, :skills, :replaced, keyword_init: true)
+    MODES = %w[add replace].freeze
 
     module_function
 
@@ -87,36 +113,23 @@ module Busyyaks
                    local_dir: local)
     end
 
-    # The busyyaks layers: <checkout>/skills/busyyaks (core required), then the deployment's skills.local_dir
+    # The busyyaks layers: <checkout>/skills/busyyaks (core required), then the deployment's skills.local_dir (whose
+    # skills / agents files may replace busyyaks's: the override rule, select)
     def busyyaks!(checkout, types:, settings:)
       own = layer!(File.join(checkout, OWN_DIR), root: checkout, source: BUSYYAKS, types: types, settings: settings)
       return [own] unless settings.local_dir
 
-      local = layer!(File.join(checkout, settings.local_dir), root: checkout, source: DEPLOYMENT, types: types,
-                                                              settings: settings)
-      unique!([own, local], File.join(checkout, settings.local_dir))
-      [own, local]
+      [own, layer!(File.join(checkout, settings.local_dir), root: checkout, source: DEPLOYMENT, types: types,
+                                                             settings: settings),]
     end
 
     # A project's layer: <repo>/.busyyaks/skills, nil when the repo has none
-    def project(repo, types:, settings:, taken:)
-      base = File.join(repo, PROJECT_DIR)
-      dir = File.join(base, "skills")
+    def project(repo, types:, settings:)
+      dir = File.join(repo, PROJECT_DIR, "skills")
       no_link!(repo, dir)
       return nil unless File.exist?(dir)
 
-      layer = layer!(dir, root: repo, source: PROJECT_SOURCE, types: types, settings: settings)
-      clash = layer.skills.map(&:name) & taken
-      raise Invalid, "#{dir}: #{clash.join(', ')} shadows a busyyaks skill: rename it" if clash.any?
-
-      layer
-    end
-
-    # the layers' on-demand names are unique → the last layer
-    def unique!(layers, where)
-      names = layers[0..-2].flat_map { |l| l.skills.map(&:name) }
-      clash = layers.last.skills.map(&:name) & names
-      raise Invalid, "#{where}: #{clash.join(', ')} shadows a busyyaks skill: rename it" if clash.any?
+      layer!(dir, root: repo, source: PROJECT_SOURCE, types: types, settings: settings)
     end
 
     # One layer dir → Layer, every rule checked (nothing is half-loaded: one refusal refuses all):
@@ -134,7 +147,10 @@ module Busyyaks
         path = File.join(dir, c)
         raise Invalid, "#{path}: a skills dir holds directories only (core, agents, <skill>)" unless File.directory?(path)
         next if c == AGENTS || (own && c == CORE)
-        raise Invalid, "#{path}: #{c} is busyyaks's core skill: rename it" if c == CORE
+        if c == CORE
+          raise Invalid, "#{path}: core is busyyaks's core skill, not replaceable by a layer — edit it for every " \
+                         "session on Settings → Agent rules (#{OWN_DIR}/core), or add to it with agents/<type>.md"
+        end
         raise Invalid, "#{path}: #{ENTRY} is the generated entry skill's name" if c == ENTRY
         raise Invalid, "#{path}: skill name #{c.inspect} must match #{NAME.source}" unless c.match?(NAME)
       end
@@ -168,11 +184,17 @@ end
         size = File.size(path)
         raise Invalid, "#{path} is #{size} bytes, over skills.max_bytes #{settings.max_bytes}" if size > settings.max_bytes
 
-        body = File.binread(path).force_encoding(Encoding::UTF_8)
-        raise Invalid, "#{path} is not UTF-8" unless body.valid_encoding?
+        text = File.binread(path).force_encoding(Encoding::UTF_8)
+        raise Invalid, "#{path} is not UTF-8" unless text.valid_encoding?
 
-        no_shell_inline!(path, body)
-        [type, Part.new(type: type, source: source, body: body, sha: Digest::SHA256.hexdigest(body))]
+        no_shell_inline!(path, text)
+        mode, body = agent_mode!(text, path)
+        if mode == "replace" && source == BUSYYAKS
+          raise Invalid, "#{path}: mode: replace in busyyaks's own layer — there is no earlier layer to replace"
+        end
+
+        [type, Part.new(type: type, source: source, text: text, body: body, sha: Digest::SHA256.hexdigest(text),
+                        path: path.delete_prefix("#{root}/"), mode: mode, replaces: []),]
       end
     end
 
@@ -205,6 +227,45 @@ end
       end
     end
 
+    # An agents/<type>.md's optional frontmatter: none → ["add", text]; `---\nmode: add|replace\n---` → [mode, the text
+    # after it]; any other frontmatter (another key, another value, not YAML) → Invalid naming the file
+    AGENT_FRONT = /\A---\r?\n(.*?)^---\r?\n/m
+
+    def agent_mode!(text, path)
+      m = text.match(AGENT_FRONT) or return ["add", text]
+
+      front = begin
+        YAML.safe_load(m[1])
+      rescue Psych::Exception => e
+        raise Invalid, "#{path}: frontmatter #{e.message}"
+      end
+      unless front.is_a?(Hash) && front.keys == ["mode"] && MODES.include?(front["mode"])
+        raise Invalid, "#{path}: an agents file's frontmatter is exactly `mode: add` or `mode: replace` (or none: add)"
+      end
+
+      [front["mode"], m.post_match]
+    end
+
+    # A text about to be written as an agents/<type>.md (the project page's Settings tab, AgentRuleFiles; Settings →
+    # Agent rules, SkillFiles): what agents! refuses when it reads one — not UTF-8, over skills.max_bytes, a !`…` line,
+    # a frontmatter other than `mode` — plus blank (no rules = no file; `mode: replace` with nothing after it is a
+    # file: it replaces the earlier layers' rules with none). `where` names it in the refusal. → the text as UTF-8.
+    def agent_text!(body, settings, where:)
+      raise Invalid, "#{where} must be markdown text (got #{body.class})" unless body.is_a?(String)
+
+      text = body.dup.force_encoding(Encoding::UTF_8)
+      raise Invalid, "#{where} is not UTF-8" unless text.valid_encoding?
+
+      mode, rest = agent_mode!(text, where)
+      raise Invalid, "#{where} is blank: remove the file instead" if mode == "add" && rest.strip.empty?
+      if text.bytesize > settings.max_bytes
+        raise Invalid, "#{where} is #{text.bytesize} bytes, over skills.max_bytes #{settings.max_bytes}"
+      end
+
+      no_shell_inline!(where, text)
+      text
+    end
+
     # One skill dir: regular .md files only (no link, no subdir), SKILL.md with frontmatter exactly name + description
     def skill!(dir, name, root:, source:, settings:)
       no_link!(root, dir)
@@ -232,7 +293,8 @@ end
       raise Invalid, "#{dir}/SKILL.md: name #{front['name'].inspect} must be its dir's #{name}" unless front["name"] == name
 
       sha = Digest::SHA256.hexdigest(files.sort.map { |f, b| "#{f}\0#{b}" }.join("\0"))
-      Skill.new(name: name, source: source, description: front["description"], body: body, files: files, sha: sha)
+      Skill.new(name: name, source: source, description: front["description"], body: body, files: files, sha: sha,
+                dir: dir.delete_prefix("#{root}/"), dispatch: front["dispatch"])
     end
 
     def frontmatter!(text, path)
@@ -247,9 +309,11 @@ end
       rescue Psych::Exception => e
         raise Invalid, "#{path}: frontmatter #{e.message}"
       end
-      unless front.is_a?(Hash) && front.keys.sort == FRONT_KEYS.sort && front.values.all? { |v|
- v.is_a?(String) && !v.strip.empty? }
-        raise Invalid, "#{path}: frontmatter must be exactly #{FRONT_KEYS.join(' + ')} (non-empty strings)"
+      keys = front.is_a?(Hash) ? front.keys : []
+      unless (FRONT_KEYS - keys).empty? && (keys - FRONT_KEYS - OPTIONAL_FRONT_KEYS).empty? &&
+             front.values.all? { |v| v.is_a?(String) && !v.strip.empty? && !v.include?("\n") }
+        raise Invalid, "#{path}: frontmatter must be exactly #{FRONT_KEYS.join(' + ')} (+ optional " \
+                       "#{OPTIONAL_FRONT_KEYS.join(', ')}), each one line of text"
       end
 
       [front, m.post_match]
@@ -260,28 +324,211 @@ end
     # "left: <why>", nothing of it read); project_skills = "loaded" · "none" (no .busyyaks/skills) · "left: <why>"
     def plan!(checkout:, repo:, type:, types:, settings:, trust_refusal:)
       own = busyyaks!(checkout, types: types, settings: settings)
-      status, theirs = project_layer(repo, types: types, settings: settings, trust_refusal: trust_refusal,
-                                           taken: own.flat_map { |l| l.skills.map(&:name) })
+      status, theirs = project_layer(repo, types: types, settings: settings, trust_refusal: trust_refusal)
       [check_selection!(select(own + theirs, type), settings), status]
     end
 
-    def project_layer(repo, types:, settings:, trust_refusal:, taken:)
+    # Why a repo's own .busyyaks/skills are left out of a launch (nil = they load): the deployment's setting, then the
+    # folder-trust decision
+    def left_reason(settings, trust_refusal)
+      return "config/busyyaks.yml skills.project is deny" if settings.project == "deny"
+
+      trust_refusal
+    end
+
+    # What a launch in `repo` does with the repo's own layer, without starting anything (bin/launcher's `project_skills`
+    # op, for the project page's Settings tab) → {status, budget, replace_budget, layers}: status = "loaded" · "none" ·
+    # "left: <why>"; budget / replace_budget = {type => the bytes its project agents/<type>.md may hold} when it adds /
+    # replaces (project_budget); layers = {type => composition} — what a launch of the type stages, each earlier
+    # layer's file marked when the override rule replaced it (`composition`: the launch's own select). Every type's
+    # launch is planned: an invalid layer, or a type whose entry skill would be over max_start_bytes, raises Invalid —
+    # as that launch would.
+    def project_status(checkout:, repo:, types:, settings:, trust_refusal:)
+      own = busyyaks!(checkout, types: types, settings: settings)
+      status, theirs = project_layer(repo, types: types, settings: settings, trust_refusal: trust_refusal)
+      layers = own + theirs
+      types.each { |t| check_selection!(select(layers, t), settings) }
+      { status: status, budget: budget(own, types, settings), replace_budget: replace_budget(own, types, settings),
+        layers: types.to_h { |t| [t, composition(layers, t)] }, }
+    end
+
+    # What a launch of `type` stages from `layers`, in launch order, with what the override rule left out — the
+    # project tab's per-type view: {start: [{path, source, kind (core · core_ref · agent), mode, replaced_by}],
+    # on_demand: [{name, source, dir, replaces, replaced_by}]} — replaced_by = the source that replaced it (it is NOT
+    # staged), nil = staged; replaces = the source it stands in for. From select (one definition of the rule).
+    def composition(layers, type)
+      sel = select(layers, type)
+      by = sel.replaced.to_h { |r| [[r[:kind], r[:path]], r[:by]] }
+      core = sel.core
+      core_files = (["SKILL.md"] + (core.files.keys - ["SKILL.md"]).sort).map do |f|
+        { path: File.join(core.dir, f), source: core.source, kind: f == "SKILL.md" ? "core" : "core_ref", mode: nil,
+          replaced_by: nil, }
+      end
+      parts = layers.filter_map { |l| l.agents[type] }.map do |p|
+        { path: p.path, source: p.source, kind: "agent", mode: p.mode, replaced_by: by[["agent", p.path]] }
+      end
+      kept = sel.skills.to_h { |s| [s.dir, s] }
+      skills = layers.flat_map(&:skills).map do |s|
+        { name: s.name, source: s.source, dir: s.dir, replaces: kept[s.dir]&.replaces,
+          replaced_by: by[["skill", s.dir]], }
+      end
+      { start: core_files + parts, on_demand: skills }
+    end
+
+    # {type => bytes}: what a project's agents/<type>.md may hold so a launch of the type still starts — the entry
+    # skill's limit (max_start_bytes) less busyyaks's own share of it (core + its layers' agents/<type>.md), never
+    # more than one file's own limit (max_bytes), never below 0.
+    def project_budget(checkout:, types:, settings:)
+      budget(busyyaks!(checkout, types: types, settings: settings), types, settings)
+    end
+
+    # {type => bytes}: the same for a project file with `mode: replace` — only core stays before it
+    def replace_budget(own, types, settings)
+      core = own.first.core.body.bytesize
+      types.to_h { |t| [t, (settings.max_start_bytes - core).clamp(0, settings.max_bytes)] }
+    end
+
+    def budget(own, types, settings)
+      types.to_h do |t|
+        sel = select(own, t)
+        used = sel.core.body.bytesize + sel.parts.sum { |p| p.body.bytesize }
+        [t, (settings.max_start_bytes - used).clamp(0, settings.max_bytes)]
+      end
+    end
+
+    def project_layer(repo, types:, settings:, trust_refusal:)
       dir = File.join(repo, PROJECT_DIR, "skills")
       old = File.join(repo, PROJECT_DIR, OLD_MANIFEST)
       return ["left: #{old} is the old manifest layout: #{MOVE}", []] if File.exist?(old) || File.symlink?(old)
       return ["none", []] unless File.exist?(dir) || File.symlink?(dir) || File.symlink?(File.join(repo, PROJECT_DIR))
-      return ["left: config/busyyaks.yml skills.project is deny", []] if settings.project == "deny"
-      return ["left: #{trust_refusal}", []] if trust_refusal
 
-      layer = project(repo, types: types, settings: settings, taken: taken)
+      left = left_reason(settings, trust_refusal)
+      return ["left: #{left}", []] if left
+
+      layer = project(repo, types: types, settings: settings)
       layer.nil? ? ["none", []] : ["loaded", [layer]]
     end
 
-    # What a launch of `type` gets from the layers, in layer order
+    # What a launch of `type` gets from the layers, in layer order — THE OVERRIDE RULE (the module's header): an agents
+    # file with mode replace drops the earlier layers' agents/<type>.md, one with mode add follows them; an on-demand
+    # skill of a name an earlier layer has stands in for that one, in its place in the list. Nothing is changed in the
+    # layers (the parts and skills returned are copies carrying `replaces`).
     def select(layers, type)
-      core = layers.first.core
-      Selection.new(type: type, core: core, parts: layers.filter_map { |l| l.agents[type] },
-                    skills: layers.flat_map(&:skills))
+      parts = []
+      skills = {}
+      replaced = []
+      layers.each do |l|
+        p = l.agents[type]
+        if p&.mode == "replace"
+          replaced.concat(parts.map { |x| { kind: "agent", path: x.path, source: x.source, by: p.source } })
+          parts = [p.dup.tap { _1.replaces = parts.map(&:source).uniq }]
+        elsif p
+          parts << p
+        end
+        l.skills.each do |s|
+          prev = skills[s.name]
+          replaced << { kind: "skill", path: prev.dir, source: prev.source, by: s.source } if prev
+          skills[s.name] = prev ? s.dup.tap { _1.replaces = prev.source } : s
+        end
+      end
+      Selection.new(type: type, core: layers.first.core, parts: parts, skills: skills.values, replaced: replaced)
+    end
+
+    # The files one launch of `type` stages, in the order the entry skill holds them (entry_body): core's SKILL.md,
+    # core's reference files, each layer's agents/<type>.md, then every on-demand skill's files. → [{path (relative to
+    # its layer's root), source, kind (core · core_ref · agent · skill · skill_ref), load (start · on_demand), skill?,
+    # description?, type?, text (the file's bytes)}]
+    def staged_files(selection)
+      core = selection.core
+      skill_files(core, "core", "start") +
+        selection.parts.map do |p|
+          { path: p.path, source: p.source, kind: "agent", load: "start", type: p.type, text: p.text }
+        end +
+        selection.skills.flat_map { |s| skill_files(s, "skill", "on_demand") }
+    end
+
+    def skill_files(skill, kind, load)
+      names = ["SKILL.md"] + (skill.files.keys - ["SKILL.md"]).sort
+      names.map do |f|
+        main = f == "SKILL.md"
+        { path: File.join(skill.dir, f), source: skill.source, kind: main ? kind : "#{kind}_ref", load: load,
+          skill: skill.name, description: main ? skill.description : nil, dispatch: main ? skill.dispatch : nil,
+          text: skill.files.fetch(f), }
+      end
+    end
+
+    # What every launch busyyaks starts gets from busyyaks's own layers (skills/busyyaks + skills.local_dir), per agent
+    # type — read and checked as a launch reads them (busyyaks!, select, check_selection!), nothing staged:
+    # → {files: [every file once, in the order of the first type that stages it: staged_files' entries + bytes],
+    #    types: {type => {start: [paths the entry skill holds, in order], on_demand: [skill names], start_bytes,
+    #    budget: what its project's agents/<type>.md may still hold}}, creatable: [agents/<type>.md paths no layer
+    #    has yet]}. An invalid layer, or a type over max_start_bytes, raises Invalid — as that launch would.
+    def global_view(checkout:, types:, settings:)
+      own = busyyaks!(checkout, types: types, settings: settings)
+      files = {}
+      view = types.to_h do |t|
+        sel = check_selection!(select(own, t), settings)
+        staged = staged_files(sel)
+        staged.each { |f| files[f[:path]] ||= f.except(:type).merge(bytes: f[:text].bytesize, replaced_by: nil) }
+        start = staged.select { |f| f[:load] == "start" }
+        [t, { start: start.map { |f| f[:path] }, on_demand: sel.skills.map(&:name),
+              start_bytes: sel.core.body.bytesize + sel.parts.sum { |p| p.body.bytesize }, },]
+      end
+      replaced_files(own, types).each { |f| files[f[:path]] ||= f }
+      budget(own, types, settings).each { |t, b| view[t][:budget] = b }
+      dirs = [OWN_DIR, settings.local_dir].compact
+      creatable = dirs.product(types).map { |d, t| File.join(d, AGENTS, "#{t}.md") } - files.keys
+      { files: files.values, types: view, creatable: creatable }
+    end
+
+    # The files of busyyaks's layers the override rule leaves out of every launch (a deployment skill of a busyyaks
+    # skill's name, a deployment agents file with mode: replace): still files of the checkout, still edited on the
+    # page — each with replaced_by = the source that stands in for it (composition, the launch's own select)
+    def replaced_files(own, types)
+      out = []
+      types.each do |t|
+        comp = composition(own, t)
+        comp[:start].select { |f| f[:replaced_by] }.each do |f|
+          part = own.filter_map { |l| l.agents[t] }.find { |p| p.path == f[:path] }
+          out << { path: part.path, source: part.source, kind: "agent", load: "start", skill: nil, description: nil,
+                   text: part.text, bytes: part.text.bytesize, replaced_by: f[:replaced_by], }
+        end
+        comp[:on_demand].select { |k| k[:replaced_by] }.each do |k|
+          skill = own.flat_map(&:skills).find { |x| x.dir == k[:dir] }
+          skill_files(skill, "skill", "on_demand").each do |f|
+            out << f.merge(bytes: f[:text].bytesize, replaced_by: k[:replaced_by])
+          end
+        end
+      end
+      out.uniq { |f| f[:path] }
+    end
+
+    # bin/launcher's skills_layers answer (Settings → Agent rules): global_view with each file's text as UTF-8 (one
+    # that is not: text nil + its error), where the writer reaches the checkout (checkout.mount, or nil + error: its
+    # saves go there) and the limits
+    def layers_answer(checkout:, types:, settings:, projects_root:, container_root:)
+      view = global_view(checkout: checkout, types: types, settings: settings)
+      files = view[:files].map do |f|
+        text = f[:text].dup.force_encoding(Encoding::UTF_8)
+        ok = text.valid_encoding?
+        f.merge(text: ok ? text : nil, error: ok ? nil : "#{f[:path]} is not UTF-8")
+      end
+      mount, why = checkout_mount(checkout, projects_root: projects_root, container_root: container_root)
+      { files: files, types: view[:types], creatable: view[:creatable],
+        checkout: { host: File.realpath(checkout), mount: mount, error: why },
+        limits: { max_bytes: settings.max_bytes, max_start_bytes: settings.max_start_bytes, project: settings.project,
+                  local_dir: settings.local_dir, }, }
+    end
+
+    # Where the writer service reaches this checkout (it mounts PROJECTS_ROOT read-write at PROJECTS_MOUNT): → [the
+    # container path, nil] or [nil, why it cannot] — never a guess
+    def checkout_mount(checkout, projects_root:, container_root:)
+      real = File.realpath(checkout)
+      top = File.realpath(projects_root)
+      return [File.join(container_root, real.delete_prefix(top)), nil] if real.start_with?("#{top}/")
+
+      [nil, "the busyyaks checkout #{real} is not under PROJECTS_ROOT #{top}: the writer service cannot write it — " \
+            "edit the files in the checkout and commit them to its branch, or move the checkout under PROJECTS_ROOT",]
     end
 
     # The entry skill (core + the type's agent files) within max_start_bytes
@@ -305,11 +552,17 @@ end
       refs = selection.core.files.keys - ["SKILL.md"]
       out << "\n#{selection.core.body.strip}\n"
       out << "\nReference files beside this skill: #{refs.map { |f| "`#{f}`" }.join(', ')}.\n" if refs.any?
-      selection.parts.each { |p| out << "\n## Agent type #{t} (#{p.source})\n\n#{p.body.strip}\n" }
+      selection.parts.each do |p|
+        instead = p.replaces.to_a.any? ? ", replaces #{p.replaces.join(' + ')}" : ""
+        out << "\n## Agent type #{t} (#{p.source}#{instead})\n\n#{p.body.strip}\n"
+      end
       if selection.skills.any?
         out << "\n## Load when needed\n\n"
         out << "The text above names these skills by their short name; load each by the name given here.\n\n"
-        selection.skills.each { |s| out << "- `#{delivery.ref(s.name)}` (#{s.source}): #{s.description}\n" }
+        selection.skills.each do |s|
+          instead = s.replaces ? ", replaces #{s.replaces}'s" : ""
+          out << "- `#{delivery.ref(s.name)}` (#{s.source}#{instead}): #{s.description}\n"
+        end
       end
       out
     end
@@ -366,7 +619,8 @@ end
       def skill_dir(dest, name) = File.join(dest, "skills", name)
       def skill_name(name) = name
       def ref(name) = "#{BUSYYAKS}:#{name}"
-      def extra(dest) = ["--plugin-dir", dest]
+      # --mcp-config first: it takes several values, and --plugin-dir ends them before the prompt (measured)
+      def extra(dest) = ["--mcp-config", BoardMcp.claude_path(dest), "--plugin-dir", dest]
       def prompt(rendered) = rendered ? "/#{ref(ENTRY)} #{rendered}" : "/#{ref(ENTRY)}"
     end
 

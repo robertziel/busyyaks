@@ -127,6 +127,8 @@ module Busyyaks
     REPORT_TOOLS = %w[whats_new list_projects project daily_facts report_components check_report post_report list_reports
                       get_report list_notes github_network daily_report_config
                       kanban_board kanban_card kanban_workflow].freeze
+    # the board token's instructions (a session busyyaks launched): its board workflow is the busyyaks skill
+    BOARD_NOTE = "The kanban_* tools serve this board session; its workflow is the busyyaks skill it was started with."
 
     # bin/daily-report's placeholders ("<series> FAILED", "<series> NOT RUN — …"): never a previous report.
     NOT_A_REPORT = /\b(FAILED|NOT RUN|NOT CONFIGURED)\b/
@@ -139,20 +141,24 @@ module Busyyaks
     # save applies at once): last_scan is `stale` when it finished longer ago
     # than 3 × the interval + min(its duration, one interval), more than 60 s in the future, or a row with no start /
     # a negative duration (ScanFreshness)
-    def initialize(token:, report_token:, scan_interval:, store: nil, config: nil, clock: -> {
+    def initialize(token:, report_token:, board_token:, scan_interval:, store: nil, config: nil, clock: -> {
  Busyyaks::Clock.now }, sessions: nil)
-      { "MCP_TOKEN" => token, "MCP_REPORT_TOKEN" => report_token }.each do |key, value|
+      tokens = { "MCP_TOKEN" => token, "MCP_REPORT_TOKEN" => report_token, "MCP_BOARD_TOKEN" => board_token }
+      tokens.each do |key, value|
         next if value.to_s.length >= MIN_TOKEN_CHARS
 
         raise KeyError, "#{key} is #{value.to_s.length} characters; at least #{MIN_TOKEN_CHARS}: " \
                         "empty it in .env and run bin/setup (it writes a new one)"
       end
       raise KeyError, "MCP_REPORT_TOKEN must differ from MCP_TOKEN" if report_token == token
+      raise KeyError, "MCP_BOARD_TOKEN must differ from MCP_TOKEN and MCP_REPORT_TOKEN" \
+        if [token, report_token].include?(board_token)
 
       raise ArgumentError, "scan_interval must be a callable returning seconds" unless scan_interval.respond_to?(:call)
 
       @token = token
       @report_token = report_token
+      @board_token = board_token
       @scan_interval = scan_interval
       @store = store
       @config = config
@@ -179,8 +185,11 @@ module Busyyaks
       json(400, rpc_error(nil, -32_700, "parse error"))
     end
 
-    # scope: :full (MCP_TOKEN) or :report (MCP_REPORT_TOKEN: REPORT_TOOLS only)
-    def dispatch(msg, scope: :full)
+    # scope: :operator (MCP_TOKEN: no kanban_* tool), :board (MCP_BOARD_TOKEN: every tool) or :report
+    # (MCP_REPORT_TOKEN: REPORT_TOOLS only)
+    def dispatch(msg, scope:)
+      raise ArgumentError, "unknown scope #{scope.inspect}" unless SCOPES.include?(scope)
+
       id = msg["id"]
       case msg["method"]
       when "initialize"
@@ -197,6 +206,7 @@ module Busyyaks
           if scope == :report && !REPORT_TOOLS.include?(name)
             raise ToolError, "#{name} is not open to the daily report's token (MCP_REPORT_TOKEN: #{REPORT_TOOLS.join(', ')})"
           end
+          raise ToolError, "#{name}: no such tool" if scope == :operator && board_tool?(name)
 
           text = call_tool(name, args)
           result(id, content: [{ type: "text", text: text }], isError: false)
@@ -480,29 +490,47 @@ module Busyyaks
 
     def note_row(n) = { id: n[:id], project: n[:project_slug], at: iso(n[:created_at]), author: n[:author], body: n[:body] }
 
-    # the report token's client is told only about what it may call (the board's agent rules are not its business)
+    # The server's instructions reach EVERY session that has this MCP — a terminal `claude` the operator started by
+    # hand too. They never carry the board's agent rules (the engine's Tools#instructions): those reach only the
+    # sessions busyyaks launches, through the busyyaks skill (skills/busyyaks/core). The report token's client is
+    # told only about what it may call.
     def instructions(scope)
       head = "Busyyaks: the operator's projects, daily reports and notes. Start with whats_new."
-      return "#{head} This token reaches the daily report's tools only: #{REPORT_TOOLS.join(', ')}." if scope == :report
-
-      "#{head} #{kanban_tools.instructions}"
+      case scope
+      when :report then "#{head} This token reaches the daily report's tools only: #{REPORT_TOOLS.join(', ')}."
+      when :board then "#{head} #{BOARD_NOTE}"
+      when :operator then head
+      else raise ArgumentError, "unknown scope #{scope.inspect}"
+      end
     end
+
+    # The board's tools (every kanban_*): a session busyyaks launches gets them through its own per-launch MCP config
+    # (MCP_BOARD_TOKEN); the operator's terminal sessions (MCP_TOKEN) never see them — a session busyyaks did not
+    # start has no idea of the board (2026-11-24).
+    def board_tool?(name) = name.to_s.start_with?("kanban_")
+
+    SCOPES = %i[operator board report].freeze
 
     def tools_for(scope)
+      raise ArgumentError, "unknown scope #{scope.inspect}" unless SCOPES.include?(scope)
+
       all = TOOLS + kanban_tools.definitions
-      scope == :report ? all.select { |t| REPORT_TOOLS.include?(t[:name].to_s) } : all
+      case scope
+      when :report then all.select { |t| REPORT_TOOLS.include?(t[:name].to_s) }
+      when :operator then all.reject { |t| board_tool?(t[:name]) }
+      else all
+      end
     end
 
-    # the bearer's scope: :full, :report, or nil (refused). Both tokens are compared, always, in constant time.
+    # the bearer's scope: :operator, :board, :report, or nil (refused). Every token is compared, always, in constant
+    # time.
     def scope_of(header)
       given = header.delete_prefix("Bearer ")
       return nil if given.empty? || given == header
 
-      full = Rack::Utils.secure_compare(given, @token)
-      report = Rack::Utils.secure_compare(given, @report_token)
-      if full then :full
-      elsif report then :report
-      end
+      hits = { operator: @token, board: @board_token, report: @report_token }
+             .map { |scope, t| [scope, Rack::Utils.secure_compare(given, t)] }
+      hits.find { |_, hit| hit }&.first
     end
 
     # One line per refused request on the Rack error stream (puma → the container log): when, from where, why — never

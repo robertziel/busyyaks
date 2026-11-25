@@ -29,6 +29,9 @@ class MigrationsTest < Minitest::Test
   RUNTIME = 20_261_217_523_000 # the runtime settings (before writer_sync_seconds joined them)
   BEFORE_HOLD = 20_261_217_523_000 # the last migration before v15 (On hold)
   BEFORE_GREEN_CI = 20_261_221_574_000 # the last migration before v16 (green CI per gate)
+  BEFORE_BY_PREFIX = 20_261_221_584_000 # the last migration before the by_ session names
+  BEFORE_TEAM_LEAD = 20_261_224_600_000 # the last migration before the lead's label became its name
+  BEFORE_LAUNCH_BAR = 20_261_225_000_000 # the last migration before the Launch bar's keys (launchable, launch_label)
 
   # The scratch database is of the suite's adapter (DATABASE_ADAPTER): a SQLite file, or a PostgreSQL database
   # <POSTGRES_DB>_mig created on the same server (the CI role has CREATEDB) and dropped after each test.
@@ -278,6 +281,110 @@ class MigrationsTest < Minitest::Test
     assert_equal ["migration 20261207463000 rollback", old], [back[:author], JSON.parse(back[:doc])]
     migrate
     assert_equal "lead", JSON.parse(@db[:agent_settings].reverse(:id).first[:doc])["agent_types"][1]["under"]
+  end
+
+  # 2026-11-24, the operator: "add naming to the busyyaks sessions … start them with BY so we can easily identify and
+  # isolate them" — an existing install's newest agent settings revision gets `by_` on every session_name as a NEW
+  # revision (no hand import), a prefixed one is left alone, and the rollback brings the old one back
+  def test_existing_agent_settings_get_the_by_prefix_as_a_new_revision
+    migrate(BEFORE_BY_PREFIX)
+    fixture = YAML.safe_load_file(File.expand_path("../fixtures/agents.yml", __dir__))
+    old = fixture.merge("agent_types" => fixture["agent_types"].map do |t|
+      t.merge("session_name" => t["session_name"].delete_prefix("by_"))
+    end)
+    @db[:agent_settings].insert(doc: JSON.generate(old), author: "op", created_at: 1)
+    migrate
+    newest = @db[:agent_settings].reverse(:id).first
+    assert_equal "migration 20261224600000 (by_ session names)", newest[:author]
+    assert_equal %w[by_{slug}_teamlead by_{slug}_worker by_{slug}_team by_{slug}],
+                 JSON.parse(newest[:doc])["agent_types"].map { |t| t["session_name"] }
+    later = @db[:agent_settings].insert(doc: newest[:doc], author: "op", created_at: 3)
+    e = assert_raises(StandardError) { migrate(BEFORE_BY_PREFIX) }
+    assert_match(/rollback refused: 1 agent settings revision\(s\) saved after migration 20261224600000/, e.message)
+    @db[:agent_settings].where(id: later).delete
+    migrate(BEFORE_BY_PREFIX)
+    back = @db[:agent_settings].reverse(:id).first
+    assert_equal ["migration 20261224600000 (by_ session names) rollback", old], [back[:author], JSON.parse(back[:doc])]
+    # a newest revision that has the prefix already: up writes nothing
+    @db[:agent_settings].insert(doc: newest[:doc], author: "op", created_at: 4)
+    n = @db[:agent_settings].count
+    migrate
+    assert_equal n, @db[:agent_settings].count, "a prefixed revision is left alone: no new row"
+    assert_equal "op", @db[:agent_settings].reverse(:id).first[:author]
+  end
+
+  # 2026-11-25, the operator: "what's sub team? where is lead?" — the lead's rules were titled "Launch" (its label was
+  # the button text): an existing install's newest revision gets "Team lead" on every lead type still labelled
+  # "Launch", as a NEW revision (no hand import); a named one is left alone; the rollback brings the old one back
+  def test_the_lead_labelled_launch_is_renamed_team_lead_as_a_new_revision
+    migrate(BEFORE_TEAM_LEAD)
+    fixture = YAML.safe_load_file(File.expand_path("../fixtures/agents.yml", __dir__))
+    old = fixture.merge("agent_types" => fixture["agent_types"].map do |t|
+      t["key"] == "lead" ? t.merge("label" => "Launch") : t
+    end)
+    @db[:agent_settings].insert(doc: JSON.generate(old), author: "op", created_at: 1)
+    migrate
+    newest = @db[:agent_settings].reverse(:id).first
+    assert_equal "migration 20261225000000 (the lead's label: Team lead)", newest[:author]
+    assert_equal ["Team lead", "Worker", "Sub team", "Plain"], JSON.parse(newest[:doc])["agent_types"].map { _1["label"] }
+    assert_equal old.merge("agent_types" => fixture["agent_types"]), JSON.parse(newest[:doc]), "only the label changed"
+    migrate(BEFORE_TEAM_LEAD)
+    back = @db[:agent_settings].reverse(:id).first
+    assert_equal old, JSON.parse(back[:doc])
+    # a revision whose lead is named already: nothing written
+    @db[:agent_settings].insert(doc: JSON.generate(fixture), author: "op", created_at: 4)
+    n = @db[:agent_settings].count
+    migrate
+    assert_equal n, @db[:agent_settings].count
+  end
+
+  # only a LEAD (a type another runs under) labelled "Launch" is renamed: a worker or a plain session the operator
+  # chose to call "Launch" keeps its label — it is a name, not the old button text on the lead
+  def test_only_the_lead_labelled_launch_is_renamed
+    fixture = YAML.safe_load_file(File.expand_path("../fixtures/agents.yml", __dir__))
+    labelled = fixture.merge("agent_types" => fixture["agent_types"].map { |t| t.merge("label" => "Launch") })
+    named = Busyyaks::AgentSettings.lead_named(labelled)
+    assert_equal({ "lead" => "Team lead", "worker" => "Launch", "team" => "Launch", "plain" => "Launch" },
+                 named["agent_types"].to_h { [_1["key"], _1["label"]] })
+    assert_nil Busyyaks::AgentSettings.lead_named(fixture), "nothing to rename: no new revision"
+  end
+
+  # The Launch bar never offers Worker: an existing install's newest revision gets `launchable: false` on the worker
+  # and "Launch team lead" as the lead's button text, as a NEW revision; one that says either already is left alone;
+  # the rollback brings the old one back
+  def test_the_launch_bar_never_offers_worker_after_the_migration
+    migrate(BEFORE_LAUNCH_BAR)
+    fixture = YAML.safe_load_file(File.expand_path("../fixtures/agents.yml", __dir__))
+    old = fixture.merge("agent_types" => fixture["agent_types"].map { |t| t.except("launchable", "launch_label") })
+    @db[:agent_settings].insert(doc: JSON.generate(old), author: "op", created_at: 1)
+    migrate
+    newest = @db[:agent_settings].reverse(:id).first
+    assert_equal "migration 20261225100000 (Launch bar: worker spawn-only, Launch team lead)", newest[:author]
+    assert_equal fixture, JSON.parse(newest[:doc]), "only the two keys changed"
+    file = Busyyaks::AgentSettings.file_hash(File.expand_path("../fixtures/kanban.yml", __dir__))
+    cfg = Busyyaks::AgentSettings.host(file, fixture)
+    assert_equal [false, nil], [cfg.agent_type("worker").launchable, cfg.agent_type("worker").launch_label]
+    assert_equal "Launch team lead", cfg.agent_type("lead").launch_label
+    migrate(BEFORE_LAUNCH_BAR)
+    assert_equal old, JSON.parse(@db[:agent_settings].reverse(:id).first[:doc])
+    @db[:agent_settings].insert(doc: JSON.generate(fixture), author: "op", created_at: 4)
+    n = @db[:agent_settings].count
+    migrate
+    assert_equal n, @db[:agent_settings].count, "a revision that says the keys already: nothing written"
+    chosen = old.merge("agent_types" => old["agent_types"].map { |t| t["key"] == "worker" ? t.merge("launchable" => true) : t })
+    out = Busyyaks::AgentSettings.launch_bar(chosen)
+    assert(out["agent_types"].find { |t| t["key"] == "worker" }["launchable"], "the operator's own choice is kept")
+  end
+
+  # The migrator loads a migration file more than once (on boot: "already initialized constant LEAD_LABEL_AUTHOR"):
+  # no migration assigns a top-level constant — its values are local variables of the file
+  def test_no_migration_defines_a_top_level_constant
+    offenders = Dir[File.expand_path("../../config/db/migrate/*.rb", __dir__)].flat_map do |f|
+      File.readlines(f).each_with_index.filter_map do |l, i|
+        "#{File.basename(f)}:#{i + 1}: #{l.strip}" if l.match?(/\A[A-Z][A-Za-z0-9_]*\s*(\|\|)?=[^=~]/)
+      end
+    end
+    assert_empty offenders
   end
 
   # a board saved before v7 has NULL in the new column: it reads as its column types' defaults

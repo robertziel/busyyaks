@@ -80,7 +80,7 @@ export function Layout() {
             <NavLink to="/projects">Projects</NavLink>
             <NavLink to="/reports">Reports</NavLink>
             <NavLink to="/github">GitHub</NavLink>
-            <NavLink to="/session-boards">Sessions</NavLink>
+            <NavLink to="/session-boards">Session boards</NavLink>
           </nav>
           <Search />
           <span className="spacer" />

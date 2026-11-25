@@ -3,6 +3,7 @@
 require "json"
 require "socket"
 require_relative "../clock"
+require_relative "../launcher_rules"
 
 module Busyyaks
   module Collector
@@ -32,6 +33,10 @@ module Busyyaks
         targets = {}
         rows_by_socket.each do |label, rows|
           rows.each do |r|
+            # only the sessions busyyaks starts (`by_…`, LauncherRules::SESSION_PREFIX): a session the operator started by
+            # hand is never read — not its processes, its screen or its facts (2026-11-24)
+            next unless LauncherRules.busyyaks_session?(r["session_name"])
+
             found = agent(r["pane_pid"], procs, kids, by_comm, procfs) or next
             process, family = found
             key = [label, r["session_name"]]

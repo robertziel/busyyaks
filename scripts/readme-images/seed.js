@@ -3,16 +3,16 @@
 // `kanban_*` MCP tools (create, ask, block, checklist, attach, handoff). The board starts as every board does (lead
 // first): the operator Launches its lead, then its workers and a sub team under it — the real bin/launcher starts each
 // as the stand-in agent (scripts/readme-images/agent). Synthetic content only. Run by scripts/readme-images/build;
-// reads WEB, MCP and MCP_TOKEN from the env; prints one JSON line: the cards the images open and the sessions launched.
+// reads WEB, MCP and MCP_BOARD_TOKEN from the env; prints one JSON line: the cards the images open and the sessions launched.
 "use strict";
 const fs = require("fs");
 const zlib = require("zlib");
 
 const WEB = process.env.WEB;
 const MCP = process.env.MCP;
-const TOKEN = process.env.MCP_TOKEN;
+const TOKEN = process.env.MCP_BOARD_TOKEN;
 const SLUG = "acme/storefront";
-if (!WEB || !MCP || !TOKEN) throw new Error("seed: WEB, MCP and MCP_TOKEN are required");
+if (!WEB || !MCP || !TOKEN) throw new Error("seed: WEB, MCP and MCP_BOARD_TOKEN are required");
 
 let rpcId = 0;
 async function tool(name, args) {

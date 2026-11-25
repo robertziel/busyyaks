@@ -79,7 +79,7 @@ class TerminalApiTest < Minitest::Test
       loop do
         c = server.accept
         c.gets
-        c.puts JSON.generate(ok: true, sessions: names.map { |n| { name: n } })
+        c.puts JSON.generate(ok: true, sessions: names.map { |n| { name: n, launched: true } })
         c.close
       end
     rescue IOError, Errno::EBADF

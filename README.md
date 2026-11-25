@@ -177,13 +177,11 @@ an install link, and the `launch.commands` line to add for one installed but not
 cog (Setup), it lands on a summary of the current settings, each step editable.
 The scanner reads every repo under `PROJECTS_ROOT` (mounted read-only) within `scan_interval_seconds` (Settings → Runtime).
 
-Connect Claude Code to the MCP server:
-
-```bash
-vars=$(bin/env MCP_HOST MCP_HOST_PORT MCP_TOKEN) && eval "$vars"   # bin/env: the one .env reader (host Ruby 3.2+)
-claude mcp add --transport http --scope user busyyaks "http://$MCP_HOST:$MCP_HOST_PORT/mcp" \
-  --header "Authorization: Bearer $MCP_TOKEN"
-```
+Nothing goes into your Claude Code or Hermes settings. busyyaks hands each session it launches its own skill
+(`--plugin-dir`) and its own board MCP (`--mcp-config`, bearer `MCP_BOARD_TOKEN`), both in that session's private stage
+under `LAUNCHER_STATE_DIR`. A session you start yourself from a terminal gets none of it: no busyyaks skill, no board
+tool, no busyyaks text. Per-project agent rules live in that project's `.busyyaks/` directory (row Skills in
+CLAUDE.md / docs/DEPLOY.md § Skills).
 
 Install the agent-session collector, then the host launcher (both systemd `--user`; host Ruby 3.2+, `tmux`, `claude`).
 Fill `.env` group 3 (`LAUNCHER_STATE_DIR`, `CLAUDE_SESSIONS_DIR`) first. Agents' board tools check the agent's tmux
@@ -452,6 +450,45 @@ selected, Enter opens it) and every saved server, each with its state. The dashb
 | `bin/launcher` | Runs on the host, because the containers cannot reach the host's tmux. Starts sessions, lists them, captures and answers dialogs, clones repos. |
 | `bin/daily-report` | Runs on the host from a systemd timer. See [the daily report](#the-daily-report). |
 
+### Which sessions are busyyaks's
+
+```mermaid
+flowchart LR
+  subgraph web["Dashboard (web)"]
+    launch["Launch / lead's kanban_spawn"]
+    settings["Project → Settings<br/>rules per agent type"]
+  end
+  subgraph host["Host"]
+    launcher["bin/launcher"]
+    stage["Stage per session<br/>LAUNCHER_STATE_DIR/skills/by_…<br/>skill · mcp.json (MCP_BOARD_TOKEN) · launched.json"]
+    collector["bin/collector<br/>reads by_… panes only"]
+  end
+  subgraph repo["Each project"]
+    dotby[".busyyaks/<br/>skills/agents/&lt;type&gt;.md · workflow.yml"]
+  end
+  mcp["mcp<br/>MCP_BOARD_TOKEN: every tool<br/>MCP_TOKEN: no kanban_*"]
+  bysess["by_&lt;slug&gt;_teamlead / _worker / _team<br/>Claude Code · Hermes"]
+  hand["A session you start yourself<br/>(any directory, any harness)"]
+
+  launch --> launcher
+  settings -- writer service --> dotby
+  dotby -- read at launch --> stage
+  launcher -- writes --> stage
+  launcher -- "tmux new-session by_…" --> bysess
+  stage -- "--plugin-dir · --mcp-config · overlay" --> bysess
+  bysess -- board tools --> mcp
+  collector -. state .-> launcher
+  hand -. "nothing: no skill, no board MCP,<br/>never listed, typed into or stopped" .- launcher
+```
+
+| | a session busyyaks starts | a session you start yourself |
+|---|---|---|
+| name | `by_…` (agent settings `session_name`) | anything |
+| busyyaks skill + this project's `.busyyaks/` rules | yes, from its own stage | none |
+| board MCP (`kanban_*`) | yes, `MCP_BOARD_TOKEN` in its own stage | none (nothing busyyaks is registered user-wide) |
+| listed, pinged, answered, attached, stopped by busyyaks | yes, once its launch record proves it | never |
+| can become a board's lead | only through your Launch | never (`kanban_register` refuses a lead) |
+
 ### Stack
 
 Hanami 2.3 · Puma · Sequel on SQLite or PostgreSQL · `ruby:3.4.13-slim` · minitest · React 18 + TypeScript + Vite (built in the image's
@@ -544,9 +581,13 @@ The workflow busyyaks's agents follow (asking on a card, handing off on green CI
 your approval) is a set of skills in `skills/busyyaks/`, handed to each session busyyaks starts — per launch only (Claude Code
 `--plugin-dir`, hermes through one env-gated `external_dirs` line); your own `claude` / `hermes` sessions are not
 touched. `core/` (how to work the board through the MCP) goes to every session, `agents/<type>.md` to sessions of
-that agent type. A project adds its own in `.busyyaks/skills/agents/<type>.md` (and on-demand skills beside it),
-committed in that repo, loaded when the repo is trusted. Read at every launch: nothing to install after an update.
-Format and rules: `docs/DEPLOY.md` § Skills.
+that agent type; the subagent briefs a session dispatches (`reviewer`, `qa`, `critic`) are on-demand skills. A
+project adds its own in `.busyyaks/skills/agents/<type>.md` — or replaces the global one with `mode: replace` — and
+overrides an on-demand skill with one of the same name, committed in that repo, loaded when the repo is trusted
+(core stays busyyaks's: it carries the board's rules). Read at every launch: nothing to install, before or after an update.
+Edit every one of them in the web — **Settings → Agent rules** (busyyaks's own, for all projects) and a project's
+page → **Settings** (that project's) — then commit them like code. How a launch finds, stages, hands over and checks
+them: `docs/DEPLOY.md` § Skills → Agent rules: edit, commit, no install.
 
 ---
 
@@ -563,8 +604,9 @@ Format and rules: `docs/DEPLOY.md` § Skills.
 | `daily_report_config()` | how the daily report runs here (Settings → Daily report's current revision, validated; `configured: false` + why when none runs) |
 | `kanban_*` (29 tools) | the board: `kanban_board`, `kanban_card`, `kanban_create`, `kanban_claim`, `kanban_comment`, `kanban_ask`, `kanban_handoff`, `kanban_move`, labels, checklists, due dates, attachments, `kanban_workflow` |
 
-The server's `instructions` tell an agent how to use the board: claim before working, ask on the card instead of in
-chat, hand off with `kanban_handoff`, and never poll.
+The server's `instructions` carry no board workflow: they reach every session that has the MCP, a terminal one too.
+How an agent works the board (claim before working, ask on the card instead of in chat, hand off with `kanban_handoff`,
+never poll) comes only with the busyyaks skill, which busyyaks hands to the sessions it launches (`skills/busyyaks/`).
 
 ---
 
@@ -644,11 +686,11 @@ the two the dashboard's notice counts, how often it asks.
 
 ```console
 $ yaks update --check
-checkout       1f0c2ab on main (v1.0.0-beta.2)
-newest tag     v1.0.0 9e41d07 · available, 12 commits
+checkout       1f0c2ab on main (v0.1.0)
+newest tag     v0.2.0 9e41d07 · available, 12 commits
 origin/main    main 4b77a10 · available, 19 commits
 update available (channel tags)
-$ yaks update            # → v1.0.0          yaks update --main → origin/main's head
+$ yaks update            # → v0.2.0          yaks update --main → origin/main's head
 ```
 
 | step | what |
@@ -669,7 +711,7 @@ holds the lock) is shown as interrupted. An update runs the remote's code: trust
 **Settings → Updates** (`/settings/updates`): the same check (the launcher's, re-asked past `check_minutes`), the
 newest tag and the branch head with an **Update to …** button each (off, with the reason, when not allowed), and the
 running / last update step by step — the page keeps polling while the web restarts. The settings cog carries a dot
-and the Updates link the notice ("v1.0.0 available", "main +3") while the channel's target is a fast-forward away.
+and the Updates link the notice ("v0.2.0 available", "main +3") while the channel's target is a fast-forward away.
 
 ## Running in production
 

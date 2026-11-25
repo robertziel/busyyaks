@@ -64,6 +64,10 @@ class ComposeTest < Minitest::Test
     assert_equal ["bin/writer"], w.fetch("command")
     refute w.fetch("environment").key?("LAUNCHER_SOCKET")
     refute_includes w.fetch("volumes"), "${PROJECTS_ROOT:?}:${PROJECTS_MOUNT:?}:ro"
+    # Settings → Agent rules: which scanned repo is this checkout — its skills/ read-only, the writer's only extra mount
+    assert_includes w.fetch("volumes"), "./skills:/busyyaks/skills:ro"
+    assert_includes File.read(File.expand_path("../../bin/writer", __dir__)), 'own_skills: "/busyyaks/skills"'
+    live.except("writer").each { |name, s| refute_includes Array(s["volumes"]), "./skills:/busyyaks/skills:ro", name }
     assert_equal "service_healthy", w.dig("depends_on", "web", "condition")   # web migrates first: workflow_files exists
     env = COMPOSE.dig("x-app", "environment")
     assert_equal "/data/run/writer.sock", env.fetch("WRITER_SOCKET")

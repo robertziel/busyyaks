@@ -1,14 +1,7 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
-require_relative "../support/wait"
-require "tmpdir"
-require "fileutils"
-require "open3"
-require "socket"
-require "json"
-require "etc"
-require "yaml"
+require_relative "../support/collector_sandbox"
 
 # The contract (card #479): bin/collector writes the snapshot and serves the read socket; bin/launcher — the real one,
 # unchanged — reads them. Both run as processes in a sandbox checkout, on the REAL /proc (the agent is a copy of bash
@@ -18,121 +11,10 @@ require "yaml"
 #   - `notify`: the launcher's ping reaches the pane as ONE bracketed paste of the text through stdin, then Enter;
 #   - `agent_tasks`: refused with the collector's reason.
 class CollectorContractTest < Minitest::Test
-  ROOT = File.expand_path("../..", __dir__)
-  BOOT_SECONDS = 60
-  COPY = %w[
-    bin/launcher bin/collector lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml config/harnesses.yml
-  ].freeze
-  INVOCATIONS = YAML.safe_load_file(File.expand_path("../fixtures/busyyaks.yml", __dir__)).dig("launch", "commands")
+  include CollectorSandbox
 
-  def setup
-    @base = File.realpath(Dir.mktmpdir("collector-contract", Etc.getpwuid(Process.uid).dir))
-    @co = File.join(@base, "checkout")
-    @bin = File.join(@base, "bin")
-    @coll = File.join(@base, "collector")
-    tmux_dir = File.join(@base, "tmuxtmp", "tmux-#{Process.uid}")
-    FileUtils.mkdir_p([File.join(@base, "projects/app"), @bin, File.join(@co, "config"), File.join(@base, "sessions")])
-    FileUtils.mkdir_p(tmux_dir, mode: 0o700)
-    COPY.each do |f|
-      FileUtils.mkdir_p(File.dirname(File.join(@co, f)))
-      FileUtils.cp_r(File.join(ROOT, f), File.join(@co, f))
-    end
-    FileUtils.cp(File.join(ROOT, "test/fixtures/kanban.yml"), File.join(@co, "config/kanban.yml"))
-    File.write(File.join(@co, "config/busyyaks.yml"), YAML.dump(
-      "roots" => [{ "path" => "/projects", "prefix" => "" }], "search_depth" => 2,
-      "owner_remotes" => ["github.com/you/"], "author_emails" => ["you@example.com"], "window_days" => 7,
-      "reap_protect" => [], "auth" => { "provider" => "none" },
-      "agents" => { "collector" => { "snapshot" => File.join(@coll, "sessions.json"),
-                                     "read_socket" => File.join(@coll, "read.sock"), "tmux_timeout_seconds" => 2,
-                                     "answer_timeout_seconds" => 9, } },
-      "dictation" => "none", "terminal" => { "public_host" => "deny", "max_open" => 4 },
-      "ci" => { "max_pending_minutes" => 60, "required" => { "o/r" => ["jenkins/ci"] } },
-      "skills" => { "max_bytes" => 65_536, "max_start_bytes" => 32_768, "project" => "allow", "local_dir" => nil },
-      "updates" => { "remote" => "origin", "branch" => "main", "tags" => "v*", "channel" => "tags", "check_minutes" => 60 },
-      "launch" => { "trusted_paths" => [], "commands" => INVOCATIONS, "start_seconds" => 30, "scopes" => nil }
-    ))
-    File.write(File.join(@co, ".env"), <<~ENV)
-      PROJECTS_ROOT=#{File.join(@base, 'projects')}
-      PROJECTS_MOUNT=/projects
-      LAUNCHER_RUN_DIR=#{File.join(@base, 'run')}
-      LAUNCHER_STATE_DIR=#{File.join(@base, 'state')}
-      CLAUDE_SESSIONS_DIR=#{File.join(@base, 'sessions')}
-      CLAUDE_SESSION_URL=https://claude.example/{id}
-    ENV
-    # the agent: a copy of bash named claude, its cwd in the project
-    FileUtils.cp(Open3.capture2("sh", "-c", "command -v bash").first.strip, File.join(@bin, "claude"))
-    @agent = Process.spawn(File.join(@bin, "claude"), "-c", "sleep 300; :", %i[out err] => File::NULL, pgroup: true,
-                                                                             chdir: File.join(@base, "projects/app"))
-    # a Hermes pane: a copy of bash named hermes whose argv carries the launcher's bootstrap
-    FileUtils.cp(File.join(@bin, "claude"), File.join(@bin, "hermes"))
-    @hermes = Process.spawn(File.join(@bin, "hermes"), "-c", "sleep 300; : hermes_bootstrap", %i[out err] => File::NULL,
-                            pgroup: true, chdir: File.join(@base, "projects/app"))
-    ticks = File.read("/proc/#{@agent}/stat").then { |s| s[(s.rindex(")") + 2)..].split[19] }
-    File.write(File.join(@base, "sessions/#{@agent}.json"), JSON.generate(
-      "pid" => @agent, "procStart" => ticks, "sessionId" => "24ec2128-9e6a-4d9d-b0b1-3a3e7f2744a4", "status" => "idle",
-      "name" => "app-7", "statusUpdatedAt" => 1_700_000_000_000
-    ))
-    # this uid's tmux server, as the collector finds it: a socket in $TMUX_TMPDIR/tmux-<uid>
-    @tmux_server = UNIXServer.new(File.join(tmux_dir, "default"))
-    b = @base
-    stub("tmux", <<~SH)
-      echo "$*" >> #{b}/tmux.log
-      for a; do case "$a" in -S) ;; *) [ -n "$cmd" ] || case "$a" in /*|-*) ;; *) cmd=$a ;; esac ;; esac; done
-      case "$cmd" in
-        list-panes) [ -f #{b}/fail-list ] && { echo "server exited unexpectedly" >&2; exit 1; }
-                    echo "#{@agent} %7 0 0 0 1700000000 1700000100 1700000200 1 app_lead"
-                    echo "#{@hermes} %8 0 0 0 1700000000 1700000100 1700000300 1 desk"; exit 0 ;;
-        capture-pane) [ "$1" = -S ] && [ -f #{b}/hang-capture ] && exec sleep 3001; printf '❯ \\n'; exit 0 ;;
-        display-message) echo "✳ app-7"; exit 0 ;;
-        load-buffer) cat > #{b}/pasted; echo "load $*" >> #{b}/inputs; exit 0 ;;
-        paste-buffer) [ -f #{b}/hang-paste ] && exec sleep 3001; echo "$cmd $*" >> #{b}/inputs; exit 0 ;;
-        send-keys) echo "$cmd $*" >> #{b}/inputs; exit 0 ;;
-      esac
-      exit 1
-    SH
-    @env = { "PATH" => "#{@bin}:#{ENV.fetch('PATH')}", "TMUX_TMPDIR" => File.join(@base, "tmuxtmp") }
-    @collector = spawn_up("bin/collector", "collector.log", File.join(@coll, "read.sock"))
-    @launcher = spawn_up("bin/launcher", "launcher.log", File.join(@base, "run/launcher.sock"))
-  end
-
-  def teardown
-    [@launcher, @collector].compact.each do |p|
-      Process.kill("TERM", p)
-      Process.wait(p)
-    rescue Errno::ESRCH, Errno::ECHILD
-      nil
-    end
-    [@agent, @hermes].each do |p|
-      Process.kill("TERM", -p)
-      Process.wait(p)
-    rescue Errno::ESRCH, Errno::ECHILD
-      nil
-    end
-    @tmux_server&.close
-    FileUtils.rm_rf(@base)
-  end
-
-  def stub(name, body)
-    File.write(File.join(@bin, name), "#!/bin/sh\ncmd=\n#{body}")
-    File.chmod(0o755, File.join(@bin, name))
-  end
-
-  def spawn_up(prog, log, sock)
-    path = File.join(@base, log)
-    pid = Process.spawn(@env, RbConfig.ruby, File.join(@co, prog), %i[out err] => [path, "w"])
-    Wait.for(-> { "#{prog}'s socket: #{File.read(path)}" }, seconds: BOOT_SECONDS, every: 0.1) do
-      flunk "#{prog} exited: #{File.read(path)}" if Process.waitpid(pid, Process::WNOHANG)
-      File.socket?(sock) && (UNIXSocket.open(sock) { true } rescue false)
-    end
-    pid
-  end
-
-  def launcher(req)
-    UNIXSocket.open(File.join(@base, "run/launcher.sock")) do |s|
-      s.puts(JSON.generate(req))
-      JSON.parse(s.gets)
-    end
-  end
+  def setup = sandbox_up!
+  def teardown = sandbox_down!
 
   def test_the_launcher_reads_what_the_collector_writes
     assert_equal 0o700, File.stat(@coll).mode & 0o777
@@ -141,27 +23,89 @@ class CollectorContractTest < Minitest::Test
     r = launcher("op" => "agents")
     assert_equal [true, 5, nil], r.values_at("ok", "interval_s", "collector_error"), r.inspect
     s = r["sessions"].first
-    assert_equal ["app_lead", "default", 1], s.values_at("name", "socket", "windows"), s.inspect
+    assert_equal ["by_app_lead", "default", 1], s.values_at("name", "socket", "windows"), s.inspect
     pane = s["panes"].first
     assert_equal ["0.0", "claude", "Claude", "idle", "app-7", 1_700_000_000.0, "/projects/app"],
                  pane.values_at("target", "engine", "engine_label", "status", "title", "status_at", "project_path")
     assert_equal "idle", pane.dig("screen", "state"), pane["screen"].inspect
     assert_equal "busyyaks's collector does not count subagents", pane.dig("unknown", "subagents_running")
-    desk = r["sessions"].find { |x| x["name"] == "desk" }["panes"].first
+    desk = r["sessions"].find { |x| x["name"] == "by_desk" }["panes"].first
     assert_equal ["hermes", "Hermes", nil], desk.values_at("engine", "engine_label", "status")
     refute desk["screen"].key?("error"), desk["screen"].inspect
   end
 
-  # Hermes started by hand: listed, its state off its screen, nothing typed into it (no launcher record of queue mode)
+  # the operator, 2026-11-24: "It must not appear in working agents if it's not run by busyyaks" and "busyyaks should
+  # not be related to a session started from the terminal in any way" — a claude started by hand is never read by the
+  # collector (not its process, its screen or its facts), never an agent, never typed into
+  def test_a_session_started_from_the_terminal_is_never_read_listed_or_typed_into
+    assert_equal %w[by_app_lead by_desk], launcher("op" => "agents")["sessions"].map { |x| x["name"] }.sort
+    snap = JSON.parse(File.read(File.join(@coll, "sessions.json")))
+    assert_equal %w[by_app_lead by_desk], snap["sessions"].map { |x| x["name"] }.sort, "the collector never reads it"
+    r = launcher("op" => "notify", "session" => "hand", "socket" => "default", "text" => "hello")
+    assert_equal [false, true], r.values_at("ok", "unsupported"), r.inspect
+    assert_match(/not a session busyyaks started/, r["error"])
+    refute File.exist?(File.join(@base, "inputs")), "no tmux input"
+    # the sessions op itself never names it: a hand-run session never leaves this host
+    refute_includes launcher("op" => "sessions")["sessions"].map { |x| x["name"] }, "hand"
+  end
+
+  # a session started by hand that is NAMED like busyyaks's (`by_…`) but was not launched by it: no record of its pane →
+  # still never an agent, never typed into
+  def test_a_by_named_session_busyyaks_did_not_launch_is_never_touched
+    FileUtils.rm_rf(File.join(@base, "state/skills/by_desk"))
+    assert_equal ["by_app_lead"], launcher("op" => "agents")["sessions"].map { |x| x["name"] }
+    r = launcher("op" => "notify", "session" => "by_desk", "socket" => "default", "text" => "hello")
+    assert_equal [false, true], r.values_at("ok", "unsupported"), r.inspect
+    assert_match(/not a session busyyaks started/, r["error"])
+    # and Stop never kills it: its name alone is no proof
+    r = launcher("op" => "stop", "path" => "/projects/app", "sessions" => %w[by_desk])
+    assert_equal [{ "name" => "by_desk", "stopped" => false, "reason" => "not started by busyyaks" }], r["results"]
+    refute_match(/kill-session/, File.read(File.join(@base, "tmux.log")))
+  end
+
+  # The operator: busyyaks "should not be related in any way" to a session started from the terminal — every op that
+  # acts on a named session refuses one busyyaks did not start (no stop, no dialog read, no key press, no git read, no
+  # subagent read), and changes nothing
+  def test_no_op_acts_on_a_session_busyyaks_did_not_start
+    refusals = {
+      "dialog" => { "op" => "dialog", "session" => "hand" },
+      "answer" => { "op" => "answer", "session" => "hand", "key" => "1" },
+      "git" => { "op" => "git", "session" => "hand" },
+      "agent_tasks" => { "op" => "agent_tasks", "session" => "hand", "socket" => "default" },
+    }
+    refusals.each do |op, req|
+      r = launcher(req)
+      refute r["ok"], "#{op}: #{r.inspect}"
+      assert_match(/not a session busyyaks started/, r["error"], op)
+    end
+    r = launcher("op" => "stop", "path" => "/projects/app", "sessions" => %w[hand nobody])
+    assert_equal [{ "name" => "hand", "stopped" => false, "reason" => "not started by busyyaks" },
+                  { "name" => "nobody", "stopped" => false, "reason" => "not running" },], r["results"],
+                 "a hand-run session is said as such (never \"not running\"), and never stopped"
+    refute File.exist?(File.join(@base, "inputs")), "no key was pressed"
+    refute_match(/send-keys|kill-session/, File.read(File.join(@base, "tmux.log")))
+  end
+
+  # a `by_` session with a stage whose record names ANOTHER process (the name reused after busyyaks's own session ended,
+  # by a session started by hand): not busyyaks's — never listed, never typed into
+  def test_a_record_of_another_process_is_no_proof
+    rec = File.join(@base, "state/skills/by_desk/launched.json")
+    File.write(rec, JSON.generate(JSON.parse(File.read(rec)).merge("start_ticks" => 1)))
+    assert_equal ["by_app_lead"], launcher("op" => "agents")["sessions"].map { |x| x["name"] }
+    r = launcher("op" => "notify", "session" => "by_desk", "socket" => "default", "text" => "hello")
+    assert_equal [false, true], r.values_at("ok", "unsupported"), r.inspect
+  end
+
+  # Hermes busyyaks launched but not in queue mode (no hermes-board record): nothing typed into it
   def test_nothing_is_typed_into_hermes
-    r = launcher("op" => "notify", "session" => "desk", "socket" => "default", "text" => "hello")
+    r = launcher("op" => "notify", "session" => "by_desk", "socket" => "default", "text" => "hello")
     assert_equal [false, true, "cannot type into hermes (family hermes: not launched by busyyaks in queue mode)"],
 r.values_at("ok", "unsupported", "error")
     refute File.exist?(File.join(@base, "inputs")), "no tmux input"
   end
 
   def test_a_ping_is_pasted_through_the_collector
-    r = launcher("op" => "notify", "session" => "app_lead", "socket" => "default", "text" => "card #5: $(id)\nsecond line")
+    r = launcher("op" => "notify", "session" => "by_app_lead", "socket" => "default", "text" => "card #5: $(id)\nsecond line")
     assert_equal({ "ok" => true }, r)
     assert_equal "card #5: $(id)\nsecond line", File.read(File.join(@base, "pasted"))
     inputs = File.readlines(File.join(@base, "inputs"), chomp: true)
@@ -169,7 +113,7 @@ r.values_at("ok", "unsupported", "error")
     assert_match(/\Aload -S \S+ load-buffer -b busyyaks-collector-\d+-\d+ -\z/, inputs[0])
     assert_match(/\Apaste-buffer -S \S+ paste-buffer -p -d -b busyyaks-collector-\S+ -t %7\z/, inputs[1])
     assert_match(/\Asend-keys -S \S+ send-keys -t %7 Enter\z/, inputs[2])
-    assert_match(/send \d+ chars → app_lead \(%7\)/, File.read(File.join(@base, "collector.log")))
+    assert_match(/send \d+ chars → by_app_lead \(%7\)/, File.read(File.join(@base, "collector.log")))
   end
 
   # review round 1: a hung tmux is killed at agents.collector.tmux_timeout_seconds and that request answers the error;
@@ -177,19 +121,19 @@ r.values_at("ok", "unsupported", "error")
   # launcher's own capture-pane does not)
   def test_a_hung_tmux_is_an_error_answer_never_a_hang
     FileUtils.touch(File.join(@base, "hang-capture"))
-    r = launcher("op" => "notify", "session" => "app_lead", "socket" => "default", "text" => "x")
+    r = launcher("op" => "notify", "session" => "by_app_lead", "socket" => "default", "text" => "x")
     assert_equal [false, true], r.values_at("ok", "retry"), r.inspect
     assert_match(/\Acannot read its screen: tmux did not answer within 2s \(agents.collector.tmux_timeout_seconds\): killed\z/,
                  r["error"])
     FileUtils.rm(File.join(@base, "hang-capture"))
     # a paste that hung and was killed may have typed: outcome unknown, ended (`unsupported`), never resent
     FileUtils.touch(File.join(@base, "hang-paste"))
-    r = launcher("op" => "notify", "session" => "app_lead", "socket" => "default", "text" => "x")
+    r = launcher("op" => "notify", "session" => "by_app_lead", "socket" => "default", "text" => "x")
     assert_equal [false, true, true], r.values_at("ok", "unsupported", "unconfirmed"), r.inspect
     assert_match(/\Aoutcome unknown, not resent \(it may have been typed\): the paste failed .*tmux did not answer within 2s/,
                  r["error"])
     FileUtils.rm(File.join(@base, "hang-paste"))
-    assert_equal({ "ok" => true }, launcher("op" => "notify", "session" => "app_lead", "socket" => "default", "text" => "y"))
+    assert_equal({ "ok" => true }, launcher("op" => "notify", "session" => "by_app_lead", "socket" => "default", "text" => "y"))
     # this collector's children only (the flake stage runs copies of this file side by side)
     hung = Dir.glob("/proc/[0-9]*").select do |d|
       stat = File.read("#{d}/stat")
@@ -208,7 +152,7 @@ r.values_at("ok", "unsupported", "error")
     Wait.for(-> { "every thread of the collector #{@collector} stopped" }, seconds: BOOT_SECONDS) do
       Dir.glob("/proc/#{@collector}/task/*/stat").all? { |f| File.read(f).then { |st| st[(st.rindex(")") + 2)] } == "T" }
     end
-    r = launcher("op" => "agent_tasks", "session" => "app_lead", "socket" => "default")
+    r = launcher("op" => "agent_tasks", "session" => "by_app_lead", "socket" => "default")
     sock = File.join(@coll, "read.sock")
     assert_equal [false, "agent-session collector #{sock} did not answer within 9s", 503], r.values_at("ok", "error", "status")
   ensure
@@ -240,15 +184,15 @@ File.read(log))
     rescue JSON::ParserError
       false
     end
-    r = launcher("op" => "notify", "session" => "app_lead", "socket" => "default", "text" => "x")
+    r = launcher("op" => "notify", "session" => "by_app_lead", "socket" => "default", "text" => "x")
     assert_equal [false, true, nil], r.values_at("ok", "retry", "gone"), r.inspect
-    assert_match(/\Asession app_lead not in the snapshot, which failed: tmux default: server exited unexpectedly\z/,
-                 r["error"])
+    # tmux unreadable: busyyaks cannot even tell the session is its own — retried, never "gone"
+    assert_match(/\Atmux unreadable: cannot tell whether by_app_lead is busyyaks's\z/, r["error"])
     refute File.exist?(File.join(@base, "inputs")), "nothing typed"
   end
 
   def test_agent_tasks_say_the_collector_reads_none
-    r = launcher("op" => "agent_tasks", "session" => "app_lead", "socket" => "default")
+    r = launcher("op" => "agent_tasks", "session" => "by_app_lead", "socket" => "default")
     assert_equal [false, "busyyaks's collector reads no subagents, workflows or background tasks", 404],
                  r.values_at("ok", "error", "status")
   end
@@ -258,6 +202,32 @@ File.read(log))
   def test_clear_idle_never_reads_unknown_subagents_as_none
     r = launcher("op" => "reap_preview")
     assert r["ok"], r.inspect
-    assert_equal [%w[app_lead idle]], r["candidates"].map { |c| c.values_at("name", "reason") }
+    assert_equal [%w[by_app_lead idle]], r["candidates"].map { |c| c.values_at("name", "reason") }
+  end
+
+  # U9, the operator: "a ping that arrives while a session is still starting is delivered later, never lost". The real
+  # bin/launcher, a launch held at `tmux new-session` (the test holds it, not the clock): a `notify` for that session
+  # answers retry "still starting" — the notifier keeps the ping — and types nothing; once the start has ended (here
+  # refused: the sandbox starts nothing), the same ping is `gone`, never `unsupported` (a session busyyaks did not start)
+  def test_a_ping_that_arrives_while_a_session_is_still_starting_is_retried_never_lost
+    FileUtils.touch(File.join(@base, "hold-start"))
+    start = Thread.new { plain_launch("by_app") }
+    Wait.for(-> { "the launch at tmux new-session: #{File.read(File.join(@base, 'launcher.log'))}" },
+             seconds: BOOT_SECONDS) do
+      flunk "the launch ended before its start: #{start.value.inspect}" unless start.alive?
+      File.exist?(File.join(@base, "starting"))
+    end
+    r = launcher("op" => "notify", "session" => "by_app", "socket" => "default", "text" => "assigned: card #5")
+    assert_equal [false, true, "session by_app is still starting"], r.values_at("ok", "retry", "error"), r.inspect
+    refute r.key?("gone") || r.key?("unsupported"), "never dropped while it starts"
+    refute File.exist?(File.join(@base, "inputs")), "nothing typed into a session that is starting"
+    assert start.alive?, "the launch is still in flight"
+    FileUtils.rm(File.join(@base, "hold-start"))
+    done = Wait.join(start, "the held launch's answer", seconds: BOOT_SECONDS).value
+    assert_equal [false, "RuntimeError: tmux failed: the sandbox starts no session"], done.values_at("ok", "error"),
+                 done.inspect
+    r = launcher("op" => "notify", "session" => "by_app", "socket" => "default", "text" => "assigned: card #5")
+    assert_equal [false, true, "session by_app is not running"], r.values_at("ok", "gone", "error"), r.inspect
+    refute File.exist?(File.join(@base, "inputs"))
   end
 end

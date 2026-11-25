@@ -1,5 +1,5 @@
 // The Launch bar: the vendored engine's LaunchBar (one split pill per agent type from config/kanban.yml — Launch ·
-// Sub team · Plain — with the type's launchers in its menu, and "running / cap") over busyyaks's routes. The types
+// Sub team — with the type's launchers in its menu, and "running / cap") over busyyaks's routes. The types
 // and the cap state come with the page (/api/projects, /api/today, /api/projects/:slug: `launches`), so a table of
 // thirty repos makes no extra request; per-project counts are read off the engine's session list. A launch posts
 // /api/launch {slug, type, launcher}; the engine registers the session (a lead adopts the board's ownerless cards),

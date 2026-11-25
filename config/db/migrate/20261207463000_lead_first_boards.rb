@@ -9,7 +9,9 @@ require_relative "../../../lib/busyyaks/clock"
 # the CHECK that a session under a lead has one — and the newest agent settings revision in today's shape
 # (Busyyaks::AgentSettings.lead_first: spawns_for / spawn_launcher / launcher_follows → `under` + the lead's `takes`),
 # written as a NEW revision (the old one stays as history). A revision already in the new shape is left alone.
-AUTHOR = "migration 20261207463000"
+# a local variable, never a top-level constant: the migrator loads a file more than once ("already initialized
+# constant" on boot)
+author = "migration 20261207463000"
 
 ROM::SQL.migration do
   up do
@@ -17,7 +19,7 @@ ROM::SQL.migration do
     row = self[:agent_settings].reverse(:id).first
     if row
       doc = Busyyaks::AgentSettings.lead_first(JSON.parse(row[:doc]))
-      self[:agent_settings].insert(doc: JSON.generate(doc), author: AUTHOR, created_at: Busyyaks::Clock.epoch) if doc
+      self[:agent_settings].insert(doc: JSON.generate(doc), author: author, created_at: Busyyaks::Clock.epoch) if doc
     end
   end
 
@@ -30,17 +32,17 @@ ROM::SQL.migration do
     open = self[:agent_sessions].where(ended_at: nil, needs_lead: 1).count
     raise "rollback refused: #{open} open agent session(s) run under a lead — end them first" if open.positive?
 
-    mine = self[:agent_settings].where(author: AUTHOR).reverse(:id).first
+    mine = self[:agent_settings].where(author: author).reverse(:id).first
     if mine
       later = self[:agent_settings].where(Sequel[:id] > mine[:id]).all
       shaped = later.select { |r| JSON.parse(r[:doc])["agent_types"].any? { |t| t.key?("under") || t.key?("standalone") } }
       if shaped.any?
         raise "rollback refused: agent settings revision(s) #{shaped.map { |r| r[:id] }.join(', ')} saved after " \
-              "#{AUTHOR} use `under` / `standalone`, which the pre-lead-first engine refuses — import a pre-463 " \
+              "#{author} use `under` / `standalone`, which the pre-lead-first engine refuses — import a pre-463 " \
               "revision (bin/agent-settings import) first"
       end
       before = self[:agent_settings].where(Sequel[:id] < mine[:id]).reverse(:id).first
-      self[:agent_settings].insert(doc: before[:doc], author: "#{AUTHOR} rollback", created_at: Busyyaks::Clock.epoch) \
+      self[:agent_settings].insert(doc: before[:doc], author: "#{author} rollback", created_at: Busyyaks::Clock.epoch) \
         if before && later.empty?
     end
     alter_table(:agent_sessions) do

@@ -10,12 +10,14 @@ class McpKanbanTest < Minitest::Test
   include Rack::Test::Methods
 
   TOKEN = "t" * 40
+  BOARD_TOKEN = "b" * 40
   REPORT_TOKEN = "r" * 40
   # live tmux sessions as the launcher's `sessions` op would list them; :down = launcher unreachable
   def live_sessions = (@live_sessions ||= %w[tl_g_r lead_1])
 
   def app
-    Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, scan_interval: -> { 60 }, store: store, config: nil,
+    Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, board_token: BOARD_TOKEN, scan_interval: -> {
+ 60 }, store: store, config: nil,
                             sessions: lambda {
       raise Busyyaks::LauncherClient::Unavailable, "launcher not reachable at /x.sock: Errno::ENOENT" if live_sessions == :down
 
@@ -31,7 +33,7 @@ class McpKanbanTest < Minitest::Test
   end
 
   def rpc(method, params = {})
-    header "Authorization", "Bearer #{TOKEN}"
+    header "Authorization", "Bearer #{BOARD_TOKEN}"
     post "/mcp", JSON.generate(jsonrpc: "2.0", id: 1, method: method, params: params), "CONTENT_TYPE" => "application/json"
     JSON.parse(last_response.body)
   end
@@ -319,32 +321,36 @@ err("kanban_move", id: c["id"], column: "qa", author: "lead"))
   end
 
   # ── the session rules through busyyaks's server: owned creation, kanban_register, the instructions ───────
-  def test_create_without_a_session_is_refused_and_register_adopts
+  def test_a_terminal_session_never_becomes_the_lead_only_busyyaks_launch_does
     assert_match(/owned by its session: pass tmux_session/,
                  err("kanban_create", project: "g/r", title: "orphan", author: "someone"))
     k = Busyyaks::Kanban.default
     a = k.create(slug: "g/r", title: "A", by: "op", column: "human_check")
-    # the lead runs two launchers: a hand-started session names the one it runs (nothing picks one)
-    assert_match(/agent type lead runs fullclaude, localclaude — name the launcher this session was started with/,
-                 err("kanban_register", project: "g/r", type: "lead", tmux_session: "tl_g_r", author: "x"))
-    reg = ok("kanban_register", project: "g/r", type: "lead", launcher: "fullclaude", tmux_session: "tl_g_r", author: "x")
-    assert_equal "fullclaude", reg["launcher"]
-    refute reg.key?("lead_key"), "no key in any answer (a lead by hand gets none)"
-    assert_nil Busyyaks::Kanban.default.open_session("tl_g_r")[:lead_key_digest]
-    assert_equal ["claude-tl_g_r", [a], nil, 1],
-                 [reg["agent"], reg["adopted"].map { |c| c["id"] }, reg["concurrency"]["max_sessions"],
-                  reg["concurrency"]["running"],]
+    # The operator (2026-11-24): "Only sessions started from busyyaks create leads, not a session started from the
+    # terminal." A session started by hand calls kanban_register as the lead — with or without naming its launcher —
+    # and is refused: nothing registered, no card adopted, the card still ownerless.
+    [{}, { launcher: "fullclaude" }].each do |extra|
+      assert_match(/a lead is started only by the operator's Launch, never registered by hand/,
+                   err("kanban_register", project: "g/r", type: "lead", tmux_session: "tl_g_r", author: "x", **extra))
+    end
+    assert_nil k.open_session("tl_g_r"), "the terminal session is not the board's lead"
+    assert_equal [nil, nil], k.card(a).values_at(:assignee, :owner_session), "it adopted nothing"
+    # only busyyaks's own start (the Launch bar → Api#launch → register_session) makes the lead; it adopts the work
+    reg = k.register_session(session: "tl_g_r", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
+    assert_equal ["claude-tl_g_r", [a]], reg.values_at(:agent, :adopted)
     assert_equal %w[claude-tl_g_r tl_g_r], k.card(a).values_at(:assignee, :owner_session)
     c = ok("kanban_create", project: "g/r", title: "D", author: "claude-tl_g_r")
     assert_equal "tl_g_r", c["owner_session"]
-    assert_match(%r{1/1 lead session already runs for g/r},
-                 err("kanban_register", project: "g/r", type: "lead", tmux_session: "lead_1", author: "x"))
 
+    # the instructions reach every session with this MCP, a terminal one too: no board workflow in them — it comes
+    # only with the busyyaks skill busyyaks launches its sessions with
     init = rpc("initialize", { "protocolVersion" => "2025-06-18" })["result"]["instructions"]
-    assert_match(/Start with whats_new\. Kanban: a board per project/, init)
-    assert_match(/kanban_ask\(id, question, author, options\) on that card.*needs_operator/, init)
-    # the Links rule reaches every agent through busyyaks's server (text pinned by the engine's tools_test)
-    assert init.end_with?(AgentsKanban::Tools::LINKS)
+    assert_equal "Busyyaks: the operator's projects, daily reports and notes. Start with whats_new. " \
+                 "#{Busyyaks::McpServer::BOARD_NOTE}", init
+    refute_includes init, AgentsKanban::Tools::LINKS
+    %w[kanban_spawn kanban_claim kanban_register kanban_handoff kanban_ask kanban_pr_assign].each do |imperative|
+      refute_includes init, imperative
+    end
   end
 
   # a session's own board over busyyaks's MCP server — opened by kanban_session_board, used only by that

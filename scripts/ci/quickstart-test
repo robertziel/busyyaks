@@ -40,6 +40,8 @@ clone() {
            config/busyyaks.example.yml config/kanban.example.yml; do
     cp -p "$src/$f" "$work/busyyaks/$f"
   done
+  # a dir of the clone compose binds (the writer's read-only ./skills: which scanned repo is the checkout)
+  cp -Rp "$src/skills" "$work/busyyaks/skills"
 }
 
 # the docker shim: `compose up` recorded, then compose's own config check; anything else is the real CLI
@@ -108,7 +110,7 @@ replay "$work/fill" || fail "the Quickstart block failed (its output is above)"
 [ "$(stat -c %a "$work/busyyaks/.env")" = 600 ] || fail ".env is not 0600"
 [ -d "$work/busyyaks/data" ] || fail "./data was not created"
 [ "$(stat -c %a "$work/state/run")" = 700 ] || fail "LAUNCHER_RUN_DIR was not created 0700"
-for k in SESSION_SECRET MCP_TOKEN MCP_REPORT_TOKEN; do
+for k in SESSION_SECRET MCP_TOKEN MCP_REPORT_TOKEN MCP_BOARD_TOKEN; do
   grep -Eq "^$k=[0-9a-f]{64,}$" "$work/busyyaks/.env" || fail "$k was not written"
 done
 echo "ok: $(cat "$work/up.log")"

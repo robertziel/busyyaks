@@ -1,6 +1,6 @@
 // The project page's sessions section as three status lanes: Needs you (a dialog on its screen, a
 // card question for the operator, a handed-over card to review) · Working · Quiet (finished, idle, unknown). Each tmux
-// session of the project lands in exactly one lane, from the Agents sidebar's own read (/api/agents) — a session that
+// session busyyaks runs for the project lands in exactly one lane, from the Agents sidebar's own read (/api/agents) — a session that
 // read does not list has no live state: Quiet, "no live state", never a guessed one. Pure: the view and its tests use it.
 import type { AgentCard, AgentSession, AgentsData, TmuxSession } from "../types";
 import type { RegisteredSession } from "../vendor/agents_kanban";
@@ -12,8 +12,9 @@ export type LaneSession = {
   short: string; // the name without the prefix every session of the project shares (the full name is in the menu)
   agent: AgentSession | null; // null = /api/agents does not list it, or was not read (liveRead false): no live state
   liveRead: boolean; // the Agents read answered — false: nobody read this session's live state (not "not listed")
-  // its open registration (type · launcher); null = started by hand; { unknown } = the registry was not read (why)
-  reg: RegisteredSession | RegistryUnknown | null;
+  // its open registration (type · launcher); { unknown } = the registry was not read (why). Never "started by hand":
+  // buildLanes keeps only the sessions busyyaks runs
+  reg: RegisteredSession | RegistryUnknown;
   lane: Lane;
 };
 
@@ -49,8 +50,11 @@ export function shortNames(names: string[]): Map<string, string> {
 
 const RANK: Record<string, number> = { blocked: 0, review: 1, working: 2, finished: 3, idle: 4, unknown: 5 };
 
-// registrations: the launcher's open registrations, or { unknown: why } when they were not read — then no session is
-// called "not registered" (that would state as fact what nobody read)
+// Only the sessions busyyaks runs: a tmux session with an open registration (the operator's Launch, the lead's spawn).
+// A session started by hand in the repo's directory (a terminal `claude`) is not busyyaks's: it gets no chip.
+// registrations: the launcher's open registrations, or { unknown: why } when they were not read — then the list stands
+// as the server sent it (already only the sessions the launcher proves it started), each saying why its registration
+// is unknown, never called "not registered" (that would state as fact what nobody read)
 export function buildLanes(
   sessions: TmuxSession[],
   agents: AgentSession[] | null, // null = the Agents read has not answered
@@ -59,15 +63,19 @@ export function buildLanes(
   const live = new Map((agents ?? []).map((a) => [a.name, a]));
   const unknown = Array.isArray(registrations) ? null : registrations;
   const reg = new Map((Array.isArray(registrations) ? registrations : []).map((r) => [r.session, r]));
-  const short = shortNames(sessions.map((s) => s.name));
-  const rows = sessions.map((s): LaneSession => {
+  const ours = sessions.flatMap((s) => {
+    const r = unknown ?? reg.get(s.name);
+    return r ? [{ s, r }] : [];
+  });
+  const short = shortNames(ours.map(({ s }) => s.name));
+  const rows = ours.map(({ s, r }): LaneSession => {
     const agent = live.get(s.name) ?? null;
     return {
       tmux: s,
       short: short.get(s.name) ?? s.name,
       agent,
       liveRead: agents !== null,
-      reg: unknown ?? reg.get(s.name) ?? null,
+      reg: r,
       lane: laneOf(agent),
     };
   });
@@ -79,14 +87,13 @@ export function buildLanes(
   return { you: pick("you"), working: pick("working"), quiet: pick("quiet") };
 }
 
-// the registration when it was read and found; null when started by hand or unknown
+// the registration when it was read; null when the registry was not read
 export function registered(reg: LaneSession["reg"]): RegisteredSession | null {
-  return reg !== null && !("unknown" in reg) ? reg : null;
+  return "unknown" in reg ? null : reg;
 }
 
-// the detail strip's registration words: " · type · launcher", " · not registered", or why it is unknown
+// the detail strip's registration words: " · type · launcher", or why it is unknown
 export function regText(reg: LaneSession["reg"]): string {
-  if (reg === null) return " · not registered";
   if ("unknown" in reg) return ` · registration unknown: ${reg.unknown}`;
   return ` · ${reg.type} · ${reg.launcher}`;
 }

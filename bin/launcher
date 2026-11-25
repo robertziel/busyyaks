@@ -10,6 +10,15 @@
 #   {"op":"sessions"}                                                      → {"ok":true,"sessions":[...]}
 #   {"op":"lead_key","session":"x_teamlead"}       → {"ok":true,"key":…}  only for a lead THIS launcher started, while
 #                                                    it runs (the engine's lead check for kanban_spawn)
+#   {"op":"project_skills","path":"/projects/x","settings":{...}} → {"ok":true,"project_skills":"loaded"|"none"|"left: <why>",
+#                                                    "budget","replace_budget":{type: bytes},"layers":{type:
+#                                                    composition},"checkout":bool}  what a launch there does
+#                                                    with the repo's .busyyaks/skills (every type planned, nothing started)
+#   {"op":"skills_layers","settings":{...}}      → {"ok":true,"files":[{path,source,kind,load,skill,description,bytes,
+#                                                    text}],"types":{type:{start,on_demand,start_bytes,budget}},
+#                                                    "creatable":[paths],"checkout":{host,mount,error},"limits":{...}}
+#                                                    busyyaks's own skills layers of THIS checkout, as a launch reads
+#                                                    them (Skills.global_view; Settings → Agent rules), nothing started
 #   {"op":"create","root":"/projects","name":"x","url":""}               → {"ok":true,"path":"/projects/x"}
 #   {"op":"jobs"}                                                          → clone jobs with status + log tail
 #   {"op":"agents"}                                → coding-agent sessions (agent_engines collector snapshot)
@@ -357,16 +366,23 @@ def sessions
   return [] unless ok # no server = no sessions
 
   links = claude_links
-  out.lines.map do |l|
+  staged = staged_names
+  # only the sessions named as busyyaks's (`by_…`): a session the operator started by hand never leaves this host
+  out.lines.filter_map do |l|
     name, path, created, attached = l.chomp.split("\t")
+    next unless Busyyaks::LauncherRules.busyyaks_session?(name)
+
     project_path = path == PROJECTS_ROOT || !path.start_with?("#{PROJECTS_ROOT}/") ? nil : path.sub(PROJECTS_ROOT, CONTAINER_ROOT)
-    { name: name, path: path, project_path: project_path, created: created.to_i, attached: attached.to_i.positive?, claude_url: links[name] }
+    { name: name, path: path, project_path: project_path, created: created.to_i, attached: attached.to_i.positive?,
+      claude_url: links[name], launched: staged.include?(name), }
   end
 end
 
 def session_name(base)
   base = base.to_s.gsub(/[^A-Za-z0-9_-]/, "_")
-  taken = sessions.map { |s| s[:name] }
+  # every tmux name, a hand-run one too: a new name never collides with any session on the server
+  taken, why = live_session_names
+  raise ArgumentError, "cannot name a session: #{why}" unless taken
   return base unless taken.include?(base)
 
   n = 1
@@ -432,6 +448,10 @@ end
 def name_op(req)
   base = req["base"].to_s
   raise ArgumentError, "base is required (the engine's agent_types[].session_name, rendered)" if base.empty?
+  unless Busyyaks::LauncherRules.busyyaks_session?(base)
+    raise ArgumentError, "session name #{base.inspect} must start with #{Busyyaks::LauncherRules::SESSION_PREFIX.inspect}: " \
+                         "every session busyyaks starts is named so (agent settings session_name)"
+  end
 
   { ok: true, session: session_name(base) }
 end
@@ -444,6 +464,19 @@ def command_running?(pane_pid, command)
     # installer launcher: `python -I -c <bootstrap>`, comm hermes)
     argv.first(2).any? { |a| File.basename(a) == command } || (File.read("/proc/#{pid}/comm").strip rescue "") == command
   end
+end
+
+# claude_code: the `claude` running with --remote-control <name> carries --mcp-config <stage>/mcp.json (the board's
+# MCP, MCP_BOARD_TOKEN) → nil, else why
+def claude_board_on(name, stage)
+  want = Busyyaks::BoardMcp.claude_path(stage)
+  pane_pid = tmux("list-panes", "-t", "=#{name}", "-F", "\#{pane_pid}")[0].lines.first.to_i
+  on = tree(pane_pid).any? do |pid|
+    argv = (File.read("/proc/#{pid}/cmdline") rescue "").split("\0")
+    i = argv.rindex("--remote-control")
+    i && argv[i + 1] == name && argv.each_cons(2).any? { |a, b| a == "--mcp-config" && b == want }
+  end
+  on ? nil : "the agent runs without the board's MCP: no --mcp-config #{want} on its claude (its launcher command drops busyyaks's flags)"
 end
 
 # claude_code: the `claude` running with --remote-control <name> carries --plugin-dir <stage> (the session's skills)
@@ -557,12 +590,113 @@ end
 # Removes the stages of sessions tmux no longer lists — at launcher start, before each launch's stage and
 # on every `sessions` op (the notifier's watch pass asks it, so a stage goes within a pass of its session's end).
 # tmux unreadable → nothing removed, said in the log (never read as "no sessions"). Call under STAGE_LOCK.
+# The sessions busyyaks runs (2026-11-24, the operator: "It must not appear in working agents if it's not run by
+# busyyaks"): a launch stages the session's skills under STAGES/<session> before tmux starts it, and the stage sweep
+# removes the stage once the session is gone — a session started by hand never has one. No STAGES dir = nothing
+# launched yet.
+# Proof that busyyaks started a session (2026-11-24, R3): its name carries the `by_` prefix, it has a stage, and the
+# stage's launched.json records the pane's pid and that process's start time, written by the launch that started it.
+# A session started by hand — even one named or renamed `by_…` — has no such record, or a pane that is not the recorded
+# process: it is never listed, stopped, typed into, answered, attached to or read.
+LAUNCHED_FILE = "launched.json"
+
+# {session name => its first pane's pid}, one tmux call; nil when tmux cannot be read (never "no sessions": the same
+# rule as live_session_names — a real "no server" answer is {})
+def pane_pids
+  out, err, ok = tmux("list-panes", "-a", "-F", "\#{session_name}\t\#{pane_pid}")
+  unless ok
+    return {} if err.match?(/no server running on |error connecting to .* \(No such file or directory\)/)
+
+    return nil
+  end
+
+  out.lines.each_with_object({}) do |l, h|
+    name, pid = l.chomp.split("\t")
+    h[name] ||= pid.to_i
+  end
+end
+
+def record_launched(name, stage)
+  pid = pane_pids&.[](name)
+  ticks = pid&.positive? ? proc_start_ticks(pid) : nil
+  return "its pane is unreadable (no pid / start time): not recorded as busyyaks's" unless ticks
+
+  File.open(File.join(stage, LAUNCHED_FILE), File::WRONLY | File::CREAT | File::EXCL, 0o600) do |f|
+    f.write(JSON.generate({ "pane_pid" => pid, "start_ticks" => ticks }))
+  end
+  nil
+end
+
+# sock: busyyaks starts its sessions on the default tmux server only — a session on any other socket is never its own
+def launched?(name, pids = pane_pids, sock = "default")
+  return false unless sock.to_s == "default" && pids && Busyyaks::LauncherRules.busyyaks_session?(name)
+
+  rec = JSON.parse(File.read(File.join(STAGES, name, LAUNCHED_FILE)))
+  pid = pids[name]
+  !pid.nil? && pid == rec["pane_pid"] && proc_start_ticks(pid) == rec["start_ticks"]
+rescue SystemCallError, JSON::ParserError, TypeError
+  false
+end
+
+def staged_names
+  return [] unless File.directory?(STAGES)
+
+  pids = pane_pids or return []
+  Dir.children(STAGES).select { |n| launched?(n, pids) }
+end
+
+# The `agents` op: the collector's snapshot cut to the sessions busyyaks launched (staged_names) — the sidebar, the
+# project lanes, the live line, the board glow and Clear idle never show or touch a session started by hand.
+def launched_agents
+  snap = agents
+  return snap unless snap[:ok]
+
+  staged = staged_names
+  snap.merge(sessions: snap[:sessions].select { |s| s["socket"] == "default" && staged.include?(s["name"]) })
+end
+
 def sweep_stages(where)
   live, why = live_session_names
   return puts("#{Busyyaks::Clock.now.iso8601} skills sweep skipped (#{where}): #{why}") unless live
 
   gone = Busyyaks::Skills.sweep(STAGES, live + IN_FLIGHT)
   puts "#{Busyyaks::Clock.now.iso8601} skills sweep (#{where}): removed #{gone.join(', ')}" if gone.any?
+  sweep_scopes(where, live + IN_FLIGHT)
+end
+
+# Stops the systemd user scope of every session that ended (LauncherRules.stale_scopes): what it left running in
+# the background dies with it, and its name is free for the next launch. launch.scopes null → no scopes to sweep.
+# systemctl unreadable → nothing stopped, said in the log. Each stop is logged with the processes it ended.
+def sweep_scopes(where, live)
+  return if SCOPES.nil?
+
+  out, err, st = Open3.capture3("systemctl", "--user", "list-units", "--type=scope", "--all", "--plain", "--no-legend",
+                                "--no-pager", "#{Busyyaks::LauncherRules::SCOPE_PREFIX}*", in: File::NULL)
+  unless st.success?
+    return puts("#{Busyyaks::Clock.now.iso8601} scope sweep skipped (#{where}): systemctl: #{err.strip[0, 200]}")
+  end
+
+  Busyyaks::LauncherRules.stale_scopes(out, live).each do |unit|
+    procs = scope_procs(unit)
+    _o, serr, sst = Open3.capture3("systemctl", "--user", "stop", unit, in: File::NULL)
+    verdict = sst.success? ? "stopped" : "stop FAILED: #{serr.strip[0, 200]}"
+    puts "#{Busyyaks::Clock.now.iso8601} scope sweep (#{where}): #{unit} #{verdict} · " \
+         "#{procs.empty? ? 'no processes' : procs.join(' | ')}"
+  end
+end
+
+def scope_procs(unit)
+  cg, _e, st = Open3.capture3("systemctl", "--user", "show", "-p", "ControlGroup", "--value", unit, in: File::NULL)
+  return [] unless st.success? && !cg.strip.empty?
+
+  File.read(File.join("/sys/fs/cgroup", cg.strip, "cgroup.procs")).split.map do |pid|
+    cmd = File.read("/proc/#{pid}/cmdline").tr("\0", " ").strip
+    "#{pid} #{cmd[0, 120]}"
+  rescue SystemCallError
+    pid
+  end
+rescue SystemCallError
+  []
 end
 
 def tree(root)
@@ -596,7 +730,12 @@ HOST_KINDS = {
   "claude_code" => { trust: true, up: ->(name, _launcher, clock) { confirm_remote_control(name, clock) },
                      up?: ->(r) { r[:remote_control] == "on" },
                      skills_why: ->(name, _launcher, stage, _delivery) { claude_skills_on(name, stage) },
-                     stage_env: ->(_stage) { {} }, board_why: ->(_name, _launcher, _stage, _delivery) {}, },
+                     # the board MCP (MCP_BOARD_TOKEN) for this session only: <stage>/mcp.json, --mcp-config
+                     stage_env: lambda { |stage|
+                       Busyyaks::BoardMcp.claude!(stage, Busyyaks::BoardMcp.endpoint!(ENV_FILE))
+                       {}
+                     },
+                     board_why: ->(name, _launcher, stage, _delivery) { claude_board_on(name, stage) }, },
   "hermes" => { trust: false, up: ->(name, launcher, clock) { confirm_process(name, launcher.command, clock) },
                 up?: ->(r) { r[:process] == "on" },
                 skills_why: ->(name, launcher, stage, delivery) { hermes_skills_on(name, launcher, stage, delivery) },
@@ -616,6 +755,7 @@ def launch(req)
   dir = host_dir(req["path"])
   name = req["session"].to_s
   raise ArgumentError, "session must match the tmux name alphabet" unless name.match?(AgentsKanban::Launch::SESSION)
+  busyyaks_name!(name)
   _o, _e, exists = tmux("has-session", "-t", "=#{name}")
   raise ArgumentError, "tmux session #{name} already exists" if exists
 
@@ -675,7 +815,7 @@ def launch_staged(job)
     argv = AgentsKanban::Launch.argv(cfg, type: t.key, launcher: launcher.key, session: name, prompt: prompt,
                                           extra: delivery.extra(stage))
     kind_env = host_kind[:stage_env].call(stage)
-  rescue AgentsKanban::Invalid, Busyyaks::HermesBoard::Invalid, SystemCallError => e
+  rescue AgentsKanban::Invalid, Busyyaks::HermesBoard::Invalid, Busyyaks::BoardMcp::Invalid, SystemCallError => e
     FileUtils.rm_rf(stage)
     raise ArgumentError, e.message
   end
@@ -708,6 +848,11 @@ def launch_staged(job)
     rc = rc.merge(reason: why)
   end
   if up && (why = host_kind[:board_why].call(name, launcher, stage, delivery))
+    up = false
+    rc = rc.merge(reason: why)
+  end
+  # the proof that busyyaks started it (launched?): its pane's pid + start time, recorded in its own stage
+  if up && (why = record_launched(name, stage))
     up = false
     rc = rc.merge(reason: why)
   end
@@ -948,7 +1093,7 @@ end
 REAP_QUIET_S = 30 * 60
 
 def reap_candidates(now = Busyyaks::Clock.now.to_f)
-  snap = agents
+  snap = launched_agents
   return snap unless snap[:ok]
   raise ReapRefused, "collector snapshot is #{snap[:age_s]}s old — cannot tell who is working" if snap[:age_s].to_f > 3 * snap[:interval_s].to_f
 
@@ -1010,6 +1155,7 @@ def reap(req)
     puts "#{Busyyaks::Clock.now.iso8601} reap #{name} (#{c[:reason]}): #{ok ? 'stopped' : err.strip}"
     { name: name, stopped: ok, reason: ok ? c[:reason] : "tmux: #{err.strip}" }
   end
+  STAGE_LOCK.synchronize { sweep_stages("reap") }
   { ok: true, results: results }
 rescue ReapRefused => e
   { ok: false, error: e.message, status: 409 }
@@ -1026,10 +1172,16 @@ def stop_op(req)
   raise ArgumentError, "sessions: give at least one session name" if names.empty?
 
   live = sessions.to_h { |s| [s[:name], s] }
+  every, = live_session_names # every tmux name: a hand-run session is said as such, never "not running"
   protect = reap_protect
   results = names.uniq.map do |name|
     s = live[name]
-    next { name: name, stopped: false, reason: "not running" } unless s
+    unless s
+      next { name: name, stopped: false, reason: "not started by busyyaks" } if every&.include?(name)
+
+      next { name: name, stopped: false, reason: "not running" }
+    end
+    next { name: name, stopped: false, reason: "not started by busyyaks" } unless s[:launched]
     next { name: name, stopped: false, reason: "not in this project (#{s[:project_path] || s[:path]})" } unless s[:project_path] == path
     next { name: name, stopped: false, reason: "protected by reap_protect" } if protect.any? { |pat| File.fnmatch?(pat, name) }
 
@@ -1037,6 +1189,7 @@ def stop_op(req)
     puts "#{Busyyaks::Clock.now.iso8601} stop #{name} (operator, #{path}): #{ok ? 'stopped' : err.strip}"
     { name: name, stopped: ok, reason: ok ? "stopped" : "tmux: #{err.strip}" }
   end
+  STAGE_LOCK.synchronize { sweep_stages("stop") }
   { ok: true, results: results }
 end
 
@@ -1051,6 +1204,13 @@ def notify(req)
   sock = (req["socket"] || "default").to_s
   text = req["text"].to_s
   raise ArgumentError, "bad session" unless name.match?(/\A[A-Za-z0-9._-]{1,100}\z/) && sock.match?(/\A[\w.-]{1,64}\z/)
+  # only a session busyyaks started (launched?): one not running is gone, one started by hand is never typed into —
+  # both fail the ping at once (the notifier's `gone` / `unsupported`), never retried until the give-up
+  in_flight = STAGE_LOCK.synchronize { IN_FLIGHT.include?(name) }
+  pids = in_flight ? {} : pane_pids
+  stop = Busyyaks::LauncherRules.notify_refusal(name, in_flight: in_flight, pids: pids,
+                                                      launched: !in_flight && launched?(name, pids, sock))
+  return stop if stop
   raise ArgumentError, "text must be 1..8000 characters" if text.strip.empty? || text.length > 8000
 
   snap = agents
@@ -1065,8 +1225,6 @@ def notify(req)
 
   panes = s["panes"]
   return { ok: false, retry: true, error: "a question is on its screen" } if panes.any? { |p| p["waiting_for"] }
-  # its start check is still running: the proof below is written when it ends (a ping is never dropped for that)
-  return { ok: false, retry: true, error: "session #{name} is still starting" } if STAGE_LOCK.synchronize { IN_FLIGHT.include?(name) }
 
   proof = hermes_queue_proof(name, sock, panes)
   untypeable = ENGINES.untypeable(panes.map { |p| p["engine"] }, proven: !proof.nil?)
@@ -1129,8 +1287,24 @@ def dialog_session!(req)
   name
 end
 
+# A session busyyaks may act on: one it started (launched?). Every op that types into, answers, attaches to, reads or
+# stops a named session asks this first — a session started by hand is never touched.
+def started_by_busyyaks!(name)
+  return name if launched?(name)
+
+  raise ArgumentError, "session #{name.inspect} is not a session busyyaks started: busyyaks never touches it"
+end
+
+# A NEW session's name (the launch op): it must carry the prefix every busyyaks session carries
+def busyyaks_name!(name)
+  return name if Busyyaks::LauncherRules.busyyaks_session?(name)
+
+  raise ArgumentError, "session #{name.inspect} has no #{Busyyaks::LauncherRules::SESSION_PREFIX.inspect} prefix: every " \
+                       "session busyyaks starts is named so (agent settings session_name)"
+end
+
 def dialog_op(req)
-  name = dialog_session!(req)
+  name = started_by_busyyaks!(dialog_session!(req))
   _o, _e, ok = tmux("has-session", "-t", "=#{name}")
   return { ok: false, gone: true, error: "session #{name} is not running" } unless ok
 
@@ -1141,7 +1315,7 @@ end
 # relative to PROJECTS_ROOT. No git runs here — a session's checkout is a repo the host must not run git in (its config
 # can name programs); the notifier reads it through its GitRead child (lib/busyyaks/session_git.rb).
 def git_op(req)
-  name = dialog_session!(req)
+  name = started_by_busyyaks!(dialog_session!(req))
   out, _e, ok = tmux("display-message", "-p", "-t", "=#{name}:", "\#{pane_current_path}")
   return { ok: false, gone: true, error: "session #{name} is not running" } unless ok
 
@@ -1161,7 +1335,7 @@ ANSWER_KEYS = /\A(\d{1,2}|esc)\z/
 # Re-captures the screen and presses the key only if the dialog there has the hash the operator saw, and the key is
 # one of its non-free options (or esc when Esc cancels). Anything else is refused with the reason; nothing is typed.
 def answer_op(req)
-  name = dialog_session!(req)
+  name = started_by_busyyaks!(dialog_session!(req))
   key = req["key"].to_s
   raise ArgumentError, "key must be a digit or esc" unless key.match?(ANSWER_KEYS)
 
@@ -1220,6 +1394,9 @@ def attach_check(req)
   base = attach_base(sock)
   _o, _e, ok = tmux(*base, "has-session", "-t", "=#{name}")
   return attach_refusal("session #{name} is not running", 404) unless ok
+  unless launched?(name, pane_pids, sock)
+    return attach_refusal("session #{name} is not a session busyyaks started: never attached", 403)
+  end
   return attach_refusal("session #{name} runs no agent in its pane (claude or a launch command): not attached", 403) \
     unless agent_pane?(base, name)
 
@@ -1351,6 +1528,7 @@ def attach_control(io, base, name, control, want)
   if want && !control
     _o, _e, up = tmux(*base, "has-session", "-t", "=#{name}")
     why = if !up then "session #{name} is not running"
+          elsif !launched?(name, pane_pids, base.empty? ? "default" : base.last) then "session #{name} is not a session busyyaks started"
           elsif !agent_pane?(base, name) then "session #{name} runs no agent in its pane"
           end
     if why
@@ -1393,6 +1571,7 @@ def agent_tasks(req)
   name = req["session"].to_s
   sock = req["socket"].to_s
   raise ArgumentError, "bad session" unless name.match?(/\A[^\x00-\x1f]{1,200}\z/) && sock.match?(/\A[\w.-]{1,64}\z/)
+  raise ArgumentError, "session #{name.inspect} is not a session busyyaks started" unless launched?(name, pane_pids, sock)
 
   res = collector(op: "tasks", session: name, socket: sock)
   return res if res["ok"]
@@ -1646,6 +1825,38 @@ rescue Busyyaks::ProjectsRoot::Invalid => e
   { ok: false, error: e.message, status: 422 }
 end
 
+# What a launch in the repo would do with the repo's own .busyyaks/skills, nothing started (the project page's Settings
+# tab, which edits its .busyyaks/skills): {ok, project_skills: "loaded" | "none" | "left: <why>", budget, replace_budget,
+# layers: {type => what a launch of it stages, each earlier layer's file marked when the override rule replaced it},
+# checkout} — the folder-trust
+# decision and the layer's validation are the launch's own (Skills.project_status); an invalid layer is the refusal the
+# launch would give.
+def project_skills_op(req)
+  cfg = board_config(req["settings"])
+  dir = host_dir(req["path"])
+  refusal = Busyyaks::LaunchTrust.refusal(dir, trusted: TRUSTED, created: CREATED)
+  st = Busyyaks::Skills.project_status(checkout: ROOT, repo: dir, types: cfg.agent_type_keys, settings: SKILLS,
+                                       trust_refusal: refusal)
+  # checkout: the repo is this busyyaks checkout itself — `yaks update` refuses it while a tracked file is uncommitted
+  { ok: true, project_skills: st[:status], budget: st[:budget], replace_budget: st[:replace_budget],
+    layers: st[:layers], checkout: File.realpath(dir) == File.realpath(ROOT), }
+rescue Busyyaks::LaunchTrust::Invalid => e
+  { ok: false, error: "folder trust: #{e.message}", status: 422 }
+rescue Busyyaks::Skills::Invalid => e
+  { ok: false, error: "skills: #{e.message}", status: 422 }
+end
+
+# busyyaks's own skills layers as every launch of this checkout reads them (Settings → Agent rules, the project page's
+# inherited layers): the files in the order a launch stages them, per agent type of the revision — the launch's own
+# selection (Skills.global_view → Skills.layers_answer), nothing staged.
+def skills_layers_op(req)
+  cfg = board_config(req["settings"])
+  { ok: true, **Busyyaks::Skills.layers_answer(checkout: ROOT, types: cfg.agent_type_keys, settings: SKILLS,
+                                               projects_root: PROJECTS_ROOT, container_root: CONTAINER_ROOT) }
+rescue Busyyaks::Skills::Invalid => e
+  { ok: false, error: "skills: #{e.message}", status: 422 }
+end
+
 def handle(line)
   req = JSON.parse(line)
   # an op that reads the collector, on a box configured without one (AgentCollector::OPS): OFF, nothing else runs
@@ -1662,7 +1873,7 @@ def handle(line)
   when "harnesses" then harnesses_op
   when "create" then create(req)
   when "jobs" then { ok: true, jobs: jobs }
-  when "agents" then agents
+  when "agents" then launched_agents
   when "agent_tasks" then agent_tasks(req)
   when "reap_preview" then reap_preview
   when "reap" then reap(req)
@@ -1672,6 +1883,8 @@ def handle(line)
   when "git" then git_op(req)
   when "answer" then answer_op(req)
   when "browse" then browse_op(req)
+  when "project_skills" then project_skills_op(req)
+  when "skills_layers" then skills_layers_op(req)
   when "projects_root" then projects_root_op(req)
   when "update" then update_op(req)
   else { ok: false, error: "unknown op" }

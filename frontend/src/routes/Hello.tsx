@@ -8,7 +8,7 @@
 // settings cog (lands on Summary, Close / Done write nothing). The Agents draft lives here, so jumping steps keeps
 // it; leaving with it unsaved brings you back to Agents. Every step carries "ask your agent to set it up for you"
 // with a prompt to copy: the host-only parts (the launch.commands allowlist) are its job, never this page's.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, apiGet, apiPost, invalidate, useResource } from "../api";
 import { CopyChip } from "../components/Copy";
@@ -78,13 +78,17 @@ const writeBooted = () => {
   }
 };
 
-function RestartBoth() {
+export function RestartBoth() {
   return (
     <>
-      {RESTART_BOTH.map((c) => (
-        <CopyChip key={c} text={c} title={`Copy: ${c}`}>
-          <code>{c}</code>
-        </CopyChip>
+      {/* two commands, run one after the other: never shown (or copied from the page's text) as one word */}
+      {RESTART_BOTH.map((c, i) => (
+        <Fragment key={c}>
+          {i > 0 && <span className="muted"> then </span>}
+          <CopyChip text={c} title={`Copy: ${c}`}>
+            <code>{c}</code>
+          </CopyChip>
+        </Fragment>
       ))}
     </>
   );

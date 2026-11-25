@@ -361,7 +361,7 @@ ans.values_at("body", "author")
       loop do
         c = server.accept
         reqs << JSON.parse(c.gets)
-        c.puts JSON.generate(reqs.last["op"] == "answer" ? reply : { ok: false, error: "not faked" })
+        c.puts JSON.generate(%w[answer project_skills].include?(reqs.last["op"]) ? reply : { ok: false, error: "not faked" })
         c.close
       end
     rescue IOError, Errno::EBADF
@@ -497,6 +497,53 @@ ans.values_at("body", "author")
     assert_equal 404, (api(:get, "/api/projects/nope/workflow") && last_response.status)
     assert_equal 404, (api(:post, "/api/projects/nope/workflow", shape) && last_response.status)
   end
+  # the project page's Settings tab over HTTP: the rules per agent type are the repo's .busyyaks/skills/agents/<type>.md
+  # — read by the web, written by the writer service; the launcher says what a launch does with them; CSRF, a stale
+  # file (409), a refusal (422), a down writer (503), a late one (504), a down launcher (the state unknown, said)
+  def test_the_projects_agent_rules_are_read_and_saved_as_its_dot_busyyaks_files
+    file = File.join(@dir, ".busyyaks/skills/agents/lead.md")
+    j = api(:get, "/api/projects/g/r/agent-rules")
+    assert_equal [200, {}, ".busyyaks/skills"], [last_response.status, j["files"], j["dir"]]
+    assert_equal %w[lead worker team plain], j["types"].map { _1["key"] }
+    assert_equal "unknown", j["launches"]["state"], "no launcher answers: never guessed"
+    assert_match(/launcher not reachable/, j["launches"]["reason"])
+    with_launcher({ ok: true, project_skills: "left: #{@dir} is not trusted", budget: { lead: 100 },
+checkout: false, }) do |reqs|
+      plan = { "agents/lead.md": { base: nil, body: "Plan before you code.\n" } }
+      j = api(:post, "/api/projects/g/r/agent-rules", files: plan)
+      assert_equal 200, last_response.status, j.inspect
+      assert_equal "Plan before you code.\n", File.read(file)
+      assert_equal "Plan before you code.\n", j["files"]["agents/lead.md"]["body"]
+      assert_equal({ "state" => "left", "reason" => "#{@dir} is not trusted", "budget" => { "lead" => 100 },
+                     "replace_budget" => nil, "layers" => nil, "checkout" => false, }, j["launches"])
+      assert_equal ["project_skills", @dir], reqs.last.values_at("op", "path")
+      assert_equal %w[doc id], reqs.last["settings"].keys.sort, "the agent settings revision, as a launch sends it"
+    end
+    sha = j["files"]["agents/lead.md"]["sha"]
+    send(:post, "/api/projects/g/r/agent-rules", JSON.generate(files: { "agents/lead.md": { base: sha, body: "x\n" } }),
+         "CONTENT_TYPE" => "application/json")
+    assert_equal 403, last_response.status, "no CSRF token"
+    j = api(:post, "/api/projects/g/r/agent-rules", files: { "agents/lead.md": { base: nil, body: "x\n" } })
+    assert_equal 409, last_response.status
+    assert_match(/lead\.md was made on disk since the editor read it/, j["error"])
+    j = api(:post, "/api/projects/g/r/agent-rules", files: { "agents/boss.md": { base: nil, body: "x\n" } })
+    assert_equal [422, ".busyyaks/skills/agents/boss.md: boss is not an agent type (lead, worker, team, plain)"],
+                 [last_response.status, j["error"]]
+    assert_equal 404, (api(:get, "/api/projects/nope/agent-rules") && last_response.status)
+    assert_equal "Plan before you code.\n", File.read(file)
+    late = ->(*, **) { raise Busyyaks::WriterClient::NoAnswer, "the writer did not answer within 30 s" }
+    Busyyaks::WriterClient.stub(:agent_rules_save, late) do
+      api(:post, "/api/projects/g/r/agent-rules", files: { "agents/lead.md": { base: sha, body: "x\n" } })
+      assert_equal 504, last_response.status
+    end
+    WriterServer.stop(@writer)
+    @writer = nil
+    j = api(:post, "/api/projects/g/r/agent-rules", files: { "agents/lead.md": { base: sha, body: "x\n" } })
+    assert_equal 503, last_response.status
+    assert_match(/writer not reachable/, j["error"])
+    assert_equal "Plan before you code.\n", File.read(file)
+  end
+
   # card #429: the board's workflow-file line, and a down writer refuses the editor's save (503) — nothing saved
   def test_workflow_file_state_and_a_down_writer
     j = api(:get, "/api/projects/g/r/workflow-file")

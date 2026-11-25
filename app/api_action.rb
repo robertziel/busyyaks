@@ -37,7 +37,7 @@ module Busyyaks
     # engine's sessions_error inside launches) next to the data that does not need it, never hidden.
     def launch_state
       launches = Kanban.api.launches.last
-      { launches: launches, sessions: LauncherClient.sessions.group_by { |s| s["project_path"] }, launcher_error: nil }
+      { launches: launches, sessions: LauncherClient.launched_sessions.group_by { |s| s["project_path"] }, launcher_error: nil }
     rescue LauncherClient::Unavailable, LauncherClient::Refused => e
       { launches: launches || Kanban.api.launches.last, sessions: {}, launcher_error: e.message }
     end

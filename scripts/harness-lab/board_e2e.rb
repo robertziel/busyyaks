@@ -161,21 +161,23 @@ class BoardE2E
     error = body["error"].to_s
     step("no_mcp_servers_refused_at_launch", "#{status}: #{error[0, 300]}") { status == 422 }
     step("refusal_names_file_and_line", error[0, 300]) { error.include?(@config) && error.include?(INERT) }
-    step("refused_session_killed") { !session?("demo_teamlead") }
-    step("refused_stage_removed") { !File.exist?(File.join(@base, "state/skills/demo_teamlead")) }
+    step("refused_session_killed") { !session?("by_demo_teamlead") }
+    step("refused_stage_removed") { !File.exist?(File.join(@base, "state/skills/by_demo_teamlead")) }
     step("refusal_left_user_config_unchanged") { File.binread(@config) == before }
   end
 
   def hand_started_refused
     Open3.capture2e("tmux", "new-session", "-d", "-s", "byhand", "-x", "100", "-y", "30",
                     "-c", File.join(@base, "projects/demo"), "hermes", "chat")
-    wait("hand_started_in_snapshot") do
+    wait("hand_started_running") { session?("byhand") }
+    # the collector never reads a session busyyaks did not start: it is not in the snapshot at all
+    step("hand_started_never_in_the_snapshot") do
       snap = JSON.parse(File.read(File.join(@base, "collector/sessions.json")))
-      snap["sessions"].any? { |s| s["name"] == "byhand" && s["panes"].any? { |p| p["engine"] == "hermes" } }
+      snap["sessions"].none? { |s| s["name"] == "byhand" }
     end
     r = launcher("op" => "notify", "session" => "byhand", "socket" => "default", "text" => "E2E_BY_HAND")
     step("hand_started_refused_with_reason", r.to_s) do
-      r["unsupported"] == true && r["error"].to_s.include?("not launched by busyyaks in queue mode")
+      r["unsupported"] == true && r["error"].to_s.include?("not a session busyyaks started")
     end
     step("hand_started_nothing_typed") { !screen("byhand").include?("E2E_BY_HAND") }
     tmux("kill-session", "-t", "=byhand")
@@ -369,7 +371,7 @@ class BoardE2E
 
   # ── the token ──
   def secrets
-    token = @env.fetch("MCP_TOKEN")
+    token = @env.fetch("MCP_BOARD_TOKEN")
     step("token_is_real") { token.length >= 32 }
     argv = Dir.glob("/proc/[0-9]*/cmdline").filter_map { |f| File.binread(f) rescue nil }
     step("token_not_on_any_argv") { argv.none? { |a| a.include?(token) } }

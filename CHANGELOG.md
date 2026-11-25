@@ -3,16 +3,18 @@
 One line per change a user would notice. Format: [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/);
 versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-11-25
 
 ### Added
 
+- Session isolation: busyyaks touches only the sessions it starts. Every session it starts is named `by_…` and proven by a launch record (its pane's pid + start time); a tmux session started by hand — any project, any harness — is never listed, typed into, answered, attached to, read or stopped, and the collector never reads its panes. Stop says "not started by busyyaks" for one.
+- The board MCP reaches only a launched session: the new bearer `MCP_BOARD_TOKEN` (written by `bin/setup`) carries every `kanban_*` tool and is handed to each launched session in its own stage (Claude Code `--mcp-config`, Hermes its overlay); `MCP_TOKEN` has no board tool and no board text. Nothing busyyaks is registered user-wide.
+- Agent rules in the web: **Settings → Agent rules** shows and edits every markdown busyyaks's sessions get — the core skill, each agent type's file (Team lead, Worker, Sub team), the on-demand skills (reviewer, qa, critic) and this deployment's layer — one card per file, in launch order per type, with each type's launch budget. A project's page → **Settings** edits every file of its `.busyyaks/skills/`; a project file adds to the global rules of its type or, with `mode: replace`, replaces them, and a project skill named like a global one replaces it for that project. Saves go through the writer; nothing needs installing — every launch reads the files.
+- On-demand skills `qa` and `critic` (QA before a handoff; an independent critic before the operator's gate), editable like the reviewer.
+- A running lead starts at once: at launch it assigns every card that is the agents' responsibility its own worker and follows up.
+- When a busyyaks session ends, its systemd scope is stopped: what it left running in the background ends with it.
+- `bin/setup secrets`: writes a secret a newer version adds to an existing `.env`; `yaks update` runs it before its backup.
 - `CITATION.cff`: how to cite busyyaks (GitHub's "Cite this repository"); its version and date follow the newest release in this file.
-
-## [1.0.0-beta.3] - 2026-11-19
-
-### Added
-
 - A board card whose agent is working (thinking, running a tool, writing, waiting on its subagents) glows blue, read from the same screen evidence as the live agent line; no glow when idle, without evidence or when the agents read failed (the board says why); a card that needs you stays red. `GET /api/projects/*slug/board/live` answers the whole board from one shared agents snapshot. Colour: skin token `--working` (`--ak-working` in `config/kanban.yml` theme).
 - CI checks for the approval gate: only each repo's required contexts gate (`ci.required`, the rest informational); a check pending past `ci.max_pending_minutes` turns red as stuck and pings the owner once; every page of checks is read; one bad PR no longer stops the others; a handoff's build URL must be the head's; `/github` names enrolled repos missing from `ci.required`.
 - Agent faces: every agent wears two eyes on a disc in its type's colour (`config/kanban.yml` theme `--ak-face-type-<type>`; `face_roles` colours subagent roles such as `reviewer-*`, `qa-*`), its mood from the live session — in comments, card faces, the project's tmux list and the Agents sidebar. A person shows their picture from `avatar_url` (an https template with the email's SHA-256, e.g. Gravatar with `d=404`; its origin joins the CSP `img-src`), else the initials.
@@ -36,9 +38,49 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - `yaks ci required OWNER/NAME` prints a repo's required CI checks from `ci.required`.
 - Agents sidebar: a **Hide finished** toggle.
 - A GitHub link label fixed at the bottom left of every page.
+- First-run hello screen: boot checks, projects dir, launchers and a default.
+- Settings menu in the header; launchers and agent types edited in the database; launcher kind `hermes`.
+- Daily report settings edited on **Settings → Daily report**.
+- PRs are assigned to cards explicitly (`kanban_pr_assign`), never found by branch name or text.
+- Alert when a board-started session fails to start.
+- Approve buttons name the step they approve.
+- `yaks` command line (`bin/yaks`, host Ruby ≥ 3.2): `server status`, `server logs`, `panel`, `env`, `doctor`.
+- Board: left/right arrow click areas scroll the lists.
+- Project page: the title stays pinned under the header while the page scrolls, on one line.
+- Board: cards glide to their new place (agent moves, drops, filter and order changes) instead of jumping.
+- Skins are files: `skins/<key>.yml` (Light, Dark and any added, e.g. Matrix), picked in the settings cog.
+- Dictation: hold ⌥R / Alt+R in an open card (or click the mic) to talk a comment into the box, transcribed by the deployment's speech server (`dictation` in config/busyyaks.yml, `DICTATION_URL`); the key is picked on **Settings → Shortcuts**.
+- Desktop app: `yaks desktop install --browser NAME` adds busyyaks to the app menu (Linux, the BSDs, macOS), or install it from Chrome or Edge; its own window, the icon's badge counts the cards waiting for you.
+- Session boards: each agent session gets its own board, attached to no project (`kanban_session_board`), shown read-only on **Sessions**; idle boards are archived, never deleted.
+- Hover a card mention (comments, the question and its option buttons, the agents rail, the waiting list, reports, notes) to see that card's details.
+- **Today** page: commits, your commits, active repos, merged PRs per day; 53-week heatmap; unknown shown as `—`.
+- Scanner: git log, status, upstream of every repo under the roots (read-only), failures shown beside the last good scan.
+- **Projects** / project pages: branch, last commit, dirty, unpushed, notes, cards per column; create or clone a repo.
+- [Backlog.md](https://github.com/MrLesk/Backlog.md) `backlog/` tasks shown on the board, read-only.
+- Kanban board per repo from [busyyaks_agents_kanban_module](https://github.com/robertziel/busyyaks_agents_kanban_module): drag and drop, labels, checklists, due dates, attachments, shortcuts.
+- Agents on the board: claim cards, ask the operator, flag external blockers, hand off into a gate with PR + CI + screenshots.
+- Approval on green CI: gate handoff and Approve refused until the PR checks are green.
+- Workflow v3: fixed column types, named transitions per board, agent review loops with counted rounds.
+- Workflow graph editor, auto-laid out by [dagre](https://github.com/dagrejs/dagre).
+- Launch and supervise agents in tmux from the browser (lead, worker, sub team, plain) with concurrency caps.
+- Agents sidebar: every session worst first; a permission dialog becomes a question answerable from the browser.
+- MCP server (HTTP, bearer token, local only): projects, commits, notes, reports, GitHub network, every `kanban_*` tool.
+- Daily report written by a local LLM over MCP, every number computed and checked server-side; systemd timer.
+- GitHub network: what the people you follow starred and followed, and your feed summarised.
+- PR flags on cards: open / draft / merged, read from GitHub.
+- Search (`⌘K`) over projects, cards, commits, reports; light and dark skins.
+- Pluggable sign-in: `auth: none` for localhost or your own provider class.
+- Database: SQLite (WAL, concurrent-writer safe) or PostgreSQL (`DATABASE_ADAPTER`); `bin/db-copy-sqlite-to-postgres`.
+- Deployment as configuration: `.env` + `config/*.yml`, loud validation, no defaults ([docs/DEPLOY.md](docs/DEPLOY.md)).
+- Quality gates: `scripts/ci/test.sh all` in Docker (RuboCop, ShellCheck, tests + coverage floor, tsc, ESLint, Prettier, vitest, audit, gitleaks); signed pre-commit hook.
+- Community files: [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [NOTICE](NOTICE).
 
 ### Changed
 
+- Only the operator's Launch makes a board's lead: `kanban_register` refuses a lead type, and no text tells a session started by hand to register itself.
+- The lead agent type is labelled "Team lead" (its button "Launch team lead"); workers start only from the lead's spawn (the Launch bar no longer offers Worker). The unused Plain agent type is removed.
+- Agent prompts say only who the session is; the board workflow lives in the skills alone.
+- The writer replaces the old `/.busyyaks/` exclude line in every repo, so a project's `.busyyaks/skills/` can be committed with it.
 - The dark skin is the default: a browser that has chosen no skin shows dark (was light); choosing Dark clears the stored choice, Light is stored. If you used Light before, pick it once in the settings cog. The installed app's window colour follows (`skins/dark.yml` `--bg`).
 - "Needs you" no longer counts a gate card the operator already approved whose next step is its agent's (e.g. Awaiting merge after the final Approve, while the agent merges). It is shown apart: the board header and the Projects page say "N approved · agent on it", the card face "✓ approved · <owner> merging", the waiting widget a fourth ✓ "approved" segment (never in its total or the dock badge), `/api/waiting` lists it under `approved` (out of `total`), `/api/boards` and the board JSON count it as `approved`, the Agents sidebar row says "approved", and MCP `daily_facts` moves it from `human_check` to `approved`. A CI hold, a question for the operator or an external block wins over approved; an approved card with no owner session still waits for you.
 - **Breaking:** the boot refuses a `config/kanban.yml` `theme` that leaves out any `--ak-*` token the vendored engine's CSS declares, naming each; add `--ak-working: var(--working)` and `--ak-step-overhang: 12px` (see `docs/DEPLOY.md` § The board theme).
@@ -71,40 +113,6 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - **Breaking:** required `config/busyyaks.yml` `updates` (`{remote, branch, tags, channel: tags | branch, check_minutes}`); see `docs/DEPLOY.md` § Updates.
 - **Breaking:** required `config/kanban.yml` `progress_watch` (`{stale_minutes}`, or `null` = off).
 - **Breaking:** a new compose service `writer`: start it with the others (`docker compose up -d web mcp scanner github notifier writer`).
-
-### Fixed
-
-- A handoff or approval right after GitHub's CI was read green no longer gets refused "CI not read yet" because its request had just aged out of the poll window: a read made within the last 3 poll intervals is used as it is.
-- Setup wizard: the projects dir step changes the dir — picked in a host dir browser, checked, then applied (the services restart on it).
-- Approve is never refused "not read yet" for a card waiting in a gate: its PR checks are kept read; `/github` names a gated card whose reads went stale.
-
-### Security
-
-- Picomatch 4.0.7 plus the ReDoS fix of an open upstream PR (GHSA-fc5q-39xc-vjpf; no release fixes it), vendored as `4.0.8-busyyaks.0`.
-- Puma 8.1.1 (bundle-audit advisories on 8.0.2).
-
-## [1.0.0-beta.2] - 2026-11-15
-
-### Added
-
-- First-run hello screen: boot checks, projects dir, launchers and a default.
-- Settings menu in the header; launchers and agent types edited in the database; launcher kind `hermes`.
-- Daily report settings edited on **Settings → Daily report**.
-- PRs are assigned to cards explicitly (`kanban_pr_assign`), never found by branch name or text.
-- Alert when a board-started session fails to start.
-- Approve buttons name the step they approve.
-- `yaks` command line (`bin/yaks`, host Ruby ≥ 3.2): `server status`, `server logs`, `panel`, `env`, `doctor`.
-- Board: left/right arrow click areas scroll the lists.
-- Project page: the title stays pinned under the header while the page scrolls, on one line.
-- Board: cards glide to their new place (agent moves, drops, filter and order changes) instead of jumping.
-- Skins are files: `skins/<key>.yml` (Light, Dark and any added, e.g. Matrix), picked in the settings cog.
-- Dictation: hold ⌥R / Alt+R in an open card (or click the mic) to talk a comment into the box, transcribed by the deployment's speech server (`dictation` in config/busyyaks.yml, `DICTATION_URL`); the key is picked on **Settings → Shortcuts**.
-- Desktop app: `yaks desktop install --browser NAME` adds busyyaks to the app menu (Linux, the BSDs, macOS), or install it from Chrome or Edge; its own window, the icon's badge counts the cards waiting for you.
-- Session boards: each agent session gets its own board, attached to no project (`kanban_session_board`), shown read-only on **Sessions**; idle boards are archived, never deleted.
-- Hover a card mention (comments, the question and its option buttons, the agents rail, the waiting list, reports, notes) to see that card's details.
-
-### Changed
-
 - **Breaking:** launchers and agent types moved from `config/kanban.yml` to the database; migrate per `docs/DEPLOY.md` § Agent settings.
 - **Breaking:** required `config/busyyaks.yml` `launch.commands`: the allowlist of whole invocations a launcher may be.
 - **Breaking:** daily report settings moved from `config/busyyaks.yml` to the database; migrate per `docs/DAILY-REPORT.md` § Moving off config/busyyaks.yml.
@@ -123,6 +131,9 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A handoff or approval right after GitHub's CI was read green no longer gets refused "CI not read yet" because its request had just aged out of the poll window: a read made within the last 3 poll intervals is used as it is.
+- Setup wizard: the projects dir step changes the dir — picked in a host dir browser, checked, then applied (the services restart on it).
+- Approve is never refused "not read yet" for a card waiting in a gate: its PR checks are kept read; `/github` names a gated card whose reads went stale.
 - A link the browser cannot parse is left as written instead of blanking the card.
 - Header nav fits phones: it scrolls in its own row, never the whole page sideways.
 - Scan errors name an orphaned worktree by its host path and git dir.
@@ -131,36 +142,10 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - Scanner: one project per repo — linked worktrees are never projects.
 - First approval step read off its own gate's handoff and approve entries.
 
-## [1.0.0-beta.1] - 2026-11-10
-
-First public release (SemVer pre-release: config keys, JSON API and MCP tools may still change before 1.0.0).
-
-### Added
-
-- **Today** page: commits, your commits, active repos, merged PRs per day; 53-week heatmap; unknown shown as `—`.
-- Scanner: git log, status, upstream of every repo under the roots (read-only), failures shown beside the last good scan.
-- **Projects** / project pages: branch, last commit, dirty, unpushed, notes, cards per column; create or clone a repo.
-- [Backlog.md](https://github.com/MrLesk/Backlog.md) `backlog/` tasks shown on the board, read-only.
-- Kanban board per repo from [busyyaks_agents_kanban_module](https://github.com/robertziel/busyyaks_agents_kanban_module): drag and drop, labels, checklists, due dates, attachments, shortcuts.
-- Agents on the board: claim cards, ask the operator, flag external blockers, hand off into a gate with PR + CI + screenshots.
-- Approval on green CI: gate handoff and Approve refused until the PR checks are green.
-- Workflow v3: fixed column types, named transitions per board, agent review loops with counted rounds.
-- Workflow graph editor, auto-laid out by [dagre](https://github.com/dagrejs/dagre).
-- Launch and supervise agents in tmux from the browser (lead, worker, sub team, plain) with concurrency caps.
-- Agents sidebar: every session worst first; a permission dialog becomes a question answerable from the browser.
-- MCP server (HTTP, bearer token, local only): projects, commits, notes, reports, GitHub network, every `kanban_*` tool.
-- Daily report written by a local LLM over MCP, every number computed and checked server-side; systemd timer.
-- GitHub network: what the people you follow starred and followed, and your feed summarised.
-- PR flags on cards: open / draft / merged, read from GitHub.
-- Search (`⌘K`) over projects, cards, commits, reports; light and dark skins.
-- Pluggable sign-in: `auth: none` for localhost or your own provider class.
-- Database: SQLite (WAL, concurrent-writer safe) or PostgreSQL (`DATABASE_ADAPTER`); `bin/db-copy-sqlite-to-postgres`.
-- Deployment as configuration: `.env` + `config/*.yml`, loud validation, no defaults ([docs/DEPLOY.md](docs/DEPLOY.md)).
-- Quality gates: `scripts/ci/test.sh all` in Docker (RuboCop, ShellCheck, tests + coverage floor, tsc, ESLint, Prettier, vitest, audit, gitleaks); signed pre-commit hook.
-- Community files: [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [NOTICE](NOTICE).
-
 ### Security
 
+- Picomatch 4.0.7 plus the ReDoS fix of an open upstream PR (GHSA-fc5q-39xc-vjpf; no release fixes it), vendored as `4.0.8-busyyaks.0`.
+- Puma 8.1.1 (bundle-audit advisories on 8.0.2).
 - `auth: none` boots only with `allow_unauthenticated: true` and logs a banner on every boot.
 - Session cookie always `HttpOnly`; `Secure` / `SameSite` from `.env`, validated at boot; sign-in redirects to local paths only.
 - Host allowlist + Origin check against DNS rebinding.
@@ -170,7 +155,4 @@ First public release (SemVer pre-release: config keys, JSON API and MCP tools ma
 - Launcher socket private (umask); git `safe.directory` scoped to the mounted repos.
 - Credentials stripped from stored remote URLs; Markdown rendered with raw HTML dropped.
 
-[Unreleased]: https://github.com/robertziel/busyyaks/compare/v1.0.0-beta.3...main
-[1.0.0-beta.3]: https://github.com/robertziel/busyyaks/compare/v1.0.0-beta.2...v1.0.0-beta.3
-[1.0.0-beta.2]: https://github.com/robertziel/busyyaks/compare/v1.0.0-beta.1...v1.0.0-beta.2
-[1.0.0-beta.1]: https://github.com/robertziel/busyyaks/releases/tag/v1.0.0-beta.1
+[0.1.0]: https://github.com/robertziel/busyyaks/releases/tag/v0.1.0

@@ -169,13 +169,15 @@ class CliUpdateTest < Minitest::Test
     assert_equal "main", sh(@home, "git", "symbolic-ref", "--short", "HEAD")
     built = "busyyaks:update-#{v11[0, 12]}"
     # the build under its own tag; the backup right before busyyaks:local is moved to it and compose starts it
-    assert_equal ["docker", "build", "-t", built, @home], systems[0]
-    backup = systems[1]
+    # the new version's secrets first (bin/setup secrets: a key it added is written before compose reads it)
+    assert_equal [File.join(@home, "bin", "setup"), "secrets"], systems[0]
+    assert_equal ["docker", "build", "-t", built, @home], systems[1]
+    backup = systems[2]
     assert_equal compose("exec", "-T", "web", "sqlite3", "/data/busyyaks.sqlite3"), backup[0..-2]
     assert_match(%r{\AVACUUM INTO '/data/backups/busyyaks-update-\d{8}T\d{6}Z\.sqlite3'\z}, backup.last)
     assert_equal [["docker", "tag", built, "busyyaks:local"],
                   compose("up", "-d", "--wait", "--no-build", *CLI::SERVICES),
-                  [File.join(@home, "deploy", "install-launcher.sh")],], systems.drop(2)
+                  [File.join(@home, "deploy", "install-launcher.sh")],], systems.drop(3)
     assert_includes out, "updated to v1.1.0 #{v11[0, 7]}"
     r = record
     assert_equal ["done", nil, "tags", @v1, v11, "v1.1.0"], r.values_at("state", "step", "mode", "from", "to", "name")

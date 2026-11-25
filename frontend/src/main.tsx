@@ -20,6 +20,8 @@ import "./styles/waiting.css";
 import "./styles/terminal.css";
 import "./styles/hello.css";
 import "./styles/runtime.css";
+import "./styles/project-rules.css";
+import "./styles/agent-rules.css";
 
 keepRemote(window.location.search, sessionStore());
 

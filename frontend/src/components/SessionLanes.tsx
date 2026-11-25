@@ -155,7 +155,7 @@ function Face({ l, size }: { l: LaneSession; size: number }) {
       title={`${l.tmux.attached ? "attached" : "detached"}${a?.unread ? " · unread: its turn ended since you last looked" : ""}`}
     >
       <AgentFace
-        // one source: the session's registration (unread or none → its tmux name and the neutral "unknown" type)
+        // one source: the session's registration (not read → its tmux name and the neutral "unknown" type)
         name={registered(l.reg)?.agent ?? l.tmux.name}
         type={registered(l.reg)?.type ?? null}
         mood={a ? moodOf({ state: a.state, phase: a.phase }) : null}
