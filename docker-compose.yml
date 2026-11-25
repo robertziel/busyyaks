@@ -101,6 +101,9 @@ x-app: &app
     GIT_READ_CPU_SECONDS: ${GIT_READ_CPU_SECONDS:?}
     GIT_READ_MEMORY_BYTES: ${GIT_READ_MEMORY_BYTES:?}
     GIT_READ_MAX_BLOB_BYTES: ${GIT_READ_MAX_BLOB_BYTES:?}
+    # the operator's global git excludes (.env GIT_EXCLUDES_FILE, mounted below as <this dir>/ignore): every git read
+    # counts dirty files as host `git status` does (lib/busyyaks/git_reader.rb, card #280)
+    GIT_EXCLUDES_DIR: /etc/busyyaks/git
     # the writer service (bin/writer, card #429): its socket (the web's workflow editor saves through it). Its sync
     # period and every other service's timing are Settings → Runtime (the database), not env
     WRITER_SOCKET: /data/run/writer.sock
@@ -109,6 +112,10 @@ x-app: &app
     - &vol_config ./config/busyyaks.yml:/app/config/busyyaks.yml:ro
     - &vol_kanban ./config/kanban.yml:/app/config/kanban.yml:ro
     - &vol_projects ${PROJECTS_ROOT:?}:${PROJECTS_MOUNT:?}:ro
+    # create_host_path: false — a missing file stops the service ("bind source path does not exist"); Docker would
+    # otherwise make a root-owned DIR there
+    - &vol_excludes { type: bind, source: "${GIT_EXCLUDES_FILE:?}", target: /etc/busyyaks/git/ignore, read_only: true,
+                      bind: { create_host_path: false } }
 
 # The host launcher's socket dir (.env LAUNCHER_RUN_DIR, outside ./data and PROJECTS_ROOT — bin/launcher refuses
 # otherwise): only web, mcp and notifier ask the launcher, so only they mount it — whoever reaches the socket launches
@@ -120,6 +127,7 @@ x-launcher-volumes: &launcher_volumes
   - *vol_config
   - *vol_kanban
   - *vol_projects
+  - *vol_excludes
   - { type: bind, source: "${LAUNCHER_RUN_DIR:?}", target: /launcher, bind: { create_host_path: false } }
 
 services:
@@ -198,6 +206,7 @@ services:
       - *vol_data
       - *vol_config
       - *vol_kanban
+      - *vol_excludes
       - ${PROJECTS_ROOT:?}:${PROJECTS_MOUNT:?}   # read-write: .busyyaks/ — workflow.yml, skills/agents/<type>.md (test/unit/compose_test.rb)
       # read-only: WHICH scanned repo is this checkout (Settings → Agent rules writes its skills layers through the
       # projects mount above, only into the repo whose skills/ is this very directory — never a clone or fork)
@@ -257,6 +266,7 @@ services:
       GIT_READ_CPU_SECONDS: "20"
       GIT_READ_MEMORY_BYTES: "1073741824"
       GIT_READ_MAX_BLOB_BYTES: "1048576"
+      GIT_EXCLUDES_DIR: /app/test/fixtures/git-excludes   # the suite's global excludes (test/unit/git_read_test.rb)
       # test:parallel's test processes at a time (.env, required): a run by hand; scripts/ci/test.sh sets the
       # public runner's CPUs (scripts/ci/runner.env) over it, with MT_CPU
       TEST_WORKERS: "${TEST_WORKERS:?}"

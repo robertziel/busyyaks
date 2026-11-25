@@ -10,7 +10,8 @@
 #   bin/setup secrets  only the secrets of an existing .env: a missing line appended, an empty one written, a set one
 #                      kept (what `yaks update` runs: a version that adds a secret never stops an update).
 #   bin/setup check    every value compose requires is set (each empty one named), HOST_UID:HOST_GID is this user,
-#                      PROJECTS_ROOT is an existing directory written as its real path, LAUNCHER_RUN_DIR is absolute,
+#                      PROJECTS_ROOT is an existing directory written as its real path, GIT_EXCLUDES_FILE an absolute
+#                      path of a plain file (no symlink), LAUNCHER_RUN_DIR is absolute,
 #                      .env is readable by you only; creates ./data and LAUNCHER_RUN_DIR (0700) as this user (and, with
 #                      COMPOSE_PROFILES=postgres, ./data/postgres + ./data/postgres-run) — compose never creates them,
 #                      and Docker would make them root's —, then `docker compose config -q` (compose's own reading).
@@ -297,6 +298,19 @@ SHAPE
       bad "PROJECTS_ROOT $root is not its real path: write $(cd "$root" && pwd -P) (no symlink, no trailing /)"
     fi
   fi
+
+  # the global git excludes every service mounts (card #280): compose mounts it as written, so a symlink is refused
+  excl=$(value GIT_EXCLUDES_FILE)
+  case "$excl" in
+    '') ;;
+    /*)
+      if [ -L "$excl" ]; then
+        bad "GIT_EXCLUDES_FILE $excl is a symlink: write the file it points at"
+      elif [ ! -f "$excl" ]; then
+        bad "GIT_EXCLUDES_FILE $excl is not a file: the file \`git config --global core.excludesFile\` names, else ~/.config/git/ignore written out; none → an empty file you create"
+      fi ;;
+    *) bad "GIT_EXCLUDES_FILE $excl is not an absolute path" ;;
+  esac
 
   run=$(value LAUNCHER_RUN_DIR)
   case "$run" in

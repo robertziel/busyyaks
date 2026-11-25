@@ -150,8 +150,8 @@ git clone https://github.com/robertziel/busyyaks && cd busyyaks
 # MCP_REPORT_TOKEN) and HOST_UID / HOST_GID, then lists the values left to fill
 bin/setup
 
-# fill what bin/setup listed — PROJECTS_ROOT, LAUNCHER_RUN_DIR, GITHUB_LOGIN, GITHUB_TOKEN, TEAM_TERMINAL_URL,
-# SSH_ATTACH_TEMPLATE — each explained above its line; groups 4-6 of .env work as shipped (SQLite, ports 8080 / 8081)
+# fill what bin/setup listed — PROJECTS_ROOT, GIT_EXCLUDES_FILE (your global git excludes; none → touch an empty
+# file), LAUNCHER_RUN_DIR, GITHUB_LOGIN, GITHUB_TOKEN, TEAM_TERMINAL_URL, SSH_ATTACH_TEMPLATE — each explained above its line; groups 4-6 of .env work as shipped (SQLite, ports 8080 / 8081)
 $EDITOR .env
 
 # every value compose requires set, HOST_UID = you, PROJECTS_ROOT a real directory; creates ./data and

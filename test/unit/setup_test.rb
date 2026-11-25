@@ -12,6 +12,10 @@ require_relative "../support/auto_loaded"
 
 # bin/setup in a copy of the checkout's files it reads: what it copies, writes, lists, creates and refuses.
 class SetupTest < Minitest::Test
+  # the required .env keys .env.example leaves empty
+  EMPTY_KEYS = %w[GITHUB_LOGIN GITHUB_TOKEN GIT_EXCLUDES_FILE LAUNCHER_RUN_DIR PROJECTS_ROOT SSH_ATTACH_TEMPLATE
+                  TEAM_TERMINAL_URL].freeze
+
   ROOT = File.expand_path("../..", __dir__)
   FILES = %w[bin/setup .env.example docker-compose.yml config/busyyaks.example.yml config/kanban.example.yml].freeze
   E = Busyyaks::EnvFile
@@ -55,7 +59,9 @@ class SetupTest < Minitest::Test
 
   def filled
     FileUtils.mkdir_p(projects = File.join(@tmp, "projects"))
-    { "PROJECTS_ROOT" => projects, "LAUNCHER_RUN_DIR" => File.join(@tmp, "state/run"), "GITHUB_LOGIN" => "octocat",
+    File.write(excludes = File.join(@tmp, "git-ignore"), "*.swp\n")
+    { "PROJECTS_ROOT" => projects, "GIT_EXCLUDES_FILE" => excludes, "LAUNCHER_RUN_DIR" => File.join(@tmp, "state/run"),
+      "GITHUB_LOGIN" => "octocat",
       "GITHUB_TOKEN" => "ghp_x", "TEAM_TERMINAL_URL" => "http://127.0.0.1:8080/",
       "SSH_ATTACH_TEMPLATE" => '"ssh -t devbox tmux attach -t {session}"', }
   end
@@ -73,7 +79,7 @@ class SetupTest < Minitest::Test
     assert_equal [Process.uid.to_s, Process.gid.to_s], e.values_at("HOST_UID", "HOST_GID")
     # the same list as the Ruby side's reading of docker-compose.yml (EnvFile.compose_required)
     empty = E.compose_required(File.read(File.join(@dir, "docker-compose.yml"))).select { e[_1].to_s.empty? }
-    assert_equal %w[GITHUB_LOGIN GITHUB_TOKEN LAUNCHER_RUN_DIR PROJECTS_ROOT SSH_ATTACH_TEMPLATE TEAM_TERMINAL_URL], empty
+    assert_equal EMPTY_KEYS, empty
     assert_equal empty, out[/Fill in .env.*\z/m].lines.drop(1).map(&:strip)
   end
 
@@ -93,10 +99,10 @@ class SetupTest < Minitest::Test
     setup!
     code, _, err = setup!("check")
     assert_equal 1, code
-    %w[GITHUB_LOGIN GITHUB_TOKEN LAUNCHER_RUN_DIR PROJECTS_ROOT SSH_ATTACH_TEMPLATE TEAM_TERMINAL_URL].each do |k|
+    EMPTY_KEYS.each do |k|
       assert_includes err, "FAIL  #{k} is empty in .env"
     end
-    assert_includes err, "6 problem(s)"
+    assert_includes err, "7 problem(s)"
     refute File.exist?(File.join(@dir, "data"))
     refute File.exist?(File.join(@tmp, "docker.log")), "compose is not asked while .env is incomplete"
   end
@@ -156,6 +162,22 @@ class SetupTest < Minitest::Test
     fill(v.merge("PROJECTS_ROOT" => File.join(@tmp, "nope")))
     _, _, err = setup!("check")
     assert_includes err, "PROJECTS_ROOT #{@tmp}/nope is not a directory"
+  end
+
+  # card #280: the global git excludes compose mounts into every service — an absolute path of a plain file
+  def test_check_refuses_a_git_excludes_file_compose_could_not_mount
+    setup!
+    v = filled
+    File.symlink(v["GIT_EXCLUDES_FILE"], link = File.join(@tmp, "ignore-link"))
+    [[link, "GIT_EXCLUDES_FILE #{link} is a symlink: write the file it points at"],
+     [File.join(@tmp, "none"), "GIT_EXCLUDES_FILE #{@tmp}/none is not a file"],
+     [@tmp, "GIT_EXCLUDES_FILE #{@tmp} is not a file"],
+     ["git-ignore", "GIT_EXCLUDES_FILE git-ignore is not an absolute path"],].each do |path, why|
+      fill(v.merge("GIT_EXCLUDES_FILE" => path))
+      code, _, err = setup!("check")
+      assert_equal 1, code, path
+      assert_includes err, why
+    end
   end
 
   # the minimums the app refuses to boot under, refused before compose; an empty secret points at bin/setup

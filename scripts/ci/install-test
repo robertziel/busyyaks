@@ -58,6 +58,7 @@ mkdir -p "$work/projects/demo" "$work/bin"
 # would leave it group-writable, which bin/setup check rightly refuses as LAUNCHER_RUN_DIR's ancestor
 chmod 700 "$work"
 git -C "$work/projects/demo" init -q -b main
+: > "$work/git-ignore"   # GIT_EXCLUDES_FILE: an empty global excludes file
 git -C "$work/projects/demo" -c user.name=ci -c user.email=ci@localhost commit -q --allow-empty -m "first commit"
 co=$work/busyyaks   # the checkout under test (a clone)
 
@@ -96,6 +97,7 @@ export WEB_PORT
 awk '
   BEGIN {
     v["PROJECTS_ROOT"] = ENVIRON["W"] "/projects"; v["LAUNCHER_RUN_DIR"] = ENVIRON["W"] "/state/run"
+    v["GIT_EXCLUDES_FILE"] = ENVIRON["W"] "/git-ignore"
     v["LAUNCHER_STATE_DIR"] = ENVIRON["W"] "/state/launcher"; v["CLAUDE_SESSIONS_DIR"] = ENVIRON["HOME"] "/.claude/sessions"
     v["GITHUB_LOGIN"] = "octocat"; v["GITHUB_TOKEN"] = "install-test-holds-no-github-token"
     v["TEAM_TERMINAL_URL"] = "http://127.0.0.1:" ENVIRON["WEB_PORT"] "/"  # no team terminal UI: the dashboard (.env.example)

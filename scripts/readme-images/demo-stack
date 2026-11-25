@@ -137,6 +137,7 @@ up() {
     "$IMAGE" "$w" | docker build -q -t "$LAUNCHER_IMAGE" - >/dev/null
 
   mkdir -p "$w/projects" "$w/data" "$w/config" "$w/session-records" "$w/collector"
+  : > "$w/git-ignore"   # GIT_EXCLUDES_FILE: an empty global excludes file
   # the launcher's socket dir and state dir: outside ./data, PROJECTS_ROOT and the checkout, this uid, 0700, under one
   # parent of this uid that the launcher container mounts as a whole (bin/launcher checks the parent's owner too)
   mkdir -p "$w/launcher/run" "$w/launcher/state"
@@ -204,6 +205,7 @@ HANAMI_MAX_THREADS=5
 HANAMI_WEB_CONCURRENCY=0
 PROJECTS_ROOT=$w/projects
 PROJECTS_MOUNT=/projects
+GIT_EXCLUDES_FILE=$w/git-ignore
 HOST_UID=$(id -u)
 HOST_GID=$(id -g)
 TZ=UTC
