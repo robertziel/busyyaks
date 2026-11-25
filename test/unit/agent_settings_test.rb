@@ -176,6 +176,46 @@ class AgentSettingsTest < Minitest::Test
     end
   end
 
+  # ONE reviewer per card, spawned once and continued with SendMessage every round: said in the worker's rules AND
+  # in the reviewer brief it hands over
+  def test_one_reviewer_per_card_continued_with_send_message
+    root = File.expand_path("../..", __dir__)
+    author = File.read(File.join(root, "skills/busyyaks/agents/worker.md"))
+    assert_match(/spawn ONE reviewer per card, once/, author)
+    assert_match(/CONTINUES that same\s+reviewer with `SendMessage`/, author)
+    assert_match(/never a\s+second\s+`Agent`\s+call/, author)
+    assert_match(/post on the card `reviewer spawned: reviewer-<card id> by <your tmux session>, round <n>`/, author)
+    brief = File.read(File.join(root, "skills/busyyaks/reviewer/SKILL.md"))
+    assert_match(/^dispatch: the worker, once per card on every board — one subagent, continued with `SendMessage`/,
+                 brief)
+    assert_match(/ONCE per card \(`name: "reviewer-<card id>"`\)/, brief)
+    assert_match(/Each later round = `SendMessage` to that\s+reviewer: .* never a new reviewer/m, brief)
+    assert_match(/You stay this card's reviewer for every round/, brief)
+  end
+
+  # each PR subagent loads its own skill: the worker's spawn prompt starts with the load line and never carries the
+  # brief; each brief says it was loaded by the subagent itself and to stop when it reached it any other way
+  def test_each_pr_subagent_loads_its_own_brief
+    root = File.expand_path("../..", __dir__)
+    author = File.read(File.join(root, "skills/busyyaks/agents/worker.md"))
+    assert_match(/spawn prompt's FIRST line is `Load the <name> skill with your skill\s+tool and follow the brief/, author)
+    assert_match(/follow the brief quoted in it\.` \(<name> = that skill's name in the "Load when needed" list\)/, author)
+    assert_match(/Never paste,\s+paraphrase or shorten a brief into the prompt/, author)
+    assert_match(/with several such lines the LATEST one decides/, author)
+    assert_match(/A subagent that cannot load its skill \(no skill tool, the name not\s+found\) reports that and stops/,
+                 author)
+    assert_match(/never a pasted brief instead/, author)
+    %w[qa reviewer critic].each do |s|
+      brief = File.read(File.join(root, "skills/busyyaks/#{s}/SKILL.md"))
+      # the load line names the skill by its frontmatter name: each of the three is a skill under that name
+      assert_equal s, YAML.safe_load(brief[/\A---\n(.*?)\n---\n/m, 1])["name"], s
+      assert_match(/Its prompt = the load\s+line of your rules \(it reads this file\s+itself\)/, brief, s)
+      assert_match(/never this\s+brief/, brief, s)
+      assert_match(/If you are the subagent that loaded this file: skip to the quoted brief/, brief, s)
+      assert_match(/^> You loaded this brief yourself with your skill tool\. If it reached you any other way/, brief, s)
+    end
+  end
+
   # the operator: "remove ones we don't use like plain!" — no agent type nobody uses: every type the shipped template
   # defines is started by something (the Launch bar, or its lead's kanban_spawn as the lead's rules say) and has its
   # rules file; no rules file, face colour or launcher is left for a type or command no type runs

@@ -5,10 +5,16 @@ dispatch: the worker, once QA passed and before the handoff into the operator's 
 ---
 # busyyaks critic brief
 
-Dispatch a fresh subagent with `model: "haiku"`. Give it ONLY the card's requirement (its description and the
-operator's comments, verbatim), the PR URL and the diff — never your reasoning, your plan or your summary of the
-change:
+*If you are the subagent that loaded this file: skip to the quoted brief — the lines before it are for your
+dispatcher.*
 
+Dispatch a fresh subagent with `model: "haiku"`. Its prompt = the load line of your rules (it reads this file
+itself), then ONLY the card's requirement (its description and the operator's comments, verbatim), the PR URL and
+the diff — never this brief, never your reasoning, your plan or your summary of the change:
+
+> You loaded this brief yourself with your skill tool. If it reached you any other way (pasted, summarised),
+> stop and tell your dispatcher so; work only from the skill.
+>
 > You are the Critic for card <id>, PR <url> (comment author `critic-<agent>`). You did not write this change and
 > you do not know why it was written this way: judge it against the requirement alone. Read-only: never edit, commit,
 > push, move the card, or start, stop or kill a session, container or PID you did not start yourself.
