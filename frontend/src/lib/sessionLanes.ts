@@ -98,16 +98,19 @@ export function regText(reg: LaneSession["reg"]): string {
   return ` · ${reg.type} · ${reg.launcher}`;
 }
 
-// The Working chip's phase word: the screen's phase; a running tool with its name; nothing on screen = "working"
+// The Working chip's phase word: the screen's phase; a running tool with its name; a turn that ended while its
+// background work runs = "waiting" + what ("waiting · 1 monitor"); nothing on screen = "working"
 export function phaseWord(a: AgentSession): string {
-  if (a.phase === "tool") return a.live.tool ? `tool · ${toolName(a.live.tool)}` : "tool";
-  return a.phase ?? "working";
+  const p = phaseParts(a);
+  return p.tool ? `${p.word} · ${p.tool}` : p.word;
 }
 
-// The phase as the chip draws it: the word (always shown whole: "tool", "thinking", "working") and the running tool's
-// name as a suffix the chip may cut (an ellipsis over the whole phase left "to…" / "thi…")
+// The phase as the chip draws it: the word (always shown whole: "tool", "thinking", "waiting", "working") and the
+// running tool's name / the background work as a suffix the chip may cut (an ellipsis over the whole phase left
+// "to…" / "thi…")
 export function phaseParts(a: AgentSession): { word: string; tool: string | null } {
   if (a.phase === "tool") return { word: "tool", tool: a.live.tool ? toolName(a.live.tool) : null };
+  if (a.phase === "background") return { word: "waiting", tool: a.live.background };
   return { word: a.phase ?? "working", tool: null };
 }
 

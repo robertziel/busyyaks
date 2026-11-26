@@ -211,10 +211,17 @@ export type AgentSession = {
   // its face: the open registration's agent name + type (null = not registered), the live phase = its mood
   agent: string | null;
   agent_type: string | null;
-  phase: "thinking" | "tool" | "writing" | "subagents" | null;
+  phase: "thinking" | "tool" | "writing" | "subagents" | "background" | null;
   // what its working screen shows now (the live line's evidence): the running tool's name, the turn's elapsed
-  // seconds + tokens ("↓ 1.6k"), the card a kanban tool acts on — null when the screen does not say
-  live: { tool: string | null; elapsed_s: number | null; tokens: string | null; card: number | null };
+  // seconds + tokens ("↓ 1.6k"), the card a kanban tool acts on, the background work its footer counts ("1 monitor",
+  // "3 shells") — null when the screen does not say
+  live: {
+    tool: string | null;
+    elapsed_s: number | null;
+    tokens: string | null;
+    card: number | null;
+    background: string | null;
+  };
   cards: AgentCard[];
   cards_finished: number;
   turn_ended_at: number | null;

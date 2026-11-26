@@ -1,0 +1,11 @@
+● Both runs are going; I report on the card when they finish.
+
+✻ Cooked for 2s · done 1:16 PM · 2 shells still running
+                                        ✔ Update installed · Restart to update
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 2 shells · ↓ to manage
+
+  ● main
+  ◯ general-purpose  waiting on 2 shells · Supervise the run · since…

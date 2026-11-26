@@ -124,9 +124,9 @@ module Busyyaks
         # its face: the registered agent name + type (nil = no open registration), the live phase = its mood
         agent: s.registration&.dig(:agent), agent_type: s.registration&.dig(:type), phase: s.live[:phase],
         # what its working screen shows now (the project page's Working lane; the live line's evidence):
-        # the tool's name, the turn's elapsed seconds + tokens, the card a kanban tool acts on — nil when
-        # the screen does not say
-        live: s.live.slice(:tool, :elapsed_s, :tokens, :card),
+        # the tool's name, the turn's elapsed seconds + tokens, the card a kanban tool acts on, the background
+        # work its footer counts ("1 monitor") — nil when the screen does not say
+        live: s.live.slice(:tool, :elapsed_s, :tokens, :card, :background),
         cards: s.open_cards.map do |c|
           agent_card(c, column_label: c[:column_label], column_type: c[:column_type], gate_hold: c[:gate_hold],
                         blocked_external: c[:blocked_external], approved_carried_on: c[:approved_carried_on])

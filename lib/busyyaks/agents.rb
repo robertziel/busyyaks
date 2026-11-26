@@ -81,12 +81,13 @@ module Busyyaks
       def model = panes.map { |p| p["model"] }.compact.first
 
       # what the session does now, for the card dialog's live line: its state + what a working screen shows
-      # (Busyyaks::AgentActivity: phase thinking / tool / writing, elapsed, tokens, the tool, the card a comment tool
-      # writes on — nil fields when the screen does not say) + its running subagents (nil = not reported)
+      # (Busyyaks::AgentActivity: phase thinking / tool / writing / subagents / background, elapsed, tokens, the tool, the
+      # card a comment tool writes on, the background work its footer counts — nil fields when the screen does not say)
+      # + its running subagents (nil = not reported)
       def live
         act = state == "working" ? screens.filter_map { |sc| sc["activity"] }.first : nil
         { state: state, state_by: state_by, phase: act&.dig("phase"), elapsed_s: act&.dig("elapsed_s"),
-          tokens: act&.dig("tokens"), tool: act&.dig("tool"), card: act&.dig("card"),
+          tokens: act&.dig("tokens"), tool: act&.dig("tool"), card: act&.dig("card"), background: act&.dig("background"),
           subagents: subagents_known? ? subagents : nil, }
       end
     end

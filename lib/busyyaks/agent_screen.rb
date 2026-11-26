@@ -34,6 +34,16 @@ module Busyyaks
     TASK_LIST = '(?:\n(?:[ \t]*\n)*[ \t]+\d+ tasks? \(\d+ done, (?:\d+ in progress, )?\d+ open\)' \
                 '(?:\n[ \t]+[◻◼✔][ \t]+[^\n]+)+(?:\n[ \t]+…[ \t]+\+\d+[ \t]+pending)?)?'
 
+    # A count of background work in the prompt box's footer — the ONE definition: the screen rule below and
+    # AgentActivity's label both read it. At the line's start or after a "·" / "," (a subagent row's "waiting on 1
+    # shell ·" is that subagent's, not the session's). A narrow pane cuts the footer with "…", possibly inside the kind
+    # word ("· 3 backgrou…"): any non-empty start of a kind word before the "…" still counts.
+    BACKGROUND_KINDS = { "shell" => "shells", "monitor" => "monitors", "background task" => "background tasks" }.freeze
+    KIND_WORDS = BACKGROUND_KINDS.flat_map { |one, many| [one, many] }.uniq.freeze
+    CUT_KINDS = KIND_WORDS.flat_map { |w| (1...w.size).map { |n| w[0, n] } }.uniq.reject { |p| p.end_with?(" ") }.freeze
+    BACKGROUND_TASKS = /(?:\A|[·,])\s*(?<n>[1-9]\d*)\s+(?:(?<kind>#{KIND_WORDS.sort_by { -_1.size }.map { Regexp.escape(_1) }
+      .join('|')})\s*(?=[·,…]|\z)|(?<cut>#{CUT_KINDS.sort_by { -_1.size }.map { Regexp.escape(_1) }.join('|')})…)/
+
     CLAUDE = [
       r("osc_title_working", "working", 1100, "osc_title", regex: [/\A[⠀-⣿◐-◓] /]),
       r("live_turn_working", "working", 970, "bottom_non_empty_lines(12)",
@@ -59,6 +69,11 @@ module Busyyaks
       r("mcp_elicitation_prompt", "blocked", 980, "whole_recent", contains: ["esc to cancel"],
         line_regex: [/\A\s*MCP server ["“].+["”] requests your input\s*\z/i],
         all: [{ any: [{ line_regex: [/\A\s*❯?\s*Accept\b/] }, { line_regex: [/\A\s*❯?\s*Decline\b/] }] }]),
+      # busyyaks's own rule (not herdr's): the turn ended, but work it started in the background still runs —
+      # the footer under a live prompt box counts it ("⏵⏵ bypass permissions on · 1 monitor · ↓ to manage", "· 3 shells ·",
+      # "· 3 background tasks ·"; frames: test/fixtures/screens/claude_background_*). It wakes the session when it ends:
+      # waiting on its own work, never idle. Above live_prompt_box; a dialog replaces the prompt box, so no footer is read.
+      r("background_tasks_working", "working", 960, "live_prompt_box_footer", line_regex: [BACKGROUND_TASKS]),
       r("live_prompt_box", "idle", 950, "prompt_box_body", line_regex: [/\A\s*❯/],
         not: [{ contains: ["enter to select"] }, { contains: ["esc to cancel"] }, { contains: ["tab/arrow keys"] },
               { contains: ["arrow keys to navigate"] }, { contains: ["↑/↓ to navigate"] },]),
@@ -143,6 +158,7 @@ module Busyyaks
         top = prompt_box_top(lines) or return ""
         body = lines[(top + 1)..]
         body.take_while { |l| !rule?(l) }.join("\n")
+      when "live_prompt_box_footer" then live_prompt_box_footer(lines)
       when "last_non_empty_above_prompt_box" then above_prompt_box(lines).reverse.find { |l| !l.strip.empty? }.to_s
       when "after_last_horizontal_rule"
         i = lines.rindex { |l| rule?(l) }
@@ -157,6 +173,30 @@ module Busyyaks
     def above_prompt_box(lines)
       top = prompt_box_top(lines)
       top ? lines[0...top] : lines
+    end
+
+    # Every count of background work in a live prompt box's footer, joined: "1 monitor", "1 shell · 1 monitor",
+    # "3 background tasks" (a kind cut by "…" named whole: "3 backgrou…" → "3 background tasks"); nil = none shown.
+    def background_work(screen)
+      footer = live_prompt_box_footer(screen.to_s.delete("\r").lines.map(&:chomp))
+      counts = footer.to_enum(:scan, BACKGROUND_TASKS).map do
+        m = Regexp.last_match
+        n = Integer(m[:n])
+        word = m[:kind] || KIND_WORDS.find { |w| w.start_with?(m[:cut]) }
+        one = BACKGROUND_KINDS.key?(word) ? word : BACKGROUND_KINDS.key(word)
+        "#{n} #{n == 1 ? one : BACKGROUND_KINDS.fetch(one)}"
+      end
+      counts.empty? ? nil : counts.join(" · ")
+    end
+
+    # the first non-empty line under the prompt box's bottom border, only while the box is a live prompt (a "❯" line in it)
+    def live_prompt_box_footer(lines)
+      top = prompt_box_top(lines) or return ""
+      rest = lines[(top + 1)..]
+      bottom = rest.index { |l| rule?(l) } or return ""
+      return "" unless rest[0...bottom].any? { |l| l.match?(/\A\s*❯/) }
+
+      rest[(bottom + 1)..].find { |l| !l.strip.empty? }.to_s
     end
 
     # the second horizontal rule from the bottom = the prompt box's top border

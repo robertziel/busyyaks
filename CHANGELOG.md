@@ -20,6 +20,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- An agent whose turn ended while work it started in the background still runs (a watch on its tests, a shell) no longer shows as `idle`: it shows as working, with how long it has waited — `⏳ 1 monitor · 6m` on the card face, `waiting on 1 monitor · 6m 37s` in the card's live line, `waiting · 1 monitor · 6m` on the project page and in the Agents sidebar, read from the count Claude Code shows under its prompt. Clear idle no longer stops such a session after 30 quiet minutes.
 - Card handoff: the screenshots of a UI change show once, in the card's Attachments — the handoff panel no longer repeats every picture attached to the card; its "UI change · N screenshots in Attachments ↓" brings that list into view; a handoff whose QA text embeds or links one of the card's attachments is refused, naming it.
 - Approve: a card whose pull request GitHub is still checking for conflicts (`mergeable: computing`, for a minute or two after any merge into its base) is approved instead of refused with 422; a conflict GitHub finds after the Approve holds the card's next step until it is rebased.
 - Scanner: a repo gone from the projects directory no longer counts in the daily stats and reports — its commit and daily rows are removed (read again if it comes back); a directory the scan cannot list keeps the rows of the repos under it and is named in the scan's error.

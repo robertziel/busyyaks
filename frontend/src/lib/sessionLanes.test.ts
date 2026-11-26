@@ -49,7 +49,7 @@ const agent = (name: string, state: AgentSession["state"], o: Partial<AgentSessi
     state_by: null,
     unread: false,
     phase: null,
-    live: { tool: null, elapsed_s: null, tokens: null, card: null },
+    live: { tool: null, elapsed_s: null, tokens: null, card: null, background: null },
     cards: [],
     asks: [],
     reviews: [],
@@ -133,7 +133,7 @@ describe("the Working chip", () => {
       phaseWord(
         agent("a", "working", {
           phase: "tool",
-          live: { tool: "busyyaks · kanban_comment", elapsed_s: 1, tokens: null, card: 7 },
+          live: { tool: "busyyaks · kanban_comment", elapsed_s: 1, tokens: null, card: 7, background: null },
         }),
       ),
     ).toBe("tool · kanban_comment");
@@ -145,12 +145,24 @@ describe("the Working chip", () => {
   it("phaseParts: the phase word whole + the tool's name apart", () => {
     const tool = agent("a", "working", {
       phase: "tool",
-      live: { tool: "busyyaks · kanban_comment", elapsed_s: 1, tokens: null, card: null },
+      live: { tool: "busyyaks · kanban_comment", elapsed_s: 1, tokens: null, card: null, background: null },
     });
     expect(phaseParts(tool)).toEqual({ word: "tool", tool: "kanban_comment" });
     expect(phaseParts(agent("a", "working", { phase: "tool" }))).toEqual({ word: "tool", tool: null });
     expect(phaseParts(agent("a", "working", { phase: "thinking" }))).toEqual({ word: "thinking", tool: null });
     expect(phaseParts(agent("a", "working"))).toEqual({ word: "working", tool: null });
+  });
+
+  // the turn ended, its background work runs (the footer's count) — waiting, never idle
+  it("a turn waiting on its background work: waiting + what the footer counts", () => {
+    const bg = (background: string | null) =>
+      agent("a", "working", {
+        phase: "background",
+        live: { tool: null, elapsed_s: null, tokens: null, card: null, background },
+      });
+    expect(phaseParts(bg("1 monitor"))).toEqual({ word: "waiting", tool: "1 monitor" });
+    expect(phaseWord(bg("3 shells"))).toBe("waiting · 3 shells");
+    expect(phaseWord(bg(null))).toBe("waiting");
   });
 
   it("elapsed as the status line writes it; unknown stays unknown", () => {
@@ -167,10 +179,10 @@ describe("the Working chip", () => {
     expect(chipCard(a)).toBeNull();
     const b = agent("a", "working", {
       cards: [card(3), card(4)],
-      live: { tool: "x", elapsed_s: 1, tokens: null, card: 4 },
+      live: { tool: "x", elapsed_s: 1, tokens: null, card: 4, background: null },
     });
     expect(chipCard(b)).toEqual({ id: 4, title: "card 4", path: "/projects/p?tab=board&card=4" });
-    const c = agent("a", "working", { live: { tool: "x", elapsed_s: 1, tokens: null, card: 99 } });
+    const c = agent("a", "working", { live: { tool: "x", elapsed_s: 1, tokens: null, card: 99, background: null } });
     expect(chipCard(c)).toEqual({ id: 99, title: null, path: null }); // not its own card: named, not linked to a guess
     expect(chipCard(agent("a", "working"))).toBeNull();
   });

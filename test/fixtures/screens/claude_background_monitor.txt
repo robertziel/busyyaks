@@ -1,0 +1,8 @@
+  Once the run passes: I push, open the PR and attach the screenshots.
+
+✻ Brewed for 6m 37s · done 1:25 PM · 1 monitor still running
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 monitor · ↓ to manage

@@ -132,7 +132,7 @@ mtime: Busyyaks::Clock.now.to_f, }],
                        subagents_running: 3,
                        screen: { state: "working", rule: "live_turn_working",
                                  activity: { phase: "tool", elapsed_s: 65, tokens: "↓ 1.6k", tool: "busyyaks · kanban_comment",
-                                             card: @tool_card, }, }, }], }
+                                             card: @tool_card, background: "1 shell", }, }, }], }
     unconfigured = { name: "elsewhere", socket: "default", attached: 0, created: 1, activity: 1,
                      panes: [{ target: "0.0", cwd: "/tmp", project_path: nil, engine: "codex", status: "idle", status_at: 100.0,
                                screen: { error: "engine \"codex\" is not configured (config/busyyaks.yml engines; known: " \
@@ -243,9 +243,11 @@ mtime: Busyyaks::Clock.now.to_f, }],
   def test_agents_carry_what_each_working_screen_shows
     fake_launcher
     j = api(:get, "/api/agents")
-    assert_equal({ "tool" => "busyyaks · kanban_comment", "elapsed_s" => 65, "tokens" => "↓ 1.6k", "card" => TOOL_CARD },
-                 agent(j, "group_repo")["live"])
-    assert_equal({ "tool" => nil, "elapsed_s" => nil, "tokens" => nil, "card" => nil }, agent(j, "by_asker")["live"])
+    # the background work its footer counts rides along ("1 shell": a live turn keeps its own phase)
+    assert_equal({ "tool" => "busyyaks · kanban_comment", "elapsed_s" => 65, "tokens" => "↓ 1.6k", "card" => TOOL_CARD,
+                   "background" => "1 shell", }, agent(j, "group_repo")["live"])
+    assert_equal({ "tool" => nil, "elapsed_s" => nil, "tokens" => nil, "card" => nil, "background" => nil },
+                 agent(j, "by_asker")["live"])
   end
 
   # a card blocked on the world (another card, CI, a third party) is not the operator's to answer — its owner
@@ -427,13 +429,14 @@ mtime: Busyyaks::Clock.now.to_f, }],
     assert_equal 200, last_response.status
     assert_equal %w[by_asker group_repo], j["sessions"].keys.sort # "elsewhere" runs outside this project
     assert_equal({ "state" => "working", "state_by" => "screen: live_turn_working", "phase" => "tool", "elapsed_s" => 65,
-                   "tokens" => "↓ 1.6k", "tool" => "busyyaks · kanban_comment", "card" => TOOL_CARD, "subagents" => 3, },
+                   "tokens" => "↓ 1.6k", "tool" => "busyyaks · kanban_comment", "card" => TOOL_CARD,
+                   "background" => "1 shell", "subagents" => 3, },
                  j["sessions"]["group_repo"])
     # only the verdict's fields, for every session: no screen text, no dialog (its question / command is the sidebar's)
-    fields = %w[state state_by phase elapsed_s tokens tool card subagents]
+    fields = %w[state state_by phase elapsed_s tokens tool card background subagents]
     j["sessions"].each_value { |v| assert_equal fields, v.keys }
     assert_equal({ "state" => "blocked", "state_by" => "screen: bash_permission_prompt", "phase" => nil, "elapsed_s" => nil,
-                   "tokens" => nil, "tool" => nil, "card" => nil, "subagents" => nil, },
+                   "tokens" => nil, "tool" => nil, "card" => nil, "background" => nil, "subagents" => nil, },
                  j["sessions"]["by_asker"])
 
     # the owner session counts wherever it runs
@@ -541,7 +544,8 @@ mtime: Busyyaks::Clock.now.to_f, }],
     assert_equal 1, asks.() # the sidebar and two board polls of a 4-card board: one launcher call
     assert_equal %w[by_asker elsewhere group_repo], j["sessions"].keys.sort # "elsewhere" owns a card on this board
     assert_equal({ "state" => "working", "state_by" => "screen: live_turn_working", "phase" => "tool", "elapsed_s" => 65,
-                   "tokens" => "↓ 1.6k", "tool" => "busyyaks · kanban_comment", "card" => 7, "subagents" => 3, },
+                   "tokens" => "↓ 1.6k", "tool" => "busyyaks · kanban_comment", "card" => 7, "background" => "1 shell",
+                   "subagents" => 3, },
                  j["sessions"]["group_repo"])
     assert_equal "idle", j["sessions"]["elsewhere"]["state"]
     Hanami.app["db.gateway"].connection[:cards].where(id: owned).update(owner_session: nil)
