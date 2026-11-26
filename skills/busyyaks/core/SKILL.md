@@ -53,7 +53,8 @@ release when the operator agrees, move on.
 - Opened a pull request for a card → `kanban_pr_assign(id, pr_url, role, author)` at once — every PR, on every repo
   the card changes (it adds). The board knows a card's PRs only from these assignments. A PR that is not the card's →
   `kanban_pr_unassign(id, pr_url, author, reason)`.
-- Work done → `kanban_handoff` (how to check it, PR, CI, screenshots for a UI change): the only way into a gate. A gate
+- Work done → `kanban_handoff` (how to check it, PR, CI; a UI change's screenshots attached first with `kanban_attach`:
+  they show in Attachments, never in the qa): the only way into a gate. A gate
   that waits for green CI refuses the handoff while the PR's checks are unread, pending or red — Monitor CI, hand off again.
 
 ## Approval and merging
