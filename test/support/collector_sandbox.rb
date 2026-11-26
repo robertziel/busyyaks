@@ -80,7 +80,7 @@ module CollectorSandbox
       "agents" => { "collector" => { "snapshot" => File.join(@coll, "sessions.json"),
                                      "read_socket" => File.join(@coll, "read.sock"), "tmux_timeout_seconds" => 2,
                                      "answer_timeout_seconds" => 9, } },
-      "dictation" => "none", "terminal" => { "public_host" => "deny", "max_open" => 4 },
+      "terminal" => { "public_host" => "deny", "max_open" => 4 },
       "ci" => { "max_pending_minutes" => 60, "required" => { "o/r" => ["jenkins/ci"] } },
       "skills" => { "max_bytes" => 65_536, "max_start_bytes" => 32_768, "project" => "allow", "local_dir" => nil },
       "updates" => { "remote" => "origin", "branch" => "main", "tags" => "v*", "channel" => "tags", "check_minutes" => 60 },

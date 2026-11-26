@@ -7,11 +7,16 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Settings → Dictation**: the card dialog's mic is set on a page — on / off, the speech server's model picked from the models the server lists (a model it does not serve is refused on Save), the timeout and the longest recording, a **Test** button, and the revisions kept; a save applies to the next recording without a restart. The speech server's URL and token are set there too (**Connect** reads its models; the token is never shown back, and a new URL needs its token typed again).
 - Board card faces: a small tag beside the assignee's face says what its agent is doing now — thinking / the tool it runs and for how long, `needs you` when it is stopped on a dialog, and while it is idle what the card waits for (`waiting for your answer`, `waiting for CI`, `blocked externally`, `waiting for you`), else `idle`; `not running` when its session is gone.
 - Card dialog: the comment box stays at the bottom of the card while it scrolls, so writing a comment needs no scrolling; a long draft scrolls inside the box, and a "Write a comment" button (keyboard focus, top of the card) jumps to it.
 - Comment actions: a card's comment box offers **Comment** (pings the owner, no move) and one **Comment & <transition> → <column>** button per workflow transition marked `comment: true` out of the card's column — the comment is posted and the card moved in one step. Marked per transition in the board (`.busyyaks/workflow.yml` or the Workflow editor's "Comment action" checkbox), never in code.
 - Tab alert: a card that starts waiting for you (a question or a gate) while busyyaks is not in front of you puts `(N new)` in the tab title and a dot on the favicon, and sets the page's theme colour; looking at the tab clears them, even while the card still waits.
 - Priority orders the work on our side: a card's priority (high → medium → low → none, then the oldest) decides which card a lead adopts and hands a worker first, which ping a session is typed first, and the merge order — the **approved queue** of the cards approved into one column (e.g. Awaiting merge), shown on the card face as "⇅ queue n/m" and named in the approve ping. Order only: nothing is refused for it.
+
+### Changed
+
+- Dictation's settings moved from `config/busyyaks.yml` to the database: a `dictation` key there stops the web boot with the steps to move it (`bin/dictation-settings import`); `.env` `DICTATION_URL` / `DICTATION_TOKEN` are gone — `bin/setup check` refuses them, set the server on the page.
 
 ### Fixed
 
@@ -20,6 +25,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - Scanner: a repo gone from the projects directory no longer counts in the daily stats and reports — its commit and daily rows are removed (read again if it comes back); a directory the scan cannot list keeps the rows of the repos under it and is named in the scan's error.
 - Project page: the session list follows started and ended sessions without a reload, and while the launcher is down it keeps the last list, dimmed, with the launcher's error.
 - Folder-trust prompt: a session started in a repo busyyaks does not trust shows Claude Code's trust prompt on the page as a question with its two choices ("No, exit" / "Yes, I trust this folder"); your click moves the cursor onto the choice, checked on the screen, and presses Enter. The prompt draws its choices without numbers, so before this the session showed as blocked with nothing to press.
+- Dictation with a speech server whose word timings carry no leading space (OpenAI, NVIDIA Parakeet on vLLM / NeMo): the words were run together ("Movethecard"); each word's space is now read from the answer's text, and an answer whose words are not in its text is refused with the reason.
 - Live pages (the board, the waiting widget, Today): a refresh that fails after a change is retried on the next poll and shown as "live · error" until it lands — a card moved on the server no longer stays in its old column under a green live mark.
 - Projects: a repo whose HEAD is detached shows `detached @ <sha7>` (the full sha on hover, found by search) instead of an empty branch; the upgrade's migration clears every stored empty branch, and the next scan fills in the sha.
 - Card tables: a link chip (commit, branch, PR) in a table cell stays one pill on one line — a commit shows its sha (the subject on hover), a long label is cut with an ellipsis, and a table wider than the card scrolls inside itself; a table written with an empty header row (`| | |`) draws no empty band above its rows.

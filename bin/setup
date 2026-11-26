@@ -32,6 +32,9 @@ MIN_MCP_TOKEN_CHARS=32        # lib/busyyaks/mcp_server.rb McpServer::MIN_TOKEN_
 # the git host's keys moved to Settings → Git hosts (lib/busyyaks/git_hosts.rb): `check` refuses a .env that
 # still has one, naming the one-time import
 GIT_HOSTS_MOVED="GITHUB_LOGIN GITHUB_TOKEN"
+# the speech server moved to Settings → Dictation (lib/busyyaks/dictation_settings.rb; card 634): `check` refuses a .env
+# that still has one
+DICTATION_MOVED="DICTATION_URL DICTATION_TOKEN"
 RUNTIME_MOVED="SCAN_INTERVAL_SECONDS WRITER_SYNC_SECONDS GITHUB_INTERVAL_SECONDS GITHUB_CI_INTERVAL_SECONDS NOTIFIER_INTERVAL_SECONDS NOTIFIER_WATCH_SECONDS WATCHDOG_GRACE_SECONDS"
 
 dir=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -253,9 +256,6 @@ SHAPE
       [ -n "$(value "$k")" ] || bad "$k is empty in .env: DATABASE_ADAPTER=postgresql needs it (.env group 5, Database)"
     done
   fi
-  case "$(value DICTATION_TOKEN)" in
-    *[[:space:]]* | *[[:cntrl:]]*) bad "DICTATION_TOKEN has whitespace or control characters: the web app refuses it" ;;
-  esac
   # the services' timing moved to Settings → Runtime (the database): a line left here would look like it
   # still sets something; no service reads it
   for k in $RUNTIME_MOVED; do
@@ -274,6 +274,14 @@ SHAPE
       bad "$k moved to Settings → Git hosts: connect GitHub there, or import these lines once" \
         "(docker compose up -d --wait web github, then docker compose exec -T github bin/git-hosts import-env < .env)," \
         "then delete GITHUB_LOGIN and GITHUB_TOKEN from .env (docs/DEPLOY.md § Git hosts)"
+    fi
+  done
+
+  # the speech server (URL + token) moved to Settings → Dictation (card 634): no service reads these lines any more
+  for k in $DICTATION_MOVED; do
+    if grep -q "^[[:space:]]*$k=" .env; then
+      bad "$k moved to Settings → Dictation (card 634): type the server's URL and token there, then delete" \
+        "DICTATION_URL and DICTATION_TOKEN from .env (docs/DEPLOY.md § Dictation)"
     fi
   done
 

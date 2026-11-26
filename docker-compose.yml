@@ -139,9 +139,6 @@ services:
     environment: { <<: *env, HANAMI_PORT: "${WEB_CONTAINER_PORT:?}", LOG_LEVEL: info, GIT_HOSTS_SOCKET: /git-hosts-run/git-hosts.sock,
                    HANAMI_MAX_THREADS: "${HANAMI_MAX_THREADS:?}", HANAMI_MIN_THREADS: "${HANAMI_MIN_THREADS:?}",
                    HANAMI_WEB_CONCURRENCY: "${HANAMI_WEB_CONCURRENCY:?}", LAUNCHER_SOCKET: /launcher/launcher.sock,
-                   # the speech server for the card dialog's mic (config/busyyaks.yml dictation): web only,
-                   # declared in .env, empty with `dictation: none` (config/puma.rb checks they match)
-                   DICTATION_URL: "${DICTATION_URL?}", DICTATION_TOKEN: "${DICTATION_TOKEN?}",
                    # the GitHub webhook's HMAC secret (config/busyyaks.yml github_hook; card #472): web only,
                    # declared in .env, empty with `github_hook: none` (config/puma.rb checks they match)
                    GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET?}" }

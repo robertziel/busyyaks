@@ -8,22 +8,17 @@ require "tmpdir"
 class ConfigTest < Minitest::Test
   OK = { "roots" => [{ "path" => "/p", "prefix" => "" }], "search_depth" => 2, "owner_remotes" => ["github.com/me/"],
          "author_emails" => ["Me@x.io"], "window_days" => 7, "reap_protect" => [], "auth" => { "provider" => "none" },
-         "agents" => { "collector" => "none" }, "dictation" => "none",
+         "agents" => { "collector" => "none" },
          "terminal" => TERMINAL_DENY, "github_hook" => "none", "ci" => CI_SETTINGS, "skills" => SKILLS_SETTINGS,
          "updates" => UPDATES_SETTINGS,
          "launch" => LAUNCH_CLAUDE, }.freeze
 
   def test_valid = assert_equal ["me@x.io"], Busyyaks::Config.new(OK).author_emails
 
-  # dictation is required — none, or the speech server's model + limits (Busyyaks::Dictation.parse!)
-  def test_dictation_is_required_none_or_the_three_keys
-    assert_nil Busyyaks::Config.new(OK).dictation
-    on = { "model" => "whisper-1", "timeout_seconds" => 30, "max_seconds" => 120 }
-    assert_equal 120, Busyyaks::Config.new(OK.merge("dictation" => on)).dictation.max_seconds
-    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.except("dictation")) }
-    assert_match(/missing keys: dictation/, e.message)
-    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.merge("dictation" => on.except("model"))) }
-    assert_match(/dictation must be `none` or a mapping with exactly/, e.message)
+  # card 634: what the mic runs moved to Settings → Dictation; the old block is refused with the way to move it
+  def test_a_dictation_block_is_refused_naming_the_move
+    e = assert_raises(Busyyaks::Config::Invalid) { Busyyaks::Config.new(OK.merge("dictation" => "none")) }
+    assert_match(%r{dictation moved to the database: Settings → Dictation edits it.*bin/dictation-settings import}, e.message)
   end
 
   # The skills bin/launcher hands each session are stated — limits, project skills, the deployment's dir

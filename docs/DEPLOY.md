@@ -578,27 +578,37 @@ refused with the reason; a combo another app on the computer takes never reaches
 the modifiers but never the key, and says so). You speak, the words
 appear in the comment while you talk (2.5 s windows, the words two passes agree on are kept, the rest shown as it
 settles), and Save posts it like a typed comment. The text is read-only while it records; a failed window shows the
-server's reason under the box and is retried. Off by default (`dictation: none`: no mic anywhere).
+server's reason under the box and is retried. Off by default (no Settings → Dictation revision: no mic anywhere).
 
 ```
 browser (16 kHz mono WAV windows) ── POST /api/dictation (session + CSRF) ──▶ web ── multipart ──▶ speech server
-                                                                                     DICTATION_URL /v1/audio/transcriptions
+                                                                     Settings → Dictation's URL /v1/audio/transcriptions
 ```
 
 The speech server is any **OpenAI-compatible** `POST /v1/audio/transcriptions` that answers `verbose_json` with word
 timings (`words`, or `segments[].words`; both `timestamp_granularities[]=word` and `timestamp_granularities=word` are
-sent): OpenAI itself, a faster-whisper server, a vLLM fleet's load balancer serving a whisper model. Its URL and token
-stay in the web container (`.env`), never in the browser.
+sent): OpenAI itself, a faster-whisper server, a vLLM fleet's load balancer serving a whisper or parakeet model. Its
+URL and token are Settings → Dictation's; the web calls it, the browser never does, and no answer carries the token.
 
 | where | key | value |
 |---|---|---|
-| `config/busyyaks.yml` | `dictation` | `none`, or `{model: <the server's model id>, timeout_seconds: 1..300, max_seconds: 30..600}` (30 = the mic's longest window) |
-| `.env` (web only) | `DICTATION_URL` | the server's base or full endpoint, http(s); empty with `none` |
-| `.env` (web only) | `DICTATION_TOKEN` | its bearer; empty = none sent; empty with `none` |
+| **Settings → Dictation** (`/settings/dictation`, the cog) | on / off · URL · token · model · timeout · longest | revisions in table `dictation_settings` (newest = current, every one kept; nothing seeded = off). **URL** = the server's base or full endpoint, http(s), no credentials / query / fragment; empty only while off. **Token** = its bearer, empty = none sent; write-only: the page shows only "saved · …abcd" (a long token's last 4), stored in the database in clear (every service reads that database: use a token for this server only; every revision is kept, so a replaced token stays readable in the older rows — revoke it on the server when you rotate); a changed URL needs its token typed again or **None** — the saved bearer is never sent to another URL. **Connect** = the typed server's `GET /v1/models`, nothing saved. The model is picked from that list; an enabled one the server does not list (or a server that cannot be read) is refused on Save; `timeout_seconds` 1..300, `max_seconds` 30..600 (30 = the mic's longest window); **Test** = 1 s of silence through the form's server + model, nothing saved; the next recording uses a save, no restart. Over `http://` the token travels in clear: https across a network, http only on loopback / a docker network |
 | `.env` (optional) | `COMPOSE_FILE`, `DICTATION_NETWORK` | a server reachable only on a docker network (below) |
 
-The web boot (`config/puma.rb`) refuses a config and env that disagree. `/api/dictation`: 404 off · 400 not that WAV ·
+`bin/setup check` refuses an old `.env` `DICTATION_URL` / `DICTATION_TOKEN` line (type them on the page, then delete
+both lines). `/api/dictation`: 404 off · 400 not that WAV ·
 413 longer than `max_seconds` · 502 the server unreachable, timed out or erroring (its reason) · 503 misconfigured.
+`GET/POST /api/settings/dictation` (`{base, doc}`, `doc.token` null = keep the saved one (same URL only): 409 stale
+base, 422 refused) · `POST /api/settings/dictation/models` (`{url, token}` → `{models, models_error}`, 422 refused) ·
+`POST /api/settings/dictation/test` (`{doc}` → `{text, words, ms}`, 422 refused, 502 the server's error). From a shell:
+`docker compose exec -T web bin/dictation-settings show | import < file.yml`.
+
+**Moving off `config/busyyaks.yml`** (card 634): the web boot refuses a `dictation` key there, naming the move.
+Either type it on the page, or copy the block into a file and add `url` + `token` (the old `.env` `DICTATION_URL` /
+`DICTATION_TOKEN`; `""` = none) (`{model, timeout_seconds, max_seconds, url, token}` = on; `none` = nothing to
+import), delete the block from `config/busyyaks.yml` and both lines from `.env`, restart web, then
+`docker compose exec -T web bin/dictation-settings import < file.yml` (checked like a Save: the model must be one the
+server lists), and delete the file.
 
 **No speech server yet?** Run one on the same host (CPU; a GPU image `0.8.3-cuda` exists), then download a model into it:
 
@@ -618,12 +628,11 @@ bridge onto that existing network, where the server answers by its container nam
 ```sh
 COMPOSE_FILE=docker-compose.yml:docker-compose.dictation-network.yml
 DICTATION_NETWORK=speech-clients              # docker network ls; must exist, not --internal
-DICTATION_URL=http://speaches:8000            # the server's container name on that network
-DICTATION_TOKEN=
 ```
 
-and `dictation: {model: Systran/faster-whisper-small, timeout_seconds: 30, max_seconds: 120}`; then
-`docker compose up -d --no-build web`. Check: open a card, press the mic (the browser asks for the microphone once:
+then `docker compose up -d --no-build web`, and on **Settings → Dictation**: URL `http://speaches:8000` (the server's
+container name on that network), token None, Connect, Mic on, the model (e.g.
+`Systran/faster-whisper-small`), timeout 30, longest 120, Test, Save. Check: open a card, press the mic (the browser asks for the microphone once:
 https or localhost only), speak, stop — the words are in the box.
 
 ## Terminals (an agent's live screen)

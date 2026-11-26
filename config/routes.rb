@@ -116,6 +116,10 @@ module Busyyaks
     post "/api/settings/daily-report", to: "api.daily_report_settings.save"
     get "/api/settings/runtime", to: "api.runtime_settings.show"   # Settings → Runtime: the services' timing
     post "/api/settings/runtime", to: "api.runtime_settings.save"
+    get "/api/settings/dictation", to: "api.dictation_settings.show"   # Settings → Dictation: what the mic runs (card 634)
+    post "/api/settings/dictation", to: "api.dictation_settings.save"
+    post "/api/settings/dictation/test", to: "api.dictation_settings.test"
+    post "/api/settings/dictation/models", to: "api.dictation_settings.models"
     get "/api/settings/git-hosts", to: "api.git_hosts.show"         # Settings → Git hosts: GitHub / GitLab
     post "/api/settings/git-hosts", to: "api.git_hosts.connect"
     delete "/api/settings/git-hosts", to: "api.git_hosts.disconnect"

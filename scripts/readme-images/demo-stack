@@ -170,7 +170,6 @@ window_days: 7
 auth: { provider: none, allow_unauthenticated: true }
 reap_protect: []
 agents: { collector: { snapshot: $w/collector/snapshot.json, read_socket: $w/collector/read.sock, tmux_timeout_seconds: 5, answer_timeout_seconds: 30 } }
-dictation: none
 terminal: { public_host: deny, max_open: 4 }
 skills: { max_bytes: 65536, max_start_bytes: 32768, project: deny, local_dir: null }
 github_hook: none

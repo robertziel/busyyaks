@@ -8,7 +8,6 @@ require_relative "owner_remotes"
 require_relative "launch_trust"
 require_relative "launcher_rules"
 require_relative "agent_settings"
-require_relative "dictation"
 require_relative "terminal"
 require_relative "github_hook"
 require_relative "ci_settings"
@@ -21,12 +20,12 @@ module Busyyaks
   class Config
     class Invalid < StandardError; end
 
-    KEYS = %w[roots search_depth owner_remotes author_emails window_days reap_protect auth agents launch dictation
+    KEYS = %w[roots search_depth owner_remotes author_emails window_days reap_protect auth agents launch
               terminal github_hook ci skills updates].freeze
     OPTIONAL = %w[engines daily_report_runners].freeze
     attr_reader :roots, :search_depth, :owner_remotes, :author_emails, :window_days, :reap_protect, :engines,
                 :daily_report_runners, :auth, :agent_collector, :trusted_paths, :launch_commands,
-                :launch_start_seconds, :launch_scopes, :dictation, :terminal, :github_hook, :ci, :skills, :updates
+                :launch_start_seconds, :launch_scopes, :terminal, :github_hook, :ci, :skills, :updates
 
     # mount: where compose mounts PROJECTS_ROOT (.env PROJECTS_MOUNT, the one place it is set): every root is under it.
     def self.load(path = ENV.fetch("BUSYYAKS_CONFIG"), mount: ENV.fetch("PROJECTS_MOUNT"))
@@ -55,6 +54,12 @@ module Busyyaks
                        "1. copy the daily_report block into a file; 2. replace it here by daily_report_runners: " \
                        "[{type, command, home}] (its runner's); 3. `bin/daily-report-settings import < file` " \
                        "(docs/DAILY-REPORT.md § Moving off config/busyyaks.yml)"
+      end
+      if hash.key?("dictation")
+        raise Invalid, "dictation moved to the database: Settings → Dictation edits it. Move it: " \
+                       "type it on that page, or 1. copy the dictation block into a file and add url + token " \
+                       "(the old .env DICTATION_URL / DICTATION_TOKEN); 2. delete it here; 3. restart web; " \
+                       "4. `bin/dictation-settings import < file` (docs/DEPLOY.md § Dictation)"
       end
       unknown = hash.keys - KEYS - OPTIONAL
       missing = KEYS - hash.keys
@@ -112,12 +117,6 @@ module Busyyaks
       begin
         @engines = Engines.load(hash["engines"])
       rescue Engines::Invalid => e
-        raise Invalid, e.message
-      end
-      begin
-        # the card dialog's mic (Dictation): none, or {model, timeout_seconds, max_seconds}
-        @dictation = Dictation.parse!(hash["dictation"])
-      rescue Dictation::Invalid => e
         raise Invalid, e.message
       end
       begin
