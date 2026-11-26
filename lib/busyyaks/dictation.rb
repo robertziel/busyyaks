@@ -9,14 +9,12 @@ require "uri"
 module Busyyaks
   # Dictation: the card dialog's mic sends 16 kHz mono 16-bit WAV windows to POST /api/dictation, which
   # forwards each to the deployment's speech server — any OpenAI-compatible POST /v1/audio/transcriptions (a vLLM
-  # fleet's load balancer serving whisper, vexa's transcription service, a faster-whisper server) — and answers
-  # {text, words}. The server's URL and token stay in the web container; the browser never sees them.
+  # fleet's load balancer serving whisper or parakeet, vexa's transcription service, a faster-whisper server) — and
+  # answers {text, words}. The server's URL and token stay on the server side; the browser never sees the token.
   #
-  # What it is lives in config/busyyaks.yml `dictation` (required): `none` = no mic anywhere, or
-  # {model, timeout_seconds, max_seconds}. Where it is wired is env, only in the web service: DICTATION_URL (the base
-  # or the full endpoint; required when on) + DICTATION_TOKEN (the bearer; empty = the server takes none, e.g. one
-  # reached only inside docker). Both env keys must be declared — both empty with `none`: a mismatch stops the web
-  # boot (config/puma.rb), never a guess.
+  # All of it is Settings → Dictation (Busyyaks::DictationSettings, card 634: on/off, the server's URL + token, model,
+  # timeout_seconds, max_seconds — revisions in the database). Nothing about the server is env any more: the old
+  # .env DICTATION_URL / DICTATION_TOKEN are refused by bin/setup check, naming the move.
   module Dictation
     class Invalid < StandardError; end
     class Refused < StandardError; end      # the recording itself: not a WAV we send, too long → 400 / 413
@@ -30,18 +28,17 @@ module Busyyaks
     # the mic's longest window (the engine's lib/dictation.ts MAX_WINDOW_SEC): a smaller max_seconds would refuse it
     MIN_WINDOW_SECONDS = 30
 
-    Settings = Struct.new(:model, :timeout_seconds, :max_seconds, keyword_init: true) do
+    # url = the endpoint (URI, endpoint!), token = the bearer or nil (token!) — set by DictationSettings.settings!
+    Settings = Struct.new(:model, :timeout_seconds, :max_seconds, :url, :token, keyword_init: true) do
       def max_bytes = HEADER + (max_seconds * SAMPLE_RATE * 2)
     end
 
     module_function
 
-    # config/busyyaks.yml `dictation` → Settings, or nil for `none`
+    # {model, timeout_seconds, max_seconds} (a Settings → Dictation revision's, DictationSettings) → Settings
     def parse!(value)
-      return nil if value == "none"
-
       unless value.is_a?(Hash) && value.keys.sort == KEYS.sort
-        raise Invalid, "dictation must be `none` or a mapping with exactly #{KEYS.join(', ')} (config/busyyaks.example.yml)"
+        raise Invalid, "dictation needs exactly #{KEYS.join(', ')}"
       end
       model = value["model"]
       unless model.is_a?(String) && !model.strip.empty?
@@ -59,47 +56,70 @@ module Busyyaks
       v
     end
 
-    # The web service's boot check: the env matches the config (both keys declared; set exactly when dictation is on).
-    def boot!(settings, env)
-      missing = %w[DICTATION_URL DICTATION_TOKEN].reject { |k| env.key?(k) }
-      raise Invalid, "#{missing.join(', ')} not in the web service's env (.env.example § dictation)" if missing.any?
-
-      if settings.nil?
-        set = %w[DICTATION_URL DICTATION_TOKEN].reject { |k| env[k].to_s.empty? }
-        if set.any?
-          raise Invalid, "#{set.join(', ')} set but config/busyyaks.yml dictation is none: empty them or configure dictation"
-        end
-
-        return nil
-      end
-      client(settings, env)
-    end
-
-    # → Client for this deployment; nil = dictation is off
-    def client(settings, env)
+    # → Client for these settings (their url + token); nil = dictation is off.
+    def client(settings, http: nil)
       return nil if settings.nil?
 
-      Client.new(settings, url: endpoint!(env.fetch("DICTATION_URL")), token: token!(env.fetch("DICTATION_TOKEN")))
+      Client.new(settings, url: settings.url, token: settings.token, http: http)
+    end
+
+    # The model ids the server at `url` lists (OpenAI-compatible GET /v1/models, next to the transcription endpoint) —
+    # what Settings → Dictation offers and checks a save against. Unreachable, an error answer or no list →
+    # Unavailable with the reason.
+    def models(url:, token:, timeout:, http: nil)
+      uri = url.dup
+      uri.path = "#{uri.path.delete_suffix(PATH)}/v1/models"
+      status, body = (http || method(:get)).call(uri, token, timeout)
+      raise Unavailable, "speech server answered #{status} to GET #{uri.path}" unless status == 200
+
+      data = JSON.parse(body)["data"] if body.start_with?("{")
+      ids = Array(data).map { |m| m["id"] if m.is_a?(Hash) }
+      raise Unavailable, "speech server's GET #{uri.path} answered no model list" unless data.is_a?(Array) && ids.all?(String)
+
+      ids
+    rescue JSON::ParserError
+      raise Unavailable, "speech server's GET /v1/models answered no JSON"
+    end
+
+    def get(uri, token, timeout)
+      Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https", open_timeout: timeout, read_timeout: timeout) do |h|
+        req = Net::HTTP::Get.new(uri.request_uri)
+        req["Authorization"] = "Bearer #{token}" if token
+        req["Accept"] = "application/json"
+        r = h.request(req)
+        [r.code.to_i, r.body.to_s]
+      end
+    rescue Net::OpenTimeout, Net::ReadTimeout
+      raise Unavailable, "speech server timed out after #{timeout} s"
+    rescue Net::HTTPBadResponse, Net::ProtocolError, SocketError, SystemCallError, IOError, OpenSSL::SSL::SSLError => e
+      raise Unavailable, "speech server unreachable: #{e.class}: #{e.message}"
+    end
+
+    # One second of silence in the mic's WAV (Settings → Dictation's Test: the chosen model answers with its word timings)
+    def silence(seconds = 1)
+      data = "\0".b * (seconds * SAMPLE_RATE * 2)
+      ["RIFF", 36 + data.bytesize, "WAVE", "fmt ", 16, 1, 1, SAMPLE_RATE, SAMPLE_RATE * 2, 2, 16, "data", data.bytesize]
+        .pack("a4 V a4 a4 V v v V V v v a4 V") + data
     end
 
     # the base (https://host) or the full endpoint (https://host/v1/audio/transcriptions) → the endpoint
     def endpoint!(raw)
       uri = URI.parse(raw.to_s.strip.chomp("/"))
       unless uri.is_a?(URI::HTTP) && uri.host && !uri.host.empty? && uri.userinfo.nil? && uri.query.nil? && uri.fragment.nil?
-        raise Invalid, "DICTATION_URL must be an http(s) URL without credentials, query or fragment"
+        raise Invalid, "url must be an http(s) URL without credentials, query or fragment"
       end
 
       uri.path = uri.path.end_with?(PATH) ? uri.path : "#{uri.path}#{PATH}"
       uri
     rescue URI::InvalidURIError
-      raise Invalid, "DICTATION_URL is not a URL"
+      raise Invalid, "url is not a URL"
     end
 
     # nil = no Authorization header (the speech server takes none)
     def token!(raw)
       t = raw.to_s
       return nil if t.empty?
-      raise Invalid, "DICTATION_TOKEN has whitespace or control characters" if t.match?(/[\s[:cntrl:]]/)
+      raise Invalid, "token has whitespace or control characters" if t.match?(/[\s[:cntrl:]]/)
 
       t
     end
@@ -190,7 +210,7 @@ module Busyyaks
         j = JSON.parse(body)
         raise Unavailable, "speech server answered no text" unless j.is_a?(Hash) && j["text"].is_a?(String)
 
-        { text: j["text"].strip, words: words_of(j).filter_map { |w| word(w) } }
+        { text: j["text"].strip, words: spaced(words_of(j).filter_map { |w| word(w) }, j["text"]) }
       rescue JSON::ParserError
         raise Unavailable, "speech server answered no JSON"
       end
@@ -207,6 +227,25 @@ module Busyyaks
         end
 
         raise Unavailable, "speech server answered no word timings (verbose_json with timestamp_granularities=word)"
+      end
+
+      # Each word carries the space before it, as the answer's text has it (the mic joins the words as given:
+      # lib/dictation.ts joinWords). Whisper servers send " word"; OpenAI and NeMo/Parakeet servers send "word" — read
+      # from the text, never assumed. The words must spell the text in order, only whitespace between them: an empty
+      # word, or one the text does not hold right after the word before → refused, never guessed.
+      def spaced(words, text)
+        at = 0
+        words.map do |w|
+          bare = w[:word].strip
+          i = bare.empty? ? nil : text.index(bare, at)
+          unless i && text[at...i].match?(/\A\s*\z/)
+            raise Unavailable, "speech server's word #{bare.inspect} does not follow in its text #{detail(text).inspect}"
+          end
+
+          gap = text[at...i]
+          at = i + bare.length
+          w.merge(word: (gap.empty? ? "" : " ") + bare)
+        end
       end
 
       def word(w)

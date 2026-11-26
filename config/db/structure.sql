@@ -515,6 +515,12 @@ CREATE TABLE `git_host_connections`(
   `author` varchar(255) NOT NULL,
   `created_at` integer NOT NULL
 );
+CREATE TABLE `dictation_settings`(
+  `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+  `doc` text NOT NULL,
+  `author` varchar(255) NOT NULL,
+  `created_at` integer NOT NULL
+);
 INSERT INTO schema_migrations (filename) VALUES
 ('20261101000000_create_core.rb'),
 ('20261101230000_create_daily.rb'),
@@ -573,4 +579,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261225612000_lead_never_assignee.rb'),
 ('20261225613000_comment_actions.rb'),
 ('20261226610000_parked_exits_operator_only.rb'),
-('20261227630000_git_host_connections.rb');
+('20261227630000_git_host_connections.rb'),
+('20261228634000_dictation_settings.rb');

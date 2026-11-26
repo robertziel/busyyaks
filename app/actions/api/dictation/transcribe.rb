@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "busyyaks/dictation"
+require "busyyaks/dictation_settings"
+require "busyyaks/kanban"
 
 module Busyyaks
   module Actions
@@ -9,12 +11,12 @@ module Busyyaks
         # POST /api/dictation — multipart: audio = one window of the card dialog's mic (16 kHz mono 16-bit WAV), prompt =
         # the text so far → {text, words: [{word, start, end}]} from the speech server (Busyyaks::Dictation). Multipart,
         # not a raw body: the router reads a raw body as a query string.
-        # dictation: none → 404; not that WAV → 400; longer than max_seconds → 413; the server unreachable, timed out or
-        # answering an error → 502 with its reason; DICTATION_* not matching the config → 503 with the reason.
+        # off (Settings → Dictation) → 404; not that WAV → 400; longer than max_seconds → 413; the server unreachable,
+        # timed out or answering an error → 502 with its reason; a stored revision refused → 503 with the reason.
         class Transcribe < Busyyaks::Action
           def handle(req, res)
-            client = Busyyaks::Dictation.client(Config.load.dictation, ENV)
-            return json(res, 404, error: "dictation is off: config/busyyaks.yml dictation is none") unless client
+            client = Busyyaks::Dictation.client(Busyyaks::DictationSettings.get(Busyyaks::Kanban.db))
+            return json(res, 404, error: "dictation is off: Settings → Dictation") unless client
 
             wav = read(req.params[:audio], client.settings.max_bytes + 1)
             json(res, 200, client.transcribe(wav, prompt: req.params[:prompt].to_s))
@@ -22,7 +24,7 @@ module Busyyaks
             json(res, e.message.start_with?("recording too long") ? 413 : 400, error: e.message)
           rescue Busyyaks::Dictation::Unavailable => e
             json(res, 502, error: e.message)
-          rescue Busyyaks::Dictation::Invalid, Busyyaks::Config::Invalid, KeyError => e
+          rescue Busyyaks::Dictation::Invalid, Busyyaks::DictationSettings::Refused => e
             json(res, 503, error: "dictation is misconfigured: #{e.message}")
           end
 

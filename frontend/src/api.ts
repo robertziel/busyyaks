@@ -20,7 +20,7 @@ export const csrfToken = (): string => meta("csrf-token");
 export const userEmail = (): string => meta("user-email");
 // where "Sign out" posts, or null when the auth provider has no session to end (provider none)
 export const signOutPath = (): string | null => signOutTarget(meta("sign-out"));
-// the card dialog's mic: config/busyyaks.yml `dictation` is on (the shell's <meta name="dictation"> on | off)
+// the card dialog's mic: Settings → Dictation is on (the shell's <meta name="dictation"> on | off)
 export function dictationOn(): boolean {
   const v = meta("dictation");
   if (v !== "on" && v !== "off") throw new Error(`<meta name="dictation"> is ${JSON.stringify(v)}, not on | off`);

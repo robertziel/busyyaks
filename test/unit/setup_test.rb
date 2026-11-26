@@ -229,6 +229,23 @@ class SetupTest < Minitest::Test
     assert_match(/FAIL  \.env line \d+: not KEY=value/, err, "an export line is refused by the shape check, as EnvFile does")
   end
 
+  # card 634: the speech server is Settings → Dictation; a .env line left over would look like it still wires one
+  def test_the_moved_dictation_keys_are_refused
+    %w[DICTATION_URL DICTATION_TOKEN].each { |k| refute_match(/^#{k}=/, File.read(File.join(ROOT, ".env.example")), k) }
+    moved = File.read(File.join(ROOT, "bin/setup"))[/^DICTATION_MOVED="([A-Z_ ]+)"$/, 1].split
+    assert_equal %w[DICTATION_URL DICTATION_TOKEN], moved
+    setup!
+    fill(filled)
+    File.write(File.join(@dir, ".env"), "#{File.read(File.join(@dir, '.env'))}DICTATION_URL=http://s:8000\nDICTATION_TOKEN=\n")
+    code, _, err = setup!("check")
+    assert_equal 1, code
+    %w[DICTATION_URL DICTATION_TOKEN].each do |k|
+      assert_includes err, "FAIL  #{k} moved to Settings → Dictation (card 634): type the server's URL and token " \
+                           "there, then delete DICTATION_URL and DICTATION_TOKEN from .env (docs/DEPLOY.md § Dictation)"
+    end
+    refute File.exist?(File.join(@tmp, "docker.log")), "refused before compose"
+  end
+
   # the git host is Settings → Git hosts (its token in the github service's own volume); a .env line left
   # over would look like it still connects GitHub — refused naming the one-time import
   def test_the_moved_git_host_keys_are_refused
@@ -256,10 +273,9 @@ class SetupTest < Minitest::Test
     assert_equal 1, code
     assert_includes err, "MCP_TOKEN is 5 characters, the MCP server needs at least 32"
     refute File.exist?(File.join(@tmp, "docker.log")), "refused before compose"
-    fill("MCP_TOKEN" => "m" * 32, "DATABASE_ADAPTER" => "postgresql", "DICTATION_TOKEN" => '"a b"')
+    fill("MCP_TOKEN" => "m" * 32, "DATABASE_ADAPTER" => "postgresql")
     _, _, err = setup!("check")
     assert_includes err, "POSTGRES_PASSWORD is empty in .env: DATABASE_ADAPTER=postgresql needs it"
-    assert_includes err, "DICTATION_TOKEN has whitespace"
   end
 
   # LauncherRules.run_dir!'s rules, checked before anything is made: a world-writable ancestor (a sticky /tmp too), a
@@ -345,12 +361,12 @@ class SetupTest < Minitest::Test
     fill(filled)
     path = File.join(@dir, ".env")
     good = File.read(path)
-    File.write(path, "#{good}TZ=UTC\nWEIRD LINE\nDICTATION_URL=http://$HOST\nPUBLIC_HOST=x # a comment\n")
+    File.write(path, "#{good}TZ=UTC\nWEIRD LINE\nEXTRA_URL=http://$HOST\nPUBLIC_HOST=x # a comment\n")
     code, _, err = setup!("check")
     assert_equal 1, code
     assert_includes err, "a key given twice: TZ"
     assert_match(/line \d+: not KEY=value/, err)
-    assert_match(/line \d+: DICTATION_URL holds a dollar sign/, err)
+    assert_match(/line \d+: EXTRA_URL holds a dollar sign/, err)
     assert_match(/line \d+: PUBLIC_HOST: an unquoted value with a space or an inline " #" comment/, err)
     bad = File.read(path)
     code, _, err = setup!

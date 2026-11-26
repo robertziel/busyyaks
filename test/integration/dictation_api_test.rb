@@ -5,6 +5,7 @@ require "minitest/mock"
 require "rack/test"
 require "stringio"
 require "busyyaks/dictation"
+require "busyyaks/dictation_settings"
 
 # POST /api/dictation: signed in + CSRF, off → 404, the WAV forwarded to the speech server, its words back,
 # every refusal and failure with its status and reason; the shell says whether the mic is on.
@@ -40,12 +41,29 @@ class DictationApiTest < Minitest::Test
   def with_client(http, &)
     s = D.parse!("model" => "whisper-1", "timeout_seconds" => 5, "max_seconds" => 30)
     c = D::Client.new(s, url: D.endpoint!("http://speech:8000"), token: nil, http: http)
-    D.stub(:client, ->(_settings, _env) { c }, &)
+    D.stub(:client, ->(_settings) { c }, &)
   end
 
   def test_the_shell_says_the_mic_is_off_and_the_route_404s
     assert_includes last_response.body, '<meta name="dictation" content="off">'
-    assert_equal [404, { "error" => "dictation is off: config/busyyaks.yml dictation is none" }], post_wav(wav)
+    assert_equal [404, { "error" => "dictation is off: Settings → Dictation" }], post_wav(wav)
+  end
+
+  # card 634: the newest Settings → Dictation revision decides — its own server included
+  def test_the_newest_revision_turns_the_mic_on_and_off
+    db = Busyyaks::Kanban.db
+    on = { "enabled" => true, "url" => "http://speech:8000", "token" => "", "model" => "m", "timeout_seconds" => 5,
+           "max_seconds" => 30, }
+    db[:dictation_settings].insert(doc: JSON.generate(on), author: "t", created_at: 1)
+    get "/"
+    assert_includes last_response.body, '<meta name="dictation" content="on">'
+    status, body = post_wav(wav) # the revision's server is asked: no such host here
+    assert_equal 502, status
+    assert_match(/\Aspeech server unreachable: /, body["error"])
+    db[:dictation_settings].insert(doc: JSON.generate(on.merge("enabled" => false)), author: "t", created_at: 2)
+    get "/"
+    assert_includes last_response.body, '<meta name="dictation" content="off">'
+    assert_equal [404, { "error" => "dictation is off: Settings → Dictation" }], post_wav(wav)
   end
 
   def test_forwards_the_window_and_answers_the_words
@@ -72,11 +90,11 @@ class DictationApiTest < Minitest::Test
       assert_equal [413, { "error" => "recording too long: over 30 s" }], post_wav(wav(31))
       assert_equal [502, { "error" => "speech server answered 503: model loading" }], post_wav(wav)
     end
-    Busyyaks::Config.stub(:load, -> { raise Busyyaks::Config::Invalid, "missing keys: dictation" }) do
-      assert_equal [503, { "error" => "dictation is misconfigured: missing keys: dictation" }], post_wav(wav)
+    Busyyaks::DictationSettings.stub(:get, ->(_db) { raise Busyyaks::DictationSettings::Refused, "missing model" }) do
+      assert_equal [503, { "error" => "dictation is misconfigured: missing model" }], post_wav(wav)
     end
-    D.stub(:client, ->(*) { raise D::Invalid, "DICTATION_URL is not a URL" }) do
-      assert_equal [503, { "error" => "dictation is misconfigured: DICTATION_URL is not a URL" }], post_wav(wav)
+    D.stub(:client, ->(*) { raise D::Invalid, "url is not a URL" }) do
+      assert_equal [503, { "error" => "dictation is misconfigured: url is not a URL" }], post_wav(wav)
     end
   end
 

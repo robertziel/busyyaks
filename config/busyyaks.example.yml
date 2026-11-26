@@ -1,6 +1,6 @@
 # Copy to config/busyyaks.yml (gitignored). An unknown key is an error.
 # Required (a missing one stops boot): roots, search_depth, owner_remotes, author_emails, window_days, auth,
-#   reap_protect, agents, launch, dictation, terminal, ci.
+#   reap_protect, agents, launch, terminal, ci.
 # Optional: engines (absent = only config/engines.yml), daily_report_runners (absent = no daily report runner allowed).
 #
 # roots:          {path, prefix}: directories INSIDE the container whose children are git repos
@@ -64,15 +64,6 @@ agents:
     tmux_timeout_seconds: 5
     answer_timeout_seconds: 30
   # collector: none
-# dictation:     the card dialog's mic (and Alt+R held in an open card): speak, the words land in the comment box. The
-#                 browser records 16 kHz WAV windows; the web service forwards each to your speech server — any
-#                 OpenAI-compatible POST /v1/audio/transcriptions (docs/DEPLOY.md § Dictation) — at .env DICTATION_URL
-#                 with the bearer DICTATION_TOKEN (web only; the browser never sees either).
-#                 `none` = no mic anywhere (DICTATION_URL / DICTATION_TOKEN then empty), or
-#                 {model: <the server's model id>, timeout_seconds: 1..300 (one window's request),
-#                  max_seconds: 30..600 (the longest window accepted; the mic's windows are ≤ 30 s)}.
-dictation: none
-# dictation: { model: whisper-large-v3-turbo, timeout_seconds: 30, max_seconds: 120 }
 # terminal:      an agent session's live terminal in the dashboard (the Agents sidebar's Open terminal, a card's
 #                Terminals): its tmux pane in the browser, read-only until you press Take control. The screen and your
 #                keys cross the web: only a signed-in session, only from this app's own page (Origin), only a session

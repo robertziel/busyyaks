@@ -143,9 +143,8 @@ class McpTest < Minitest::Test
            "runner" => { "type" => "hermes", "command" => "hermes", "home" => "/h", "max_children" => 2 }, }
     base = { "roots" => [{ "path" => "/p", "prefix" => "" }], "search_depth" => 1, "owner_remotes" => ["example.com/x/"],
              "author_emails" => ["a@x"], "window_days" => 1, "reap_protect" => [], "auth" => { "provider" => "none" },
-             "agents" => { "collector" => "none" }, "dictation" => "none", "terminal" => TERMINAL_DENY, "ci" => CI_SETTINGS,
-             "github_hook" => "none",
-             "skills" => SKILLS_SETTINGS, "updates" => UPDATES_SETTINGS,
+             "agents" => { "collector" => "none" }, "terminal" => TERMINAL_DENY, "github_hook" => "none",
+             "ci" => CI_SETTINGS, "skills" => SKILLS_SETTINGS, "updates" => UPDATES_SETTINGS,
              "launch" => LAUNCH_CLAUDE, }
     runners = [{ "type" => "hermes", "command" => "hermes", "home" => "/h" }]
     server = ->(cfg) { Busyyaks::McpServer.new(token: TOKEN, report_token: REPORT_TOKEN, board_token: BOARD_TOKEN, scan_interval: -> { 60 }, store: store, config: cfg) }

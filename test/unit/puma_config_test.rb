@@ -2,6 +2,8 @@
 
 require "test_helper"
 require "yaml"
+require "open3"
+require "rbconfig"
 
 # puma's settings and the in-container ports are required env, never a default or a literal in code.
 class PumaConfigTest < Minitest::Test
@@ -27,6 +29,22 @@ class PumaConfigTest < Minitest::Test
         assert_raises(KeyError, key) { dsl.instance_eval(read("config/puma.rb")) }
       end
     end
+  end
+
+  # the boot checks at the end of puma.rb run in a FRESH process (puma's, nothing of the app loaded): every constant
+  # they name must be required by puma.rb itself — the suite's preloaded app hides a missing require (card 634: the
+  # web failed to boot on NameError Busyyaks::Dictation, found only by the install test)
+  def test_puma_rb_boots_in_a_fresh_process
+    env = KEYS.to_h { |k| [k, k == "HANAMI_ENV" ? "production" : "1"] }
+              .merge("GITHUB_WEBHOOK_SECRET" => "")
+    script = <<~RUBY
+      dsl = Class.new { %i[bind environment threads workers before_fork].each { |m| define_method(m) { |*| } } }.new
+      dsl.instance_eval(File.read(#{File.join(ROOT, 'config/puma.rb').inspect}), "config/puma.rb")
+      puts "booted"
+    RUBY
+    out, status = Open3.capture2e(env, RbConfig.ruby, "-e", script)
+    assert status.success?, out
+    assert_equal "booted\n", out.lines.grep_v(/AUTH DISABLED/).join
   end
 
   def test_container_ports_come_from_env

@@ -1,0 +1,40 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# What the card dialog's mic runs (Settings → Dictation, card 634) from a shell, inside the web container:
+#
+#   docker compose exec -T web bin/dictation-settings show              # the current revision as YAML (token redacted)
+#   docker compose exec -T web bin/dictation-settings import < file.yml # a new revision from a YAML mapping: the old
+#                                                                       # config/busyyaks.yml `dictation` block
+#                                                                       # {model, timeout_seconds, max_seconds} + url +
+#                                                                       # token (the old .env DICTATION_URL /
+#                                                                       # DICTATION_TOKEN; "" = none) (= on), or a whole
+#                                                                       # {enabled, url, token, model, …} document
+#
+# Checked like a save on the Settings page: an enabled model must be one its server lists (GET /v1/models).
+require "bundler/setup"
+require "hanami/prepare"
+require "yaml"
+require "busyyaks/dictation_settings_api"
+
+S = Busyyaks::DictationSettings
+db = Busyyaks::Kanban.db
+case ARGV
+in ["show"]
+  cur = S.current(db) or abort "bin/dictation-settings show: no revision saved (the mic is off)"
+  puts YAML.dump(S.redact(cur[:doc]))
+in ["import"]
+  raw = YAML.safe_load($stdin.read)
+  raw = raw["dictation"] if raw.is_a?(Hash) && raw.keys == ["dictation"]
+  begin
+    doc = raw.is_a?(Hash) && raw.key?("enabled") ? raw : S.from_config_block(raw)
+  rescue S::Refused => e
+    abort "bin/dictation-settings import: #{e.message}"
+  end
+  status, body = Busyyaks::DictationSettingsAPI.save({ "base" => S.current_id(db), "doc" => doc },
+                                                     by: "bin/dictation-settings import")
+  abort "bin/dictation-settings: #{status}: #{body[:error]}" unless status == 200
+  puts "revision #{body[:revision][:id]}: #{body[:doc].map { |k, v| "#{k}=#{v}" }.join(' ')}" # redacted
+else
+  abort "usage: bin/dictation-settings show | import < file.yml"
+end

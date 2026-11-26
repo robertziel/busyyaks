@@ -2,6 +2,7 @@
 
 require "busyyaks/setup_api"
 require "busyyaks/skins"
+require "busyyaks/dictation_settings"
 
 module Busyyaks
   module Actions
@@ -34,10 +35,13 @@ module Busyyaks
             h: Helpers, csrf: res.session[:_csrf_token].to_s, email: res.session[:email], scripts: Auth.provider.scripts(:app),
             sign_out: Auth.provider.sign_out? ? "/logout" : "", theme_css: theme_css, **Helpers.skins_head,
             setup: SetupAPI.completed?(Kanban.db) ? "done" : "pending",
-            dictation: Config.load.dictation ? "on" : "off", # the card dialog's mic (config/busyyaks.yml dictation)
+            dictation: dictation, # the card dialog's mic (Settings → Dictation)
             js: "/app/#{entry.fetch('file')}", css: Array(entry["css"]).map { |f| "/app/#{f}" }
           )
         end
+
+        # the mic shows while Settings → Dictation is on (an enabled revision has its server's url: validated on save)
+        def dictation = DictationSettings.get(Kanban.db) ? "on" : "off"
 
         # ":root { --ak-ink: var(--ink); … }". Written as is: the engine accepts a theme value at config load only from an
         # allowlist of CSS value characters, with quotes paired, parentheses balanced and no /* (HostConfig#parse_theme), so
