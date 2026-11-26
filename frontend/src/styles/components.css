@@ -1137,29 +1137,57 @@ div.tl-churn {
 /* card comments and descriptions: a chip flows with the words — it wraps across lines like text, each line's piece
    keeping its pill (box-decoration-break), instead of a box that pushes the sentence around it aside. The chip itself
    is nowrap and only its text wraps, so the glyph never breaks away from the sha / label after it. Reports keep the
-   rules above */
-:is(.kb-md-body td, .kb-md-body p, .kb-md-body li) .gh-ref {
+   rules above; table cells have their own, below */
+:is(.kb-md-body p, .kb-md-body li) .gh-ref {
   display: inline;
   white-space: nowrap;
   padding: 1px 0.4rem;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
-:is(.kb-md-body td, .kb-md-body p, .kb-md-body li) .gh-ref > :is(code, span) {
+:is(.kb-md-body p, .kb-md-body li) .gh-ref > :is(code, span) {
   overflow: visible;
   white-space: normal;
   overflow-wrap: anywhere;
 }
-:is(.kb-md-body td, .kb-md-body p, .kb-md-body li) .gh-ref > .gh-sha {
+:is(.kb-md-body p, .kb-md-body li) .gh-ref > .gh-sha {
   white-space: nowrap;
 }
-:is(.kb-md-body td, .kb-md-body p, .kb-md-body li) .gh-ref svg {
+:is(.kb-md-body p, .kb-md-body li) .gh-ref svg {
   display: inline;
   margin: 0 4px 0 0;
   vertical-align: -2px;
 }
-:is(.kb-md-body td, .kb-md-body p, .kb-md-body li) .gh-commit .gh-subj {
+:is(.kb-md-body p, .kb-md-body li) .gh-commit .gh-subj {
   margin-left: 4px;
+}
+/* card tables: a chip is ONE pill — never split into pieces across a narrow column's lines. A commit shows
+   its sha only; the subject stays in the chip's title (hover) and on the commit page (tap). A long label (a branch, a
+   path) is cut with an ellipsis at 28ch, so it never sets the column's width; a table wider than the dialog scrolls
+   in itself (app.css `.md table`: block, overflow-x auto) */
+.kb-md-body td .gh-ref {
+  display: inline-flex;
+  white-space: nowrap;
+  align-items: center;
+  vertical-align: -3px;
+}
+.kb-md-body td .gh-ref > :is(code, span) {
+  max-width: 28ch;
+  overflow: hidden;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+}
+.kb-md-body td .gh-ref svg {
+  margin-top: 0;
+}
+.kb-md-body td .gh-commit .gh-subj {
+  display: none;
+}
+/* a table written with an empty header row (`| | |`) draws no empty band above its rows; commonmark renders those
+   cells as `<th></th>` (no whitespace), which :empty matches */
+.md thead:not(:has(th:not(:empty))) {
+  display: none;
 }
 .gh-commit {
   color: var(--ink-dim);

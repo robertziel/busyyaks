@@ -20,6 +20,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - Folder-trust prompt: a session started in a repo busyyaks does not trust shows Claude Code's trust prompt on the page as a question with its two choices ("No, exit" / "Yes, I trust this folder"); your click moves the cursor onto the choice, checked on the screen, and presses Enter. The prompt draws its choices without numbers, so before this the session showed as blocked with nothing to press.
 - Live pages (the board, the waiting widget, Today): a refresh that fails after a change is retried on the next poll and shown as "live · error" until it lands — a card moved on the server no longer stays in its old column under a green live mark.
 - Projects: a repo whose HEAD is detached shows `detached @ <sha7>` (the full sha on hover, found by search) instead of an empty branch; the upgrade's migration clears every stored empty branch, and the next scan fills in the sha.
+- Card tables: a link chip (commit, branch, PR) in a table cell stays one pill on one line — a commit shows its sha (the subject on hover), a long label is cut with an ellipsis, and a table wider than the card scrolls inside itself; a table written with an empty header row (`| | |`) draws no empty band above its rows.
 
 ### Changed
 
