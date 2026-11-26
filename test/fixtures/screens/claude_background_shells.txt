@@ -1,0 +1,12 @@
+● Two runs are still going; I post the report on the card when both finish.
+
+✻ Cogitated for 1s · done 1:32 PM · 3 shells still running
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 3 shells · ↓ to manage
+
+  ● main
+  ◯ general-purpose  waiting on 1 shell · Supervise the GC bench · since …
+  ◯ general-purpose  waiting on 1 shell · Supervise the container · sin…

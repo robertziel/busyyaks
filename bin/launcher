@@ -1074,7 +1074,9 @@ def pane_screen(socket, pane_id, family)
 
   title, = tmux(*base, "display-message", "-p", "-t", pane_id, "\#{pane_title}")
   verdict = Busyyaks::AgentScreen.detect(family.rules, text, title.to_s.chomp)
-  verdict[:activity] = settled_activity("#{sock}/#{pane_id}", family.activity(text)) if verdict[:state] == "working"
+  if verdict[:state] == "working"
+    verdict[:activity] = settled_activity("#{sock}/#{pane_id}", family.activity(text, Busyyaks::Clock.now))
+  end
   if verdict[:state] == "blocked" && (d = screen_dialog(text))
     verdict[:dialog] = d.slice(:question, :command, :options, :escape, :free_text, :hash).merge(answerable: sock == "default")
   end

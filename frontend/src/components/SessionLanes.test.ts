@@ -36,7 +36,7 @@ const agent = (name: string, state: AgentSession["state"], o: Partial<AgentSessi
     state_by: null,
     unread: false,
     phase: null,
-    live: { tool: null, elapsed_s: null, tokens: null, card: null },
+    live: { tool: null, elapsed_s: null, tokens: null, card: null, background: null },
     cards: [],
     asks: [],
     reviews: [],
@@ -91,7 +91,7 @@ const agents = [
   }),
   agent("p_tool", "working", {
     phase: "tool",
-    live: { tool: "Bash", elapsed_s: 252, tokens: "↓ 38.2k", card: 470 },
+    live: { tool: "Bash", elapsed_s: 252, tokens: "↓ 38.2k", card: 470, background: null },
     cards: [card(470, "CI read correctness")],
   }),
   agent("p_think", "working", { phase: null, cards: [] }),

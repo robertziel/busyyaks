@@ -28,8 +28,9 @@ module Busyyaks
       # input is not read: the line is pasted and entered
       def input_state(_ansi, _text) = nil
       def reads_input? = false
-      # what a working pane is doing (AgentActivity's verdict), nil = this family's screen does not say
-      def activity(_screen) = nil
+      # what a working pane is doing (AgentActivity's verdict), nil = this family's screen does not say; now = the
+      # reading's wall-clock time (how long a background wait has lasted)
+      def activity(_screen, _now = nil) = nil
     end
 
     # Claude Code queues a prompt typed mid-turn.
@@ -37,7 +38,7 @@ module Busyyaks
       def name = "claude"
       def rules = AgentScreen::CLAUDE
       def typeable? = true
-      def activity(screen) = AgentActivity.claude(screen)
+      def activity(screen, now = nil) = AgentActivity.claude(screen, now)
     end
 
     # Hermes cuts the running turn on a typed line in its default mode: typed only into a session busyyaks launched with
@@ -47,7 +48,7 @@ module Busyyaks
       def rules = AgentScreen::HERMES
       def typeable_with_proof? = true
       def paste_refusal(screen) = HermesBoard.paste_refusal(screen)
-      def activity(screen) = AgentActivity.hermes(screen)
+      def activity(screen, _now = nil) = AgentActivity.hermes(screen)
       def input_state(ansi, text) = HermesBoard.input_state(ansi, text)
       def reads_input? = true
     end
