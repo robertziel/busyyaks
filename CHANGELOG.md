@@ -3,6 +3,13 @@
 One line per change a user would notice. Format: [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/);
 versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Board: the "+ Add a card" box has the dictation mic beside Add — once the recording stops, the card is created at once (its description = everything you said) and opens.
+- Card dialog: the title and the description dictate too — the title's own mic saves it once the recording stops, the description editor has the comment box's mic; Esc while dictating stops the dictation instead of closing the editor or the card.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added
