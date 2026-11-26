@@ -15,6 +15,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Approve: a card whose pull request GitHub is still checking for conflicts (`mergeable: computing`, for a minute or two after any merge into its base) is approved instead of refused with 422; a conflict GitHub finds after the Approve holds the card's next step until it is rebased.
 - Scanner: a repo gone from the projects directory no longer counts in the daily stats and reports — its commit and daily rows are removed (read again if it comes back); a directory the scan cannot list keeps the rows of the repos under it and is named in the scan's error.
 - Project page: the session list follows started and ended sessions without a reload, and while the launcher is down it keeps the last list, dimmed, with the launcher's error.
 - Folder-trust prompt: a session started in a repo busyyaks does not trust shows Claude Code's trust prompt on the page as a question with its two choices ("No, exit" / "Yes, I trust this folder"); your click moves the cursor onto the choice, checked on the screen, and presses Enter. The prompt draws its choices without numbers, so before this the session showed as blocked with nothing to press.

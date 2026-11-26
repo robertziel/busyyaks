@@ -152,9 +152,10 @@ module Busyyaks
       # (combine): the first that is not green, said with its repo; all green → success, `head` = every PR's head
       # joined by "+", `builds` = every PR's required builds.
       # An open PR a step reads must also be mergeable as it stands (#mergeable): not a draft, on its side's
-      # base branch, no GitHub auto-merge, its mergeability computed (behind: warned, not refused) — every one of the
-      # step's PRs. A conflict with its base does not refuse: the green answer carries rebase: and the
-      # engine accepts the approval marked needs rebase — the owner rebases, re-runs CI and merges on green.
+      # base branch, no GitHub auto-merge, its mergeability computed (not asked at an Approve; behind: warned, not
+      # refused) — every one of the step's PRs. A conflict with its base does not refuse: the green answer carries
+      # rebase: and the engine accepts the approval marked needs rebase — the owner rebases, re-runs CI and merges on
+      # green.
       # Asked for a HANDOFF (the engine passes handoff_ci_url = its ci_url, a key only a handoff carries), a green
       # answer is also checked against that ci_url: it must be the build of a required context on a commit the answer
       # read (`builds`, any of the PRs' heads) — never an older build, nor a URL naming no build. An Approve or a watch
@@ -324,7 +325,8 @@ module Busyyaks
       # "blocked" + the reason) when it is a draft, is based on another branch than its side's (want_base; nil = a
       # plain project's PR, any base; a Proc of the PR's repo: asked only for a read PR), has GitHub's auto-merge on
       # (GitHub would merge it on green, without the board's approval), or — unread, refused the same way (`unpolled` +
-      # the reason) — GitHub is still computing whether it merges (mergeable null: never guessed).
+      # the reason) — GitHub is still computing whether it merges (mergeable null: never guessed), except at the
+      # operator's Approve (computing_approvable?).
       # `behind` is NOT refused: the working branch moves on every other card's merge,
       # and a conflict never parks a card — the rail warns, the merge itself is where it counts. Conflicts with its base
       # are not refused either: the row gains rebase: {state: "conflicts", base:, base_sha:} — the engine accepts the
@@ -332,7 +334,7 @@ module Busyyaks
       # onward move until an answer comes back green without it. A conflicting row whose base commit was not read yet
       # is refused as not read, never guessed.
       # Not read yet (unpolled) or no open PR → the row as it is.
-      def mergeable(row, repo, number, role, want_base)
+      def mergeable(card, row, repo, number, role, want_base)
         return row unless row && CHECKED.include?(row[:state])
 
         want_base = want_base&.call(repo)
@@ -347,11 +349,27 @@ module Busyyaks
         return blocked(number, why) if why
 
         unknown = merge_unknown(row, pr)
-        return unread(number, unknown) if unknown
+        return computing_approvable?(card, row) ? row : unread(number, unknown) if unknown
 
         return row unless row[:merge_state] == "conflicts"
 
         row.merge(rebase: { state: "conflicts", base: row[:base], base_sha: row[:base_sha] })
+      end
+
+      # Every merge into the base makes GitHub compute every open PR's mergeability afresh — for a poll or
+      # two (~2 min) each PR waiting in a gate read `computing`, and the operator's Approve was refused 422 over and
+      # over while other cards merged. Both answers it can turn into are approvable (clean; conflicts → approved marked
+      # needs rebase), so at an Approve (a card not approved yet, no handoff) it refuses nothing: the row as read,
+      # merge_state "computing" kept, no rebase: (nothing known to rebase onto) — the owner's merge itself meets a
+      # conflict if there is one, and the approved card's quiet ping reads it again (approved → unread, below).
+      # Still not read yet: at a HANDOFF (handoff_ci_url — a conflicting PR is never handed in), for a card marked
+      # needs rebase (its mark clears only on a known clean answer) and for an APPROVED card (its next step waits for
+      # a known answer). A conflict computed after such an Approve is not marked needs rebase (the mark is written
+      # only by the Approve's own answer), and need not be: the approved card's step is read again on every watch pass
+      # (engine approved_ci_pass / approved_nudge), its answer then carries rebase: and its owner's ping says it is
+      # held on the conflict; GitHub refuses the merge of a conflicting PR.
+      def computing_approvable?(card, row)
+        row[:merge_state] == "computing" && !card.key?(:handoff_ci_url) && !card[:needs_rebase] && !card[:approved_at]
       end
 
       # What GitHub says refuses this PR as it stands, or nil.
@@ -416,7 +434,7 @@ module Busyyaks
         when "merged" then merged_since_mark(card, repo, number, role)
         when "closed" then blocked(number, "the #{closed(repo, number)}")
         when "none" then blocked(number, "the PR #{repo}##{number} was not found")
-        else mergeable(read(repo, "pr:#{number}"), repo, number, role, want_base)
+        else mergeable(card, read(repo, "pr:#{number}"), repo, number, role, want_base)
         end
       end
 
@@ -432,7 +450,7 @@ module Busyyaks
         when "closed" then blocked(number, "the local #{closed(repo, number)}")
         when "none" then blocked(number, "the local PR #{repo}##{number} was not found")
         else
-          mergeable(read(repo, "pr:#{number}"), repo, number, "local", want_base) ||
+          mergeable(card, read(repo, "pr:#{number}"), repo, number, "local", want_base) ||
             unread(number, "the local PR #{repo}##{number} cannot be read")
         end
       end

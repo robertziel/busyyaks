@@ -377,8 +377,10 @@ class CiChecksTest < Minitest::Test
   end
 
   # conflicts are NOT refused: the green answer carries rebase: with the base and the base commit, the engine accepts
-  # the approval marked needs rebase; GitHub's mergeable null (it is still computing) is refused as not read, never
-  # guessed either way; behind is NOT refused (the working branch moves on every merge — a conflict never parks a card)
+  # the approval marked needs rebase; GitHub's mergeable null (it is still computing) refuses nothing at the operator's
+  # Approve (both answers are approvable) and is not read yet at a handoff, for an approved card and for one marked
+  # needs rebase — never guessed either way; behind is NOT refused (the working branch moves on every merge — a
+  # conflict never parks a card)
   def test_mergeable_state_is_tagged_and_null_is_computing
     sha = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"
     dirty = PR.merge("mergeable" => false, "mergeable_state" => "dirty", "base" => { "ref" => "local", "sha" => sha })
@@ -415,7 +417,15 @@ class CiChecksTest < Minitest::Test
       .each do |fields, reason|
         @http.pulls = [PR.merge(fields)]
         @poller.run
-        assert_equal ["unpolled", reason], @port.approval_checks(@kb.card(@id), LOCAL_STEP).values_at(:state, :reason)
+        card = @kb.card(@id)
+        at_approve = @port.approval_checks(card, LOCAL_STEP)
+        assert_equal %w[success computing], at_approve.values_at(:state, :merge_state), "the Approve goes on"
+        assert_nil at_approve[:rebase], "nothing known to rebase onto"
+        { "a handoff" => card.merge(handoff_ci_url: "https://ci.example.com/job/r/1/"),
+          "an approved card" => card.merge(approved_at: @now),
+          "a card marked needs rebase" => card.merge(needs_rebase: { "state" => "conflicts" }), }.each do |who, asked|
+          assert_equal ["unpolled", reason], @port.approval_checks(asked, LOCAL_STEP).values_at(:state, :reason), who
+        end
       end
     # mergeable, GitHub's word kept, never "clean": unstable = its checks not all green
     # (CI's call), blocked = branch rules (the board's approval is the review), has_hooks — the gate does not refuse
@@ -1740,6 +1750,9 @@ class CiChecksTest < Minitest::Test
         refute_includes text, "take its next step"
       end
 
+      # computing is the one shape the operator's Approve goes through (test_*_computing_is_approved)
+      next if shape == "computing"
+
       define_method(:"test_#{gate}_#{shape}_unread_still_refuses_the_approve") do
         id = gated_cards.fetch(gate)
         hand_in(id) if gate == "local_human_review"
@@ -1779,6 +1792,59 @@ class CiChecksTest < Minitest::Test
       end
       assert_match(/not handed off .*(not read yet|still computing)/, e.message)
       assert_equal "local_agent_review", @kb.card(id)[:column]
+    end
+  end
+
+  # Every merge into the base makes GitHub compute each open PR's mergeability afresh, and the operator's Approve was
+  # refused 422 ("GitHub is still computing whether the local PR merges cleanly") until a poll read it again. At the
+  # Approve, computing refuses nothing: the card is approved, the gate holds nothing, it is not marked needs rebase;
+  # the approved card's next step then waits for a known answer (test_*_computing_unread_*).
+  OPEN_PR.each do |column, (gate, repo, number)|
+    define_method(:"test_#{gate}_computing_is_approved") do
+      id = gated_cards.fetch(gate)
+      hand_in(id) if gate == "local_human_review"
+      step = CK.steps(@kb.board_of("o-r")).find { |s| s[:from] == gate }
+      make_unread("computing", number)
+      2.times do
+        @port.approval_checks(@kb.card(id), step)
+        @poller.run
+      end
+      assert_equal "computing", @conn[:gh_pr_checks].where(repo: repo, ref: "pr:#{number}").get(:merge_state)
+      n = AgentsKanban::Notifier.new(@kb, client: @launcher, ci: @port, clock: -> { @now }, grace: 60, log: StringIO.new)
+      n.watch
+      assert_nil @kb.gate_hold(@kb.card(id), @kb.board_of("o-r")), "ready for approval, not held"
+      @kb.approve(id, by: "operator")
+      card = @kb.card(id)
+      assert_equal column, card[:column]
+      refute_nil card[:approved_at]
+      assert_equal 0, @conn[:ci_watches].where(card_id: id, kind: "rebase").count, "not marked needs rebase"
+    end
+
+    # the computed answer turns out a conflict after the Approve — no needs-rebase mark (nothing was
+    # known to rebase onto at the Approve), but the approved card's own reads see it: its step answers rebase: and its
+    # owner's ping says it is held on the conflict, never "take its next step"
+    define_method(:"test_#{gate}_a_conflict_computed_after_the_approve_holds_the_next_step") do
+      id = gated_cards.fetch(gate)
+      @conn[:projects].where(slug: "o-r").update(scanned_at: @now, branch_tips: "{}", remote_heads: "{}")
+      @kb.register_session(session: "shop", project: "o-r", type: "plain", launcher: "fullclaude", by: "lead")
+      @kb.set_owner(id, session: "shop", by: "lead")
+      hand_in(id) if gate == "local_human_review"
+      step = CK.steps(@kb.board_of("o-r")).find { |s| s[:from] == gate }
+      make_unread("computing", number)
+      2.times do
+        @port.approval_checks(@kb.card(id), step)
+        @poller.run
+      end
+      @kb.approve(id, by: "operator")
+      @conn[:card_pings].delete
+      base = gate == "local_human_review" ? "local" : "main"
+      sha = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+      dirty = { "mergeable" => false, "mergeable_state" => "dirty", "base" => { "ref" => base, "sha" => sha } }
+      @http.pulls = @http.pulls.map { |p| p["number"] == number ? p.merge(dirty) : p }
+      text = quiet_ping(id)
+      assert_equal({ state: "conflicts", base: base, base_sha: sha }, @port.approval_checks(@kb.card(id), step)[:rebase])
+      assert_includes text, "It is approved but held: PR ##{number} conflicts with #{base}"
+      refute_includes text, "take its next step"
     end
   end
 
