@@ -3,8 +3,10 @@
 require "test_helper"
 require "yaml"
 require "date"
+require "json"
 
-# CITATION.cff names the newest release in CHANGELOG.md: its version and its date. A release bumps both.
+# CITATION.cff names the newest release in CHANGELOG.md: its version and its date. A release bumps both, and every
+# version string of busyyaks's own.
 class CitationTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
 
@@ -22,6 +24,15 @@ class CitationTest < Minitest::Test
     release = newest_release
     assert_equal release[:version], citation["version"]
     assert_equal Date.iso8601(release[:date]), citation["date-released"]
+  end
+
+  # Every place busyyaks states its own version names the newest release: the MCP serverInfo and the frontend package.
+  def test_own_version_strings_are_the_newest_release
+    version = newest_release[:version]
+    assert_equal version, Busyyaks::McpServer::INFO[:version]
+    package = JSON.parse(File.read(File.join(ROOT, "frontend/package.json")))
+    lock = JSON.parse(File.read(File.join(ROOT, "frontend/package-lock.json")))
+    assert_equal [version] * 3, [package["version"], lock["version"], lock.dig("packages", "", "version")]
   end
 
   def test_names_the_public_repo_and_license

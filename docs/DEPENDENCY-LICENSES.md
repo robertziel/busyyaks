@@ -4,15 +4,15 @@ busyyaks publishes source only. Its dependencies are not in this repository: Doc
 image (`Dockerfile`, `scripts/lint/Dockerfile`, `scripts/hooks/Dockerfile`). Material that IS in the repository —
 ported code, copied rules, fonts, the vendored kanban module — is listed in [`NOTICE`](../NOTICE).
 
-Read from the lockfiles at 0.1.0; re-check after a dependency change with the commands at the end.
+Read from the lockfiles at 0.2.0; re-check after a dependency change with the commands at the end.
 
-## Ruby gems (`Gemfile.lock`, 90 gems)
+## Ruby gems (`Gemfile.lock`, 92 gems)
 
 | License | Gems |
 |---|---|
-| MIT | 70 |
+| MIT | 71 |
 | Ruby, or Ruby / BSD-2-Clause (dual) | 14 |
-| BSD-2-Clause, BSD-3-Clause, MIT / BSD-2-Clause | 4 |
+| BSD-2-Clause, BSD-3-Clause, MIT / BSD-2-Clause | 5 |
 | Ruby / GPL-2.0-only (dual) | 1: `rdoc` |
 | GPL-3.0-or-later | 1: `bundler-audit` |
 
@@ -21,14 +21,15 @@ Read from the lockfiles at 0.1.0; re-check after a dependency change with the co
 | `rdoc` 8.1.0 (via `irb`, groups `cli` · `development` · `test`) | Ruby or GPL-2.0-only, at the user's choice | the app image | none beyond keeping its notices: used under the Ruby license |
 | `bundler-audit` 0.9.3 (group `lint`) | GPL-3.0-or-later | only the lint and hooks images (`BUNDLE_WITHOUT=lint` keeps it out of the app image) | none: a development tool run as a separate program, not linked into or shipped with busyyaks; GPL obligations would apply only to someone who distributes that tool or an image containing it |
 
-## npm packages (`frontend/package-lock.json`, 258 packages)
+## npm packages (`frontend/package-lock.json`, 269 packages)
 
-Shipped in the browser bundle (`public/app`, built by Vite in the image): only the 11 runtime packages — `react`,
+Shipped in the browser bundle (`public/app`, built by Vite in the image): only the 13 runtime packages — `react`,
 `react-dom`, `react-router`, `react-router-dom`, `scheduler`, `cookie`, `set-cookie-parser`, `js-tokens`,
-`loose-envify`, and `@dagrejs/dagre` 3.1.3 with its `@dagrejs/graphlib` 4.0.6 (the layered layout of the vendored
-engine's workflow graph; the engine's one runtime dependency, pinned here at the same version) — all MIT.
+`loose-envify`, `@xterm/xterm` 6.0.0 with its `@xterm/addon-web-links` 0.12.0 (the live agent terminal), and
+`@dagrejs/dagre` 3.1.3 with its `@dagrejs/graphlib` 4.0.6 (the layered layout of the vendored engine's workflow graph;
+the engine's one runtime dependency, pinned here at the same version) — all MIT.
 
-The other 247 are build and test tools (`devDependencies` and theirs): 207 MIT, 16 Apache-2.0, 12 ISC, 8 BSD, and:
+The other 256 are build and test tools (`devDependencies` and theirs): 215 MIT, 16 Apache-2.0, 12 ISC, 9 BSD, and:
 
 | Package | License | Used for | Obligation |
 |---|---|---|---|
