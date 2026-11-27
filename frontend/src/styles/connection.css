@@ -35,18 +35,24 @@
   background: var(--bad);
 }
 .conn-banner {
+  /* both insets + a content width + auto margins: centred, and the whole screen less 16 px a side is its limit (a
+     left: 50% box only ever had the right half of a phone) */
   position: fixed;
-  left: 50%;
+  left: 16px;
+  right: 16px;
   top: calc(var(--top-h, 56px) + 8px);
-  transform: translateX(-50%);
   z-index: 60;
+  width: max-content;
   max-width: calc(100vw - 32px);
-  padding: 8px 14px;
-  border-radius: 10px;
-  background: var(--bad);
-  color: #fff;
+  margin: 0 auto;
+  box-sizing: border-box;
+  padding: 10px 16px 10px 12px;
+  border: 1px solid var(--bad);
+  border-radius: var(--radius-band);
+  background: var(--panel);
+  color: var(--ink);
   font-size: 13px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-card);
 }
 body.conn-down .shell {
   opacity: 0.45;

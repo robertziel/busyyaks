@@ -6,7 +6,7 @@ import { apiPost, invalidate, useResource } from "../api";
 import { useFlash } from "../components/Flash";
 import { ProjectsTable, useTree } from "../components/ProjectsTable";
 import { Select } from "../components/Select";
-import { ErrorState, Loading } from "../components/States";
+import { ErrorState, Loading, RefreshError } from "../components/States";
 import { now, projectPath } from "../lib/format";
 import { CHIPS, chipCounts, repos, type ChipKey, type Filter } from "../lib/tree";
 import { useTitle } from "../lib/title";
@@ -68,7 +68,7 @@ export function Projects() {
 
   return (
     <>
-      {error && <ErrorState error={error} what="refresh" retry={reload} />}
+      {error && <RefreshError error={error} retry={reload} />}
       {data.launcher_error && (
         <div className="flash bad">
           <i className="dot bad" />

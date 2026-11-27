@@ -16,6 +16,7 @@ import "./styles/github.css";
 import "./styles/updates.css";
 import "./styles/session-boards.css";
 import "./styles/connection.css";
+import "./styles/mascot.css";
 import "./styles/waiting.css";
 import "./styles/terminal.css";
 import "./styles/hello.css";

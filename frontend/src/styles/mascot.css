@@ -1,0 +1,103 @@
+/* The yak where something is wrong (components/Mascot.tsx, card 672): a page state (404, a crash), a failed read
+   inside a page (ErrorState), the connection-down banner. Skin tokens only (lib/mascotCss.test.ts): the art is
+   currentColor + --accent, so Light, Dark and any skin file hold. Fits a 390 px phone: the page state stacks. */
+.mascot {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+  color: var(--ink);
+}
+.mascot-art {
+  flex: none;
+  display: inline-flex;
+  color: var(--ink);
+}
+.mascot-art svg {
+  display: block;
+  width: auto;
+}
+.mascot-text {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  justify-items: start;
+}
+.mascot-title {
+  margin: 0;
+  color: var(--ink);
+}
+.mascot-detail,
+.mascot-links {
+  margin: 0;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+
+/* a whole page: the yak over the words, centred in the page */
+.mascot-page {
+  flex-direction: column;
+  justify-content: center;
+  min-height: min(56vh, 460px);
+  padding: 24px 0;
+  text-align: center;
+}
+.mascot-page .mascot-text {
+  justify-items: center;
+}
+.mascot-page .mascot-art svg {
+  height: clamp(120px, 24vh, 190px);
+  max-width: min(100%, 420px);
+}
+.mascot-page .mascot-title {
+  font-size: 28px;
+}
+
+/* a failed read inside a page: a card, the yak beside the words */
+.state.error {
+  margin: 12px 0;
+  padding: 16px 18px;
+  border: 1px solid var(--bad);
+  border-radius: var(--radius-card);
+  background: var(--panel);
+  box-shadow: var(--shadow-card);
+}
+.mascot-card .mascot-art svg {
+  height: 72px;
+  max-width: 132px;
+}
+.mascot-card .mascot-title {
+  color: var(--bad);
+  font-size: 15px;
+}
+
+/* the connection-down banner (styles/connection.css places it) */
+.mascot-banner {
+  gap: 12px;
+}
+.mascot-banner .mascot-art svg {
+  height: 40px;
+  max-width: 104px;
+}
+.mascot-banner .mascot-text {
+  gap: 2px;
+}
+.mascot-banner .mascot-title {
+  color: var(--bad);
+  font-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .mascot-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .mascot-page .mascot-title {
+    font-size: 22px;
+  }
+  .mascot-banner .mascot-art svg {
+    height: 30px;
+    max-width: 78px;
+  }
+}

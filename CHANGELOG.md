@@ -9,6 +9,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 - Board: the "+ Add a card" box has the dictation mic beside Add — once the recording stops, the card is created at once (its description = everything you said) and opens.
 - Card dialog: the title and the description dictate too — the title's own mic saves it once the recording stops, the description editor has the comment box's mic; Esc while dictating stops the dictation instead of closing the editor or the card.
+- Error pages have the yak: a 404 page (the yak looking for the page), a page that fails to load (lost for a 404, unplugged when the request never reached the server, its load fallen off for any other error), a page that crashes while rendering (the error and Reload instead of a blank screen), and the connection-down banner — now **No internet** when the device is offline and **busyyaks is not answering** otherwise, as wide as a phone allows. A failed refresh over a page still showing its data stays a slim bar.
 
 ### Changed
 

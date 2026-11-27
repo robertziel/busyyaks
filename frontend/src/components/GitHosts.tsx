@@ -20,7 +20,7 @@ import {
   type GitHostsData,
   type GitHostTest,
 } from "../lib/gitHosts";
-import { ErrorState, Loading } from "./States";
+import { ErrorState, Loading, RefreshError } from "./States";
 
 // every read that depends on the connection
 const DEPENDENT = [GIT_HOSTS_KEY, "/api/today", "/api/github", "/api/setup"];
@@ -302,7 +302,7 @@ export function GitHosts() {
 
   return (
     <div className="gith-hosts">
-      {error && <ErrorState error={error} what="refresh" retry={reload} />}
+      {error && <RefreshError error={error} retry={reload} />}
       {data.providers.map((p) => (
         <ProviderCard
           key={p.key}
