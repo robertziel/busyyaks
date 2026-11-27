@@ -4,11 +4,16 @@ require_relative "agent_settings"
 require_relative "config"
 require_relative "kanban"
 require_relative "skills"
+require_relative "agent_presets"
 
 module Busyyaks
   # Settings → Agents & launchers: the operator's read and write of the agent settings revisions, as
   # [status, body] (the actions are one line each; test/unit/agent_settings_test.rb drives this directly).
-  #   show       → 200 {revision: {id, author, at}, doc, commands, history, preview, error}
+  #   show       → 200 {revision: {id, author, at}, doc, commands, history, preview, error, presets, colors,
+  #                face_theme}
+  #                presets = config/agent_presets.yml: the "Add from preset" list, each an agent type without
+  #                launchers + its one-line description; colors = AgentSettings::COLORS {name => css} (a type's `color`);
+  #                face_theme = {type key => css} the file's theme gives a type with no colour of its own
   #   save(body) → 200 the same for the new revision · 409 base is not the newest · 422 refused (the engine's or the
   #                allowlist's reason, verbatim)
   # `error` = why the CURRENT revision does not run (a command the host allowlist dropped since it was saved, a value an
@@ -25,8 +30,16 @@ module Busyyaks
       cur = AgentSettings.current(db)
       preview, error = preview(cur[:doc], commands)
       body = { revision: cur.slice(:id, :author, :at), doc: cur[:doc], commands: commands,
-               history: AgentSettings.history(db), preview: preview, error: error, }
+               history: AgentSettings.history(db), preview: preview, error: error,
+               presets: AgentPresets.load!, colors: AgentSettings::COLORS, face_theme: face_theme, }
       [200, body]
+    end
+
+    # {type key => css} the host config file's theme gives a type's faces: the colour a type with no `color`
+    # of its own wears; a key in neither = the engine's hashed hue
+    def face_theme(file = Kanban.file_config)
+      prefix = "--ak-face-type-"
+      file.fetch("theme", {}).select { |k, _| k.start_with?(prefix) }.transform_keys { |k| k.delete_prefix(prefix) }
     end
 
     def save(body, by:, db: Kanban.db, commands: Config.load.launch_commands)

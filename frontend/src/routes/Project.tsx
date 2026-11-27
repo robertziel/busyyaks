@@ -10,6 +10,7 @@ import { ContribCard } from "../components/Heatmap";
 import { Html } from "../components/Html";
 import { Launch } from "../components/Launch";
 import { ProjectRules } from "../components/ProjectRules";
+import { ProjectAgents } from "../components/ProjectAgents";
 import { leaveRefusal } from "../lib/projectRules";
 import { Sessions } from "../components/Sessions";
 import { useStopSessions } from "../components/StopSessions";
@@ -45,10 +46,15 @@ export function Project() {
   const held = heldSessions(live.data, lastGood.current?.key === key ? lastGood.current.sessions : null);
   const sessionsError = [live.error?.message, held.held].filter((x): x is string => !!x).join(" · ") || null;
   const { busy: stopping, stop } = useStopSessions(slug, () => void reloadLive());
-  // the Settings tab's unsaved edits (ProjectRules reports them): leaving the tab would drop them without a word
-  const unsaved = useRef(0);
+  // the Settings tab's unsaved edits (ProjectRules and ProjectAgents report theirs): leaving the tab would drop them
+  // without a word
+  const unsavedRules = useRef(0);
+  const unsavedAgents = useRef(0);
   const onUnsaved = useCallback((n: number) => {
-    unsaved.current = n;
+    unsavedRules.current = n;
+  }, []);
+  const onUnsavedAgents = useCallback((n: number) => {
+    unsavedAgents.current = n;
   }, []);
   const { setFlash } = useFlash();
   if (loading) return <Loading what={`project ${slug}`} />;
@@ -57,7 +63,7 @@ export function Project() {
   const p = data.project;
   const ls = live.data;
   const setTab = (t: "overview" | "board" | "settings") => {
-    const refusal = leaveRefusal(tab, t, unsaved.current);
+    const refusal = leaveRefusal(tab, t, unsavedRules.current + unsavedAgents.current);
     if (refusal) {
       setFlash({ ok: false, text: refusal });
       return;
@@ -119,7 +125,10 @@ export function Project() {
       {tab === "board" ? (
         <ProjectBoard slug={p.slug} />
       ) : tab === "settings" ? (
-        <ProjectRules slug={p.slug} onUnsaved={onUnsaved} />
+        <>
+          <ProjectAgents slug={p.slug} onUnsaved={onUnsavedAgents} />
+          <ProjectRules slug={p.slug} onUnsaved={onUnsaved} />
+        </>
       ) : (
         <>
           <section className="stats">

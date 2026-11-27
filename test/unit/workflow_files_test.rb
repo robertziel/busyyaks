@@ -219,6 +219,22 @@ class WorkflowFilesTest < Minitest::Test
     assert_match(/refused: .git is not a directory/, @w.sync(project))
   end
 
+  # a board shape that drops a column the repo's .busyyaks/agents.yml maps is refused naming it (the file is
+  # changed first); a shape that keeps it saves
+  def test_a_save_that_drops_a_mapped_column_is_refused_naming_it
+    @w.sync(project)
+    File.write(File.join(@dir, ".busyyaks/agents.yml"), "columns: {qa: worker}\n")
+    shape = kb.board_of("g/r").to_h
+    keep = shape.merge("columns" => shape["columns"].map { |c| c["key"] == "qa" ? c.merge("label" => "Review") : c })
+    assert_equal 200, @w.save("g/r", keep, by: "op")[0]
+    dropped = keep.merge("columns" => keep["columns"].reject { |c| c["key"] == "qa" },
+                         "transitions" => keep["transitions"].reject { |t| [t["from"], t["to"]].include?("qa") })
+    status, body = @w.save("g/r", dropped, by: "op")
+    assert_equal 422, status
+    assert_match(%r{not saved: qa \(→ worker\) mapped in \.busyyaks/agents\.yml — change its columns}, body[:error])
+    assert_equal "Review", kb.board_of("g/r").label("qa"), "nothing saved"
+  end
+
   def test_editor_saves_write_the_file_and_the_board_together
     shape = kb.board_of("g/r").to_h
     shape["columns"].find { |c| c["key"] == "qa" }["label"] = "Review"

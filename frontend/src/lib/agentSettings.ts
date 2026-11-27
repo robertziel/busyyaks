@@ -31,7 +31,13 @@ export type AgentType = {
   launchable?: boolean;
   // the Launch bar button's text ("Launch team lead"); absent / null = the label
   launch_label?: string | null;
+  // true = a board runs it only when its repo's .busyyaks/agents.yml `use`s it (needs under + launchable false)
+  opt_in?: boolean;
+  // the faces' colour, a name of AgentSettingsData.colors (absent = the theme's, else a hue from the key)
+  color?: string;
 };
+// config/agent_presets.yml — an agent type without launchers (the lead's are filled in) + its description
+export type Preset = Omit<AgentType, "launchers"> & { description: string };
 // one host-allowlisted invocation: a launcher must equal one of them (its key and label are the dashboard's)
 export type Invocation = { kind: string; command: string; args: string[]; via_shell: boolean };
 export type AgentDoc = { launchers: Launcher[]; agent_types: AgentType[] };
@@ -44,13 +50,21 @@ export type AgentSettingsData = {
   history: Revision[];
   preview: PreviewRow[];
   error: string | null; // why the CURRENT revision does not run, or null
+  presets: Preset[]; // the "Add from preset" list
+  colors: Record<string, string>; // colour name → CSS value (skin tokens): what a type's `color` may be
+  face_theme: Record<string, string>; // type key → CSS value the host config's theme gives a type with no colour
 };
 
 // the engine's FIXED column types (agents_kanban ColumnTypes): what `takes` names
 export const COLUMN_TYPES = ["parked", "queued", "working", "review", "gate", "done", "cancelled"] as const;
 
 // In the form a type's model is always one field per launcher it runs ("" = Claude Code's own choice).
-export type TypeDraft = Omit<AgentType, "model" | "prompt" | "under" | "standalone" | "launchable" | "launch_label"> & {
+export type TypeDraft = Omit<
+  AgentType,
+  "model" | "prompt" | "under" | "standalone" | "launchable" | "launch_label" | "opt_in" | "color"
+> & {
+  color: string; // "" = none of its own
+  optIn: boolean; // kept through the form: a save never puts an opt-in type on every board
   standalone: boolean; // kept through the form: a save never drops it (plain would then be a type under no lead)
   launchable: boolean; // kept through the form: a save never puts a spawn-only type back on the Launch bar
   launchLabel: string; // "" = the button says the label
@@ -86,6 +100,8 @@ export function toDraft(doc: AgentDoc): Draft {
       standalone: t.standalone === true,
       launchable: t.launchable !== false,
       launchLabel: t.launch_label ?? "",
+      optIn: t.opt_in === true,
+      color: t.color ?? "",
     })),
   };
 }
@@ -124,6 +140,8 @@ export function fromDraft(d: Draft): AgentDoc {
       if (t.standalone) out.standalone = true;
       if (!t.launchable) out.launchable = false;
       if (t.launchLabel.trim()) out.launch_label = t.launchLabel.trim();
+      if (t.optIn) out.opt_in = true;
+      if (t.color) out.color = t.color;
       return out;
     }),
   };
@@ -200,7 +218,36 @@ export const newType = (launchers: Launcher[]): TypeDraft => ({
   standalone: false,
   launchable: true,
   launchLabel: "",
+  optIn: false,
+  color: "",
 });
+
+// a preset as a draft type — it runs the launchers of the lead it is under (the engine's rule for a type
+// under a lead); no such lead in the draft → no launcher: the save is refused naming it, never a launcher guessed
+export function fromPreset(d: Draft, p: Preset): TypeDraft {
+  const lead = d.types.find((t) => t.key === p.under);
+  const launchers = lead ? [...lead.launchers] : [];
+  const type: AgentType = {
+    key: p.key,
+    label: p.label,
+    launchers,
+    model: p.model,
+    prompt: p.prompt,
+    agent_name: p.agent_name,
+    session_name: p.session_name,
+    takes: [...p.takes],
+    max: p.max,
+    max_per_project: p.max_per_project,
+    under: p.under ?? null,
+    launchable: p.launchable,
+    opt_in: p.opt_in,
+  };
+  return toDraft({ launchers: d.launchers, agent_types: [type] }).types[0]!;
+}
+
+// the presets not in the draft yet (by key)
+export const presetsLeft = (d: Draft, presets: Preset[]) =>
+  presets.filter((p) => !d.types.some((t) => t.key === p.key));
 
 export const sameDoc = (a: AgentDoc, b: AgentDoc) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -208,4 +255,37 @@ export const sameDoc = (a: AgentDoc, b: AgentDoc) => JSON.stringify(a) === JSON.
 // session (the engine refuses a type under a worker, a sub team or a plain session)
 export function leadChoices(types: TypeDraft[], self: TypeDraft): string[] {
   return types.filter((t) => t !== self && t.key !== self.key && !t.under && !t.standalone).map((t) => t.key);
+}
+
+// the CSS colour a type's faces wear — its own colour, else the theme's for its key; null = the engine's hue
+// hashed from the key (the face draws it itself)
+export function faceColor(t: Pick<TypeDraft, "key" | "color">, data: Pick<AgentSettingsData, "colors" | "face_theme">) {
+  if (t.color && data.colors[t.color]) return data.colors[t.color]!;
+  return data.face_theme[t.key.trim()] ?? null;
+}
+
+// the first palette colour no type of the draft wears yet (its own or the theme's); "" when every one is taken
+export function freeColor(d: Draft, data: Pick<AgentSettingsData, "colors" | "face_theme">): string {
+  const worn = new Set(d.types.map((t) => faceColor(t, data)).filter((c): c is string => c !== null));
+  return Object.keys(data.colors).find((name) => !worn.has(data.colors[name]!)) ?? "";
+}
+
+// per type (by index): the other types that wear the same colour, or undefined
+export function colorClashes(d: Draft, data: Pick<AgentSettingsData, "colors" | "face_theme">) {
+  const worn = d.types.map((t) => faceColor(t, data));
+  return d.types.map((_, i) => {
+    const c = worn[i];
+    if (!c) return undefined;
+    const others = d.types.filter((_o, j) => j !== i && worn[j] === c).map((o) => o.key || "new type");
+    return others.length ? others : undefined;
+  });
+}
+
+// what a type IS, as short tags for its row: its place (lead · under <lead> · standalone · no lead) and how it starts
+export function typeTags(t: TypeDraft): string[] {
+  const tags = [t.standalone ? "standalone" : t.under ? `under ${t.under}` : "lead"];
+  tags.push(t.launchable ? "Launch bar" : "spawned by its lead");
+  if (t.optIn) tags.push("opt-in per board");
+  if (t.takes.length) tags.push(`takes ${t.takes.join(" · ")}`);
+  return tags;
 }

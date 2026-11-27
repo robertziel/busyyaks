@@ -67,7 +67,79 @@ module Busyyaks
 
     # The engine's host config: the file's settings + a revision's launchers and agent types. The engine refuses a bad
     # value (AgentsKanban::ConfigError / Invalid) — its message is the refusal.
-    def host(file, doc) = AgentsKanban::HostConfig.new(file.merge(doc!(doc)))
+    # busyyaks's own per-type keys `opt_in` and `color` are checked and taken out first: the engine never
+    # sees them. A type's colour goes into the theme as its face token (over the file's), so every face of the type —
+    # the board (its inline theme), the shell's :root, the lanes, the sidebar — wears it.
+    def host(file, doc)
+      d = doc!(doc)
+      types = d["agent_types"]
+      return AgentsKanban::HostConfig.new(file.merge(d)) unless types.is_a?(Array) # the engine's refusal
+
+      types.each { |t| busyyaks_keys!(t) if t.is_a?(Hash) }
+      AgentsKanban::HostConfig.new(themed(file, types).merge(
+                                     d.merge("agent_types" => types.map { |t| t.is_a?(Hash) ? t.except(*OWN) : t })
+                                   ))
+    end
+
+    # the file with the types' face colours over its theme (a theme that is no mapping: the engine's refusal, as is)
+    def themed(file, types)
+      tokens = face_tokens(types)
+      return file if tokens.empty? || !file["theme"].is_a?(Hash)
+
+      file.merge("theme" => file["theme"].merge(tokens))
+    end
+
+    def busyyaks_keys!(t)
+      opt_in!(t)
+      color!(t)
+    end
+
+    # A type's face colour: one name of COLORS — skin tokens, so it reads in every skin; absent = the theme's
+    # token for the type, else the engine's hue hashed from the key. Defined here once: the page's swatches are these.
+    COLOR = "color"
+    COLORS = {
+      "blue" => "var(--vivid-blue)", "green" => "var(--vivid-green)", "orange" => "var(--vivid-orange)",
+      "red" => "var(--vivid-red)", "yellow" => "var(--vivid-yellow)", "purple" => "var(--vivid-purple)",
+      "teal" => "var(--vivid-teal)", "pink" => "var(--vivid-pink)",
+      "gold" => "color-mix(in srgb, var(--vivid-yellow) 70%, var(--ink))",
+    }.freeze
+
+    def color!(t)
+      return unless t.key?(COLOR)
+      return if COLORS.key?(t[COLOR])
+
+      raise AgentsKanban::ConfigError, "agent type #{t['key']}: color must be one of #{COLORS.keys.join(', ')} " \
+                                       "(got #{t[COLOR].inspect})"
+    end
+
+    # {"--ak-face-type-<key>" => css} of the types that name a colour
+    def face_tokens(types)
+      types.select { |t| t.is_a?(Hash) && COLORS.key?(t[COLOR]) && t["key"].is_a?(String) }
+           .to_h { |t| ["--ak-face-type-#{t['key'].gsub(/[^a-zA-Z0-9_-]/, '-')}", COLORS.fetch(t[COLOR])] }
+    end
+
+    # OPT-IN agent types: `opt_in: true` on a type = a board runs it only when its repo's
+    # .busyyaks/agents.yml lists it under `use` (ProjectAgents) — a copywriter exists for every board and joins none
+    # uninvited. Only the lead starts one, for a card: so it runs `under` a lead and is `launchable: false` (never on a
+    # Launch bar a board did not ask for). Absent / false = every board runs it, as before.
+    OPT_IN = "opt_in"
+    # the per-type keys that are busyyaks's, never the engine's
+    OWN = [OPT_IN, COLOR].freeze
+
+    def opt_in!(t)
+      return unless t.key?(OPT_IN)
+
+      v = t[OPT_IN]
+      raise AgentsKanban::ConfigError, "agent type #{t['key']}: opt_in must be true or false" unless [true, false].include?(v)
+      return unless v && !(t["under"] && t["launchable"] == false)
+
+      raise AgentsKanban::ConfigError,
+            "agent type #{t['key']}: opt_in: true needs `under: <lead type>` and `launchable: false` — an opt-in type " \
+            "is started only by its lead, for a card on a board whose .busyyaks/agents.yml uses it"
+    end
+
+    # The opt-in type keys of a revision's doc
+    def opt_in(doc) = doc.fetch("agent_types").select { |t| t[OPT_IN] == true }.map { |t| t["key"] }
 
     def template = doc!(YAML.safe_load_file(TEMPLATE))
 

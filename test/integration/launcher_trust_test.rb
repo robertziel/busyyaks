@@ -5,6 +5,7 @@ require_relative "../support/wait"
 require_relative "../support/auto_loaded"
 require_relative "../../lib/busyyaks/clock"
 require_relative "../../lib/busyyaks/hermes_board"
+require_relative "../../lib/busyyaks/agent_presets"
 require "tmpdir"
 require "fileutils"
 require "open3"
@@ -34,7 +35,8 @@ class LauncherTrustTest < Minitest::Test
   # launch.start_seconds of the sandbox: far above the 13 s a slow wrapper below takes, so a refusal "at
   # once" is told from one on the clock by its reason and its distance from this, never by the machine's speed
   START_SECONDS = 120
-  COPY = %w[bin/launcher lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml config/harnesses.yml skills].freeze
+  COPY = %w[bin/launcher lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml config/harnesses.yml skills
+            config/agent_presets.yml].freeze
 
   def setup
     # under the user's home: the run dir's parents must not be writable by another user (LauncherRules.run_dir!)
@@ -409,7 +411,7 @@ class LauncherTrustTest < Minitest::Test
     assert_equal stage, argv[i + 1]
     assert argv[i + 2].start_with?("/busyyaks:session Test lead session for fresh"), argv.inspect
     assert_equal ["--remote-control", "by_fresh_s"], argv.last(2)
-    assert_equal %w[core agents/lead critic qa reviewer session], r["skills"].map { |k| k["name"] }
+    assert_equal %w[core agents/lead critic design qa reviewer security session], r["skills"].map { |k| k["name"] }
     assert_equal "none", r["project_skills"]
     assert_equal 0o700, File.stat(stage).mode & 0o777
     assert_equal({ "name" => "busyyaks" }, JSON.parse(File.read(File.join(stage, ".claude-plugin/plugin.json"))))
@@ -578,7 +580,7 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
     agent_rule("fresh", "worker", "Workers only: screenshots on the card.\n")
     r = launch("fresh")
     assert r["ok"], r.inspect
-    assert_equal %w[core agents/lead agents/lead critic qa reviewer session], r["skills"].map { |k| k["name"] }
+    assert_equal %w[core agents/lead agents/lead critic design qa reviewer security session], r["skills"].map { |k| k["name"] }
     assert_equal "project", r["skills"][2]["source"]
     stage = File.join(@base, "state/skills/by_fresh_s")
     assert_includes File.read(File.join(@base, "command")), "--plugin-dir #{stage}"
@@ -653,7 +655,7 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
     r = ask("op" => "skills_layers", "settings" => settings)
     assert r["ok"], r.inspect
     assert_equal %w[skills/busyyaks/core/SKILL.md skills/busyyaks/agents/lead.md], r.dig("types", "lead", "start")
-    assert_equal %w[critic qa reviewer], r.dig("types", "lead", "on_demand")
+    assert_equal %w[critic design qa reviewer security], r.dig("types", "lead", "on_demand")
     lead = r["files"].find { _1["path"] == "skills/busyyaks/agents/lead.md" }
     assert_equal [File.read(File.join(@co, "skills/busyyaks/agents/lead.md")), "busyyaks", "agent", "start"],
                  lead.values_at("text", "source", "kind", "load")
@@ -680,6 +682,78 @@ entry.index("## Agent type lead (project)\n\nRun make deploy.")
     assert r["ok"], r.inspect
     assert_match(/\Aleft: .* is not in config\/busyyaks.yml launch.trusted_paths/, r["project_skills"])
     refute(r["skills"].any? { |k| k["source"] == "project" })
+  end
+
+  # the agent settings with the copywriter preset added (opt-in, under the lead, on the lead's launchers)
+  def with_copywriter
+    preset = Busyyaks::AgentPresets.load!.find { |p| p["key"] == "copywriter" }
+    lead = AGENTS["agent_types"].find { |t| t["key"] == "lead" }
+    AGENTS.merge("agent_types" => AGENTS["agent_types"] + [Busyyaks::AgentPresets.type(preset, launchers: lead["launchers"])])
+  end
+
+  def agents_file(repo, text) = File.write(File.join(@projects, repo, ".busyyaks/agents.yml"), text)
+
+  def under_lead(dir, session, type, doc, over = {})
+    ask({ "op" => "launch", "path" => "/projects/#{dir}", "launcher" => "fullclaude", "session" => session,
+          "type" => type, "lead" => "by_#{dir}_s", "settings" => { "id" => 2, "doc" => doc },
+          "vars" => { "slug" => dir, "session" => session, "agent" => "a", "type" => type, "cards" => "-" }, }.merge(over))
+  end
+
+  # the real bin/launcher reads the repo's .busyyaks/agents.yml itself (its own trust decision) — a role's
+  # brief follows its type's parts in the staged entry skill; an opt-in type starts only on a board that uses it; a
+  # role from an untrusted repo, a role of another type, an invalid file: refused before tmux
+  def test_a_board_role_and_an_opt_in_type_reach_the_session_only_as_the_repos_file_says
+    ask("op" => "create", "root" => "/projects", "name" => "fresh", "url" => "")
+    doc = with_copywriter
+    agent_rule("fresh", "changelog", "Changelog role: one entry per card under Unreleased.\n")
+    agents_file("fresh", "roles:\n  changelog: {label: Changelog writer, like: worker}\n")
+    a = ask("op" => "project_agents", "path" => "/projects/fresh", "settings" => { "id" => 2, "doc" => doc })
+    assert_equal ["loaded", ["copywriter"], { "label" => "Changelog writer", "like" => "worker" }],
+                 [a["state"], a["opt_in"], a.dig("agents", "roles", "changelog")]
+    r = ask("op" => "launch", "path" => "/projects/fresh", "session" => "by_fresh_s", "type" => "lead",
+            "launcher" => "fullclaude", "lead_key" => LEAD_KEY, "settings" => { "id" => 2, "doc" => doc },
+            "vars" => { "slug" => "fresh", "session" => "by_fresh_s", "agent" => "a", "type" => "lead", "cards" => "-" })
+    assert r["ok"], r.inspect
+    File.write(File.join(@base, "alive"), "=by_fresh_s\n")
+    File.write(@tmux_log, "")
+    assert_match(/agent types: agent type copywriter is opt-in and this board does not use it \(.*use: none\)/,
+                 under_lead("fresh", "by_c1", "copywriter", doc)["error"])
+    assert_match(/role changelog runs as agent type worker/,
+                 under_lead("fresh", "by_c1", "copywriter", doc, "role" => "changelog")["error"])
+    refute_includes tmux_calls, "new-session", "nothing was started"
+    r = under_lead("fresh", "by_w1", "worker", doc, "role" => "changelog")
+    assert r["ok"], r.inspect
+    assert_equal "changelog", r["role"]
+    assert_includes r["skills"].map { |k| k["name"] }, "agents/changelog"
+    entry = File.read(File.join(@base, "state/skills/by_w1/skills/session/SKILL.md"))
+    assert_includes entry, "## Agent role changelog (project)\n\nChangelog role: one entry per card under Unreleased."
+    assert_operator entry.index("## Agent type worker (busyyaks)"), :<, entry.index("## Agent role changelog (project)")
+    assert_match(/launched by_w1 \(worker role changelog\//, File.read(@log))
+    agents_file("fresh", "use: [copywriter]\nroles:\n  changelog: {label: Changelog writer, like: worker}\n")
+    r = under_lead("fresh", "by_c2", "copywriter", doc)
+    assert r["ok"], r.inspect
+    entry = File.read(File.join(@base, "state/skills/by_c2/skills/session/SKILL.md"))
+    assert_includes entry, "## Agent type copywriter (busyyaks)", "the preset's brief ships with busyyaks"
+    agents_file("fresh", "colums: {}\n")
+    assert_match(/agent types: \.busyyaks\/agents\.yml: unknown keys colums/,
+under_lead("fresh", "by_w2", "worker", doc)["error"])
+    assert_match(/unknown keys colums/,
+                 ask("op" => "project_agents", "path" => "/projects/fresh", "settings" => { "id" => 2, "doc" => doc })["error"])
+  end
+
+  def test_an_untrusted_repos_agents_file_is_left_and_its_roles_never_start
+    planted("planted")
+    agent_rule("planted", "changelog", "Changelog role.\n")
+    agents_file("planted", "roles:\n  changelog: {label: Changelog writer, like: worker}\n")
+    a = ask("op" => "project_agents", "path" => "/projects/planted", "settings" => { "id" => 1, "doc" => AGENTS })
+    assert_match(/\Aleft: .* is not in config\/busyyaks.yml launch.trusted_paths/, a["state"])
+    assert_nil a["agents"], "never read"
+    r = launch("planted")
+    assert r["ok"], r.inspect
+    File.write(File.join(@base, "alive"), "=by_planted_s\n")
+    r = under_lead("planted", "by_w1", "worker", AGENTS, "role" => "changelog")
+    assert_match(%r{agent types: this board's \.busyyaks/agents\.yml is not read \(.* launch.trusted_paths}, r["error"])
+    assert_match(/: no session is started for its cards/, r["error"])
   end
 
   # hermes: a config without the external_dirs line → hermes (asked in the session's env) lists no busyyaks-session:
@@ -835,7 +909,7 @@ r["error"])
     assert_match(/\A---\nname: busyyaks-session-#{token}\n/, File.read(entry))
     assert File.file?(File.join(stage, "busyyaks-skills/busyyaks-reviewer-#{token}/SKILL.md"))
     assert_includes File.read(entry), "## Agent type lead (busyyaks)"
-    assert_equal %w[core agents/lead critic qa reviewer session], r["skills"].map { |k|
+    assert_equal %w[core agents/lead critic design qa reviewer security session], r["skills"].map { |k|
  k["name"] }, "lead: core + its part + the on-demand briefs + the entry skill"
     refute_match(/--remote-control/, started)
     refute_match(/send-keys/, tmux_calls, "no trust prompt answered for hermes")

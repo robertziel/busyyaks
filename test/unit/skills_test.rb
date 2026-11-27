@@ -61,8 +61,9 @@ class SkillsTest < Minitest::Test
     assert_equal %w[busyyaks], layers.map(&:source)
     own = layers.first
     assert_equal "core", own.core.name
-    assert_equal %w[lead team worker], own.agents.keys.sort
-    assert_equal %w[critic qa reviewer], own.skills.map(&:name)
+    # + the preset types' briefs (config/agent_presets.yml), staged once a deployment adds the type
+    assert_equal %w[copywriter lead researcher team worker], own.agents.keys.sort
+    assert_equal %w[critic design qa reviewer security], own.skills.map(&:name)
     TYPES.each { |t| S.check_selection!(S.select(layers, t), SET) }
     assert_empty S.select(layers, "plain").parts, "plain = core alone"
   end
@@ -123,7 +124,7 @@ class SkillsTest < Minitest::Test
   def test_agents_files_are_type_named_md_only
     dir = own
     agent(dir, "boss")
-    refused(%r{agents/boss.md: boss is not an agent type \(lead, worker, team, plain\)}) { load_own }
+    refused(%r{agents/boss.md: boss is not an agent type \(copywriter, researcher, lead, worker, team, plain\)}) { load_own }
     FileUtils.rm_f(File.join(dir, "agents/boss.md"))
     File.write(File.join(dir, "agents/notes.txt"), "x")
     refused(%r{agents/notes.txt: agents/ holds <agent type>.md files only}) { load_own }
@@ -345,6 +346,44 @@ class SkillsTest < Minitest::Test
     sel, = plan(type: type)
     dest = File.join(@tmp, "stage/s1")
     [dest, S.stage!(sel, dest, delivery)]
+  end
+
+  # a project ROLE (the repo's .busyyaks/agents.yml roles) = its type's parts + the role's brief, the project
+  # layer's agents/<role>.md, after them; only from a loaded layer, never as a replacement
+  def test_a_role_launch_gets_its_types_parts_then_the_roles_brief
+    own = File.join(@co, "skills/busyyaks")
+    skill(own, "core")
+    agent(own, "worker")
+    pdir = File.join(@repo, ".busyyaks/skills")
+    FileUtils.mkdir_p(pdir)
+    File.write(File.join(@repo, ".busyyaks/agents.yml"), "roles:\n  changelog: {label: Changelog writer, like: worker}\n")
+    agent(pdir, "changelog", "Write one changelog entry.\n")
+    sel, status = S.plan!(checkout: @co, repo: @repo, type: "worker", types: TYPES, settings: SET, trust_refusal: nil,
+                          role: "changelog")
+    assert_equal "loaded", status
+    assert_equal [%w[worker busyyaks], %w[changelog project]], sel.parts.map { [_1.type, _1.source] }
+    entry = S.entry_body(sel, S::ClaudeCode.new)
+    assert_includes entry, "## Agent role changelog (project)\n\nWrite one changelog entry."
+    # over the entry skill's limit: the refusal names the role's brief too (QA round 4)
+    tight = S.settings!("max_bytes" => 65_536, "max_start_bytes" => 40, "project" => "allow", "local_dir" => nil)
+    e = assert_raises(S::Invalid) { S.check_selection!(sel, tight) }
+    assert_match(%r{agent type worker with role changelog: core \+ agents/worker\.md \+ agents/changelog\.md are \d+ bytes},
+e.message)
+    plain, = S.plan!(checkout: @co, repo: @repo, type: "worker", types: TYPES, settings: SET, trust_refusal: nil)
+    assert_equal %w[worker], plain.parts.map(&:type), "a worker with no role does not get the role's brief"
+    e = assert_raises(S::Invalid) do
+      S.plan!(checkout: @co, repo: @repo, type: "worker", types: TYPES, settings: SET, trust_refusal: "not trusted",
+              role: "changelog")
+    end
+    assert_match(/role changelog: the repo's .busyyaks\/skills is left: not trusted — its brief cannot load/, e.message)
+    agent(pdir, "changelog", "---\nmode: replace\n---\nOnly this.\n")
+    e = assert_raises(S::Invalid) do
+      S.plan!(checkout: @co, repo: @repo, type: "worker", types: TYPES, settings: SET, trust_refusal: nil, role: "changelog")
+    end
+    assert_match(/a role's brief follows its type's parts — mode: replace is for an agent type's file/, e.message)
+    FileUtils.rm_f(File.join(@repo, ".busyyaks/agents.yml"))
+    e = assert_raises(S::Invalid) { S.project(@repo, types: TYPES, settings: SET) }
+    assert_match(/changelog is not an agent type/, e.message, "a brief whose role the file no longer has refuses the layer")
   end
 
   def test_the_claude_code_stage_is_a_plugin_with_the_entry_skill

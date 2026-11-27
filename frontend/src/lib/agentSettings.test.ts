@@ -1,11 +1,17 @@
 // Settings → Agents & launchers: the revision ↔ form round trip and the edits that keep a type consistent.
 import { describe, expect, it } from "vitest";
 import {
+  colorClashes,
+  faceColor,
+  freeColor,
+  typeTags,
   fromDraft,
+  fromPreset,
   invocationIndex,
   invocationLine,
   newLauncher,
   newType,
+  presetsLeft,
   removeLauncher,
   renameLauncher,
   sameDoc,
@@ -14,6 +20,7 @@ import {
   withInvocation,
   type AgentDoc,
   type Invocation,
+  type Preset,
 } from "./agentSettings";
 
 const doc: AgentDoc = {
@@ -149,6 +156,42 @@ describe("agent settings form", () => {
     expect(invocationLine(allow[2]!)).toBe("hermes · hermes chat");
   });
 
+  // config/agent_presets.yml → "Add preset": the lead's launchers, opt_in kept through the form
+  it("a preset adds an opt-in type on its lead's launchers, and is offered once", () => {
+    const preset: Preset = {
+      key: "copywriter",
+      label: "Copywriter",
+      description: "Writes the words people read.",
+      model: null,
+      prompt: "Copywriter for {slug}",
+      agent_name: "copywriter-{session}",
+      session_name: "by_{slug}_copywriter",
+      takes: [],
+      max: 0,
+      max_per_project: 0,
+      under: "lead",
+      launchable: false,
+      opt_in: true,
+    };
+    const d = toDraft(doc);
+    const t = fromPreset(d, preset);
+    expect([t.key, t.launchers, t.under, t.launchable, t.optIn]).toEqual([
+      "copywriter",
+      ["fullclaude", "local"],
+      "lead",
+      false,
+      true,
+    ]);
+    const saved = fromDraft({ ...d, types: [...d.types, t] }).agent_types.at(-1)!;
+    expect([saved.opt_in, saved.launchable, saved.under]).toEqual([true, false, "lead"]);
+    expect(presetsLeft({ ...d, types: [...d.types, t] }, [preset])).toEqual([]);
+    expect(presetsLeft(d, [preset])).toEqual([preset]);
+    // no such lead in the draft: no launcher (the save is refused naming it), never one guessed
+    expect(fromPreset(d, { ...preset, under: "boss" }).launchers).toEqual([]);
+    // a type that is not opt-in saves without the key
+    expect(fromDraft(d).agent_types.every((x) => !("opt_in" in x))).toBe(true);
+  });
+
   it("a new type runs the first launcher with no prompt and no cap", () => {
     const t = newType(doc.launchers);
     expect([t.launchers, t.models, t.hasPrompt, t.max, t.max_per_project]).toEqual([
@@ -157,6 +200,43 @@ describe("agent settings form", () => {
       false,
       0,
       0,
+    ]);
+  });
+});
+
+describe("type colours", () => {
+  const palette = {
+    colors: { blue: "var(--vivid-blue)", pink: "var(--vivid-pink)", teal: "var(--vivid-teal)" },
+    face_theme: { lead: "var(--vivid-blue)" },
+  };
+  it("a type wears its own colour, else the theme's for its key, else none (the hashed hue); a colour round-trips", () => {
+    const d = toDraft(doc);
+    const lead = d.types.find((t) => t.key === "lead")!;
+    expect(faceColor(lead, palette)).toBe("var(--vivid-blue)");
+    expect(faceColor({ ...lead, color: "pink" }, palette)).toBe("var(--vivid-pink)");
+    expect(faceColor({ key: "nobody", color: "" }, palette)).toBeNull();
+    expect(fromDraft({ ...d, types: [{ ...lead, color: "teal" }] }).agent_types[0]!.color).toBe("teal");
+    expect(fromDraft(d).agent_types.some((t) => "color" in t)).toBe(false);
+  });
+  it("a new type gets the first colour nobody wears; a shared colour is named on both", () => {
+    const d = toDraft(doc);
+    expect(freeColor(d, palette)).toBe("pink");
+    const two = { ...d, types: d.types.map((t) => ({ ...t, color: "teal" })) };
+    const clash = colorClashes(two, palette);
+    expect(clash[0]).toEqual(two.types.slice(1).map((t) => t.key));
+    expect(colorClashes(d, palette).every((c) => c === undefined)).toBe(true);
+  });
+  it("tags say what a type is", () => {
+    const t = toDraft(doc).types[0]!;
+    expect(typeTags({ ...t, under: "", standalone: false, launchable: true, optIn: false, takes: [] })).toEqual([
+      "lead",
+      "Launch bar",
+    ]);
+    expect(typeTags({ ...t, under: "lead", launchable: false, optIn: true, takes: ["working"] })).toEqual([
+      "under lead",
+      "spawned by its lead",
+      "opt-in per board",
+      "takes working",
     ]);
   });
 });

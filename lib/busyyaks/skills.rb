@@ -6,6 +6,7 @@ require "json"
 require "securerandom"
 require "yaml"
 require_relative "board_mcp"
+require_relative "agent_presets"
 
 module Busyyaks
   # The skills a session busyyaks launches gets — per launch only, never installed user-wide (an
@@ -115,21 +116,67 @@ module Busyyaks
 
     # The busyyaks layers: <checkout>/skills/busyyaks (core required), then the deployment's skills.local_dir (whose
     # skills / agents files may replace busyyaks's: the override rule, select)
+    # Their agents/<key>.md may name a type of the settings or a PRESET (config/agent_presets.yml): the
+    # brief a preset type runs with ships beside it, before any deployment adds the type.
     def busyyaks!(checkout, types:, settings:)
-      own = layer!(File.join(checkout, OWN_DIR), root: checkout, source: BUSYYAKS, types: types, settings: settings)
+      known = presets! | types
+      own = layer!(File.join(checkout, OWN_DIR), root: checkout, source: BUSYYAKS, types: known, settings: settings)
       return [own] unless settings.local_dir
 
-      [own, layer!(File.join(checkout, settings.local_dir), root: checkout, source: DEPLOYMENT, types: types,
+      [own, layer!(File.join(checkout, settings.local_dir), root: checkout, source: DEPLOYMENT, types: known,
                                                              settings: settings),]
     end
 
-    # A project's layer: <repo>/.busyyaks/skills, nil when the repo has none
+    def presets!
+      AgentPresets.keys
+    rescue AgentPresets::Invalid => e
+      raise Invalid, e.message
+    end
+
+    # A project's layer: <repo>/.busyyaks/skills, nil when the repo has none. Its agents/<key>.md may also name a
+    # ROLE of the repo's .busyyaks/agents.yml (ProjectAgents) — the role's brief.
     def project(repo, types:, settings:)
       dir = File.join(repo, PROJECT_DIR, "skills")
       no_link!(repo, dir)
       return nil unless File.exist?(dir)
 
-      layer!(dir, root: repo, source: PROJECT_SOURCE, types: types, settings: settings)
+      layer!(dir, root: repo, source: PROJECT_SOURCE, types: types | roles_of(repo), settings: settings)
+    end
+
+    AGENTS_FILE = File.join(PROJECT_DIR, "agents.yml") # a board's agent types (ProjectAgents)
+    AGENTS_FILE_MAX = 16_384
+
+    # The repo's .busyyaks/agents.yml as text, nil when it has none — the ONE read of it (ProjectAgents.load!,
+    # roles_of): no symlink on the way, a regular file within AGENTS_FILE_MAX, UTF-8; else Invalid
+    def agents_file!(repo)
+      path = File.join(repo, AGENTS_FILE)
+      dir = File.join(repo, PROJECT_DIR)
+      no_link!(repo, dir) if File.symlink?(dir)
+      return nil unless File.exist?(path) || File.symlink?(path)
+
+      no_link!(repo, path)
+      raise Invalid, "#{AGENTS_FILE} is not a regular file" unless File.file?(path)
+      raise Invalid, "#{AGENTS_FILE} is #{File.size(path)} bytes, over #{AGENTS_FILE_MAX}" if File.size(path) > AGENTS_FILE_MAX
+
+      text = File.binread(path).force_encoding(Encoding::UTF_8)
+      raise Invalid, "#{AGENTS_FILE} is not UTF-8" unless text.valid_encoding?
+
+      text
+    rescue SystemCallError => e
+      raise Invalid, "#{AGENTS_FILE}: #{e.message}"
+    end
+
+    # The role names .busyyaks/agents.yml declares (its `roles` keys) — only which brief files the layer holds; the
+    # file itself is validated whole by ProjectAgents (bin/launcher, the writer). Unreadable → Invalid.
+    def roles_of(repo)
+      text = agents_file!(repo) or return []
+      raw = YAML.safe_load(text)
+      roles = raw.is_a?(Hash) ? raw.fetch("roles", {}) : nil
+      raise Invalid, "#{AGENTS_FILE}: roles must be a mapping" unless roles.is_a?(Hash)
+
+      roles.keys.select { |k| k.is_a?(String) && k.match?(NAME) }
+    rescue Psych::Exception => e
+      raise Invalid, "#{AGENTS_FILE}: #{e.message}"
     end
 
     # One layer dir → Layer, every rule checked (nothing is half-loaded: one refusal refuses all):
@@ -322,10 +369,27 @@ end
     # One launch's skills → [Selection, project_skills]: busyyaks's layers for `type`, then the repo's (only when
     # skills.project is allow AND the repo is trusted — the folder-trust decision, LaunchTrust.refusal — else
     # "left: <why>", nothing of it read); project_skills = "loaded" · "none" (no .busyyaks/skills) · "left: <why>"
-    def plan!(checkout:, repo:, type:, types:, settings:, trust_refusal:)
+    # role: a ROLE of the repo's .busyyaks/agents.yml the session runs (bin/launcher checked it against the
+    # file): its brief, the project layer's agents/<role>.md, follows the type's parts — required, so the repo's layer
+    # must be loaded.
+    def plan!(checkout:, repo:, type:, types:, settings:, trust_refusal:, role: nil)
       own = busyyaks!(checkout, types: types, settings: settings)
       status, theirs = project_layer(repo, types: types, settings: settings, trust_refusal: trust_refusal)
-      [check_selection!(select(own + theirs, type), settings), status]
+      sel = select(own + theirs, type)
+      sel = with_role(sel, theirs, role, status) if role
+      [check_selection!(sel, settings), status]
+    end
+
+    def with_role(sel, theirs, role, status)
+      raise Invalid, "role #{role}: the repo's .busyyaks/skills is #{status} — its brief cannot load" unless status == "loaded"
+
+      part = theirs.first.agents[role] or
+        raise Invalid, "role #{role}: no brief #{PROJECT_DIR}/skills/#{AGENTS}/#{role}.md"
+      if part.mode == "replace"
+        raise Invalid, "#{part.path}: a role's brief follows its type's parts — mode: replace is for an agent type's file"
+      end
+
+      sel.dup.tap { _1.parts = sel.parts + [part] }
     end
 
     # Why a repo's own .busyyaks/skills are left out of a launch (nil = they load): the deployment's setting, then the
@@ -343,11 +407,13 @@ end
     # layer's file marked when the override rule replaced it (`composition`: the launch's own select). Every type's
     # launch is planned: an invalid layer, or a type whose entry skill would be over max_start_bytes, raises Invalid —
     # as that launch would.
-    def project_status(checkout:, repo:, types:, settings:, trust_refusal:)
+    # roles = {role => its type} of the repo's .busyyaks/agents.yml: each role's launch is planned too.
+    def project_status(checkout:, repo:, types:, settings:, trust_refusal:, roles: {})
       own = busyyaks!(checkout, types: types, settings: settings)
       status, theirs = project_layer(repo, types: types, settings: settings, trust_refusal: trust_refusal)
       layers = own + theirs
       types.each { |t| check_selection!(select(layers, t), settings) }
+      roles.each { |r, t| check_selection!(with_role(select(layers, t), theirs, r, status), settings) } if status == "loaded"
       { status: status, budget: budget(own, types, settings), replace_budget: replace_budget(own, types, settings),
         layers: types.to_h { |t| [t, composition(layers, t)] }, }
     end
@@ -535,9 +601,10 @@ end
     def check_selection!(selection, settings)
       size = selection.core.body.bytesize + selection.parts.sum { |p| p.body.bytesize }
       if size > settings.max_start_bytes
-        raise Invalid,
-"agent type #{selection.type}: core + agents/#{selection.type}.md are #{size} bytes, " \
-"over skills.max_start_bytes #{settings.max_start_bytes}"
+        roles = selection.parts.map(&:type).uniq - [selection.type] # a project role's brief (with_role)
+        what = roles.empty? ? "agent type #{selection.type}" : "agent type #{selection.type} with role #{roles.join(', ')}"
+        files = ["agents/#{selection.type}.md", *roles.map { |r| "agents/#{r}.md" }].join(" + ")
+        raise Invalid, "#{what}: core + #{files} are #{size} bytes, over skills.max_start_bytes #{settings.max_start_bytes}"
       end
 
       selection
@@ -554,7 +621,8 @@ end
       out << "\nReference files beside this skill: #{refs.map { |f| "`#{f}`" }.join(', ')}.\n" if refs.any?
       selection.parts.each do |p|
         instead = p.replaces.to_a.any? ? ", replaces #{p.replaces.join(' + ')}" : ""
-        out << "\n## Agent type #{t} (#{p.source}#{instead})\n\n#{p.body.strip}\n"
+        head = p.type == t ? "Agent type #{t}" : "Agent role #{p.type}" # a project role's brief (with_role)
+        out << "\n## #{head} (#{p.source}#{instead})\n\n#{p.body.strip}\n"
       end
       if selection.skills.any?
         out << "\n## Load when needed\n\n"

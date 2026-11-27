@@ -40,6 +40,9 @@ module Busyyaks
     # busyyaks's own skills layers as a launch of the host checkout reads them (Settings → Agent rules): the answer as
     # is — {ok, files, types, creatable, checkout, limits} or {ok: false, error, status}
     def skills_layers(settings:) = raw(op: "skills_layers", settings: settings)
+    # the repo's .busyyaks/agents.yml as a launch reads it: the answer as is — {ok, state, agents, opt_in} or
+    # {ok: false, error, status}
+    def project_agents(path:, settings:) = raw(op: "project_agents", path: path, settings: settings)
     def create(root:, name:, url:) = call(op: "create", root: root, name: name, url: url)
     def jobs = call(op: "jobs")["jobs"]
     def agents = call(op: "agents")
@@ -127,8 +130,11 @@ module Busyyaks
     # registration are that revision's, so the start is too — bin/launcher rebuilds the engine config from it and
     # refuses a command that is not on the host allowlist (config/busyyaks.yml launch.commands).
     class LaunchPort
-      def initialize(revision)
+      # role: the project role a kanban_spawn starts (BoardAgents checked it; bin/launcher checks it again
+      # against the repo's .busyyaks/agents.yml), nil = none
+      def initialize(revision, role: nil)
         @revision = revision
+        @role = role
       end
 
       def name(project:, base:) = LauncherClient.call(op: "name", base: base)["session"]
@@ -139,7 +145,7 @@ module Busyyaks
       def start(session:, project:, type:, launcher:, argv:, prompt_template:, vars:, lead_key:, lead:)
         LauncherClient.call(op: "launch", path: project[:path], session: session, type: type, launcher: launcher, argv: argv,
                             prompt_template: prompt_template, vars: vars, settings: @revision, lead_key: lead_key,
-                            lead: lead)
+                            lead: lead, role: @role)
       end
 
       # The key bin/launcher keeps for a lead it started, while that tmux session runs (kanban_spawn / kanban_register:

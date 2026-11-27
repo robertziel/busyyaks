@@ -9,8 +9,12 @@ Encoding.default_external = Encoding::UTF_8
 # reach the host's tmux, so it asks this process over a unix socket in .env LAUNCHER_RUN_DIR (bind-mounted
 # into the web, mcp and notifier containers only — never under ./data, which every container mounts). One JSON request per connection:
 #   {"op":"name","base":"x_teamlead"}               → {"ok":true,"session":"x_teamlead_2"}   the engine's name, made free
-#   {"op":"launch","path":"/projects/x","session":"x_2","type":"lead","launcher":"fullclaude","vars":{...}}
-#                                                  → {"ok":true,"session":"x_2",...}  the engine registered x_2 first (Api#launch)
+#   {"op":"launch","path":"/projects/x","session":"x_2","type":"lead","launcher":"fullclaude","vars":{...},"role":null}
+#                                                  → {"ok":true,"session":"x_2",...}  the engine registered x_2 first (Api#launch);
+#                                                    role = a role of the repo's .busyyaks/agents.yml or null
+#   {"op":"project_agents","path":"/projects/x","settings":{...}} → {"ok":true,"state":"loaded"|"none"|"left: <why>",
+#                                                    "agents":{use,roles,columns}|null,"opt_in":[type]}  the repo's
+#                                                    .busyyaks/agents.yml as a launch reads it
 #   {"op":"sessions"}                                                      → {"ok":true,"sessions":[...]}
 #   {"op":"lead_key","session":"x_teamlead"}       → {"ok":true,"key":…}  only for a lead THIS launcher started, while
 #                                                    it runs (the engine's lead check for kanban_spawn)
@@ -84,6 +88,8 @@ require_relative "../lib/busyyaks/trust_dialog"
 require_relative "../lib/busyyaks/agent_settings"
 # the skills every launch hands its session: busyyaks's own + the project's, staged per launch
 require_relative "../lib/busyyaks/skills"
+# a board's own agent types: the repo's .busyyaks/agents.yml, read for a trusted repo only
+require_relative "../lib/busyyaks/project_agents"
 # the live terminal's stream: its frames, names and limits — the same file the web relays it with
 require_relative "../lib/busyyaks/terminal"
 # the agent harnesses the hello screen looks for (config/harnesses.yml)
@@ -789,12 +795,31 @@ def launch(req)
   rescue Busyyaks::LaunchTrust::Invalid => e
     raise ArgumentError, "folder trust: #{e.message}"
   end
+  # the board's agent types, checked here too — what the container asks is never trusted past this socket:
+  # an opt-in type only on a board whose .busyyaks/agents.yml uses it, a role only from that (trusted) file and as the
+  # type it runs as; an invalid file refuses every launch on the board, as an invalid skills layer does
+  role = req["role"]
+  raise ArgumentError, "role must be a role name or null (got #{role.inspect})" unless role.nil? || role.is_a?(String)
+
+  begin
+    state, agents, opt_in = project_agents_state(cfg, req["settings"], dir, refusal)
+    # a session started for cards (under a lead) follows the file; a lead / standalone session starts whatever it says
+    # (an invalid file has refused above), and takes no role
+    if t.under
+      Busyyaks::ProjectAgents.spawn!(state: state, agents: agents, column: nil, column_label: nil, type: t.key, role: role,
+                                     opt_in: opt_in)
+    elsif role
+      raise Busyyaks::ProjectAgents::Invalid, "a #{t.key} session takes no role (a role runs as a type under a lead)"
+    end
+  rescue Busyyaks::ProjectAgents::Invalid, Busyyaks::Skills::Invalid => e
+    raise ArgumentError, "agent types: #{e.message}"
+  end
   # the session's skills: selected, validated, staged as a copy — any failure refuses the launch, nothing started
   stage = File.join(STAGES, name)
   delivery, receipt, project_skills = begin
     d = Busyyaks::Skills.delivery(launcher.kind)
     selected, ps = Busyyaks::Skills.plan!(checkout: ROOT, repo: dir, type: t.key, types: cfg.agent_type_keys,
-                                          settings: SKILLS, trust_refusal: refusal)
+                                          settings: SKILLS, trust_refusal: refusal, role: role)
     STAGE_LOCK.synchronize do
       raise ArgumentError, "a launch of #{name} is already in flight" if IN_FLIGHT.include?(name)
 
@@ -809,7 +834,7 @@ def launch(req)
   end
   begin
     launch_staged(StagedLaunch.new(cfg, dir, name, vars, t, launcher, host_kind, refusal, stage, delivery, receipt,
-                                   project_skills, lead_key))
+                                   project_skills, lead_key, role))
   ensure
     STAGE_LOCK.synchronize { IN_FLIGHT.delete(name) }
   end
@@ -817,10 +842,10 @@ end
 
 # The rest of a launch once its skills are staged (IN_FLIGHT holds its name until it returns)
 StagedLaunch = Struct.new(:cfg, :dir, :name, :vars, :type, :launcher, :host_kind, :refusal, :stage, :delivery, :receipt,
-                          :project_skills, :lead_key)
+                          :project_skills, :lead_key, :role)
 
 def launch_staged(job)
-  cfg, dir, name, vars, t, launcher, host_kind, refusal, stage, delivery, receipt, project_skills, lead_key = job.to_a
+  cfg, dir, name, vars, t, launcher, host_kind, refusal, stage, delivery, receipt, project_skills, lead_key, role = job.to_a
   begin
     prompt = delivery.prompt(t.prompt && AgentsKanban::Launch.render(t.prompt, **vars))
     argv = AgentsKanban::Launch.argv(cfg, type: t.key, launcher: launcher.key, session: name, prompt: prompt,
@@ -868,7 +893,7 @@ def launch_staged(job)
     rc = rc.merge(reason: why)
   end
   skills = receipt.map { |r| "#{r[:name]}(#{r[:source]},#{r[:load]},#{r[:sha][0, 12]})" }.join(" ")
-  puts "#{Busyyaks::Clock.now.iso8601} launched #{name} (#{t.key}/#{launcher.key}, #{launcher.kind}) in #{dir} · trust #{trust[:trust] || 'not asked'} · skills #{skills} · project_skills #{project_skills} · #{rc.except(:reason).map { |k, v| "#{k} #{v}" }.join(' · ')}#{rc[:reason] ? " (#{rc[:reason]})" : ''}"
+  puts "#{Busyyaks::Clock.now.iso8601} launched #{name} (#{t.key}#{role ? " role #{role}" : ''}/#{launcher.key}, #{launcher.kind}) in #{dir} · trust #{trust[:trust] || 'not asked'} · skills #{skills} · project_skills #{project_skills} · #{rc.except(:reason).map { |k, v| "#{k} #{v}" }.join(' · ')}#{rc[:reason] ? " (#{rc[:reason]})" : ''}"
   # the kind's start check failed (claude: no `claude --remote-control <name>` came up — it refused to start, exited,
   # the pane is a bare shell; hermes: no hermes process): the launch FAILED — the session is killed and refused, so
   # the engine ends the registration and releases what it adopted (never a registered owner nobody runs). Only a
@@ -881,8 +906,8 @@ def launch_staged(job)
     FileUtils.rm_rf(stage) if gone
     return { ok: false, error: error, status: 422 }
   end
-  { ok: true, session: name, type: t.key, launcher: launcher.key, kind: launcher.kind, dir: dir, prompt: !prompt.nil?,
-    skills: receipt, project_skills: project_skills, **trust, **rc }
+  { ok: true, session: name, type: t.key, role: role, launcher: launcher.key, kind: launcher.kind, dir: dir,
+    prompt: !prompt.nil?, skills: receipt, project_skills: project_skills, **trust, **rc }
 end
 
 # LEAD-FIRST BOARDS, checked here too — the engine's registration is not trusted past this socket:
@@ -1896,8 +1921,10 @@ def project_skills_op(req)
   cfg = board_config(req["settings"])
   dir = host_dir(req["path"])
   refusal = Busyyaks::LaunchTrust.refusal(dir, trusted: TRUSTED, created: CREATED)
+  state, agents, = project_agents_state(cfg, req["settings"], dir, refusal)
+  roles = state == "loaded" ? agents.roles.transform_values(&:like) : {}
   st = Busyyaks::Skills.project_status(checkout: ROOT, repo: dir, types: cfg.agent_type_keys, settings: SKILLS,
-                                       trust_refusal: refusal)
+                                       trust_refusal: refusal, roles: roles)
   # checkout: the repo is this busyyaks checkout itself — `yaks update` refuses it while a tracked file is uncommitted
   { ok: true, project_skills: st[:status], budget: st[:budget], replace_budget: st[:replace_budget],
     layers: st[:layers], checkout: File.realpath(dir) == File.realpath(ROOT), }
@@ -1905,6 +1932,38 @@ rescue Busyyaks::LaunchTrust::Invalid => e
   { ok: false, error: "folder trust: #{e.message}", status: 422 }
 rescue Busyyaks::Skills::Invalid => e
   { ok: false, error: "skills: #{e.message}", status: 422 }
+rescue Busyyaks::ProjectAgents::Invalid => e
+  { ok: false, error: "agent types: #{e.message}", status: 422 }
+end
+
+# The repo's .busyyaks/agents.yml as a launch reads it → [state, Agents | nil, opt-in type keys]: "none" (no
+# file), "left: <why>" (skills.project deny, or the folder-trust decision refuses the repo: the file is NOT read),
+# "loaded". An invalid file → ProjectAgents::Invalid.
+def project_agents_state(cfg, settings, dir, refusal)
+  opt_in = Busyyaks::AgentSettings.opt_in(settings.fetch("doc"))
+  path = File.join(dir, Busyyaks::ProjectAgents::FILE)
+  return ["none", nil, opt_in] unless File.exist?(path) || File.symlink?(path)
+
+  left = Busyyaks::Skills.left_reason(SKILLS, refusal)
+  return ["left: #{left}", nil, opt_in] if left
+
+  types = Busyyaks::ProjectAgents.types(cfg, opt_in)
+  presets = Busyyaks::Skills.presets!
+  ["loaded", Busyyaks::ProjectAgents.load!(dir, types: types, presets: presets), opt_in]
+end
+
+# {"op":"project_agents","path","settings"} → the repo's .busyyaks/agents.yml state (the MCP server's kanban_spawn /
+# kanban_assign_worker rule and the project page read it here: only this side decides folder trust)
+def project_agents_op(req)
+  cfg = board_config(req["settings"])
+  dir = host_dir(req["path"])
+  refusal = Busyyaks::LaunchTrust.refusal(dir, trusted: TRUSTED, created: CREATED)
+  state, agents, opt_in = project_agents_state(cfg, req["settings"], dir, refusal)
+  { ok: true, state: state, agents: agents&.to_h, opt_in: opt_in }
+rescue Busyyaks::LaunchTrust::Invalid => e
+  { ok: false, error: "folder trust: #{e.message}", status: 422 }
+rescue Busyyaks::ProjectAgents::Invalid, Busyyaks::Skills::Invalid => e
+  { ok: false, error: "agent types: #{e.message}", status: 422 }
 end
 
 # busyyaks's own skills layers as every launch of this checkout reads them (Settings → Agent rules, the project page's
@@ -1945,6 +2004,7 @@ def handle(line)
   when "answer" then answer_op(req)
   when "browse" then browse_op(req)
   when "project_skills" then project_skills_op(req)
+  when "project_agents" then project_agents_op(req)
   when "skills_layers" then skills_layers_op(req)
   when "projects_root" then projects_root_op(req)
   when "update" then update_op(req)

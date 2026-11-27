@@ -10,6 +10,9 @@ require_relative "git_read"
 require_relative "runtime_settings"
 require_relative "agent_rule_files"
 require_relative "skill_files"
+require_relative "project_agents_file"
+require_relative "agent_settings"
+require_relative "agent_presets"
 
 module Busyyaks
   # A project's workflow — its board's columns (key, label, type, fold-after hours) and named transitions — lives in
@@ -252,10 +255,40 @@ module Busyyaks
       end
 
       # The editor's Save: the engine saves, then the file is written, in one transaction. → [status, body]
-      def save(slug, board, by:) = change(slug) { |st| @api.call(st).board_shape_save(slug, board, by: by) }
+      def save(slug, board, by:)
+        keys = board.is_a?(Hash) && board["columns"].is_a?(Array) ? board["columns"].map { |c| c.is_a?(Hash) && c["key"] } : nil
+        why = keys && mapped_dropped(slug, keys)
+        return [422, { error: why }] if why
+
+        change(slug) { |st| @api.call(st).board_shape_save(slug, board, by: by) }
+      end
 
       # The editor's Reset to template, the same way.
-      def reset(slug, by:) = change(slug) { |st| @api.call(st).board_shape_reset(slug, by: by) }
+      def reset(slug, by:)
+        why = mapped_dropped(slug, @store.call.board_template.keys)
+        return [422, { error: why }] if why
+
+        change(slug) { |st| @api.call(st).board_shape_reset(slug, by: by) }
+      end
+
+      # A board shape that drops a column the repo's .busyyaks/agents.yml maps (`columns:`) is refused naming
+      # it — change the file first (a dropped key would refuse every spawn on the board). nil = nothing mapped is dropped.
+      # An unreadable / invalid file is its own refusal at every launch, not this save's.
+      def mapped_dropped(slug, keys)
+        project = @db[:projects].where(slug: slug.to_s).first or return nil
+        text = Skills.agents_file!(project[:path]) or return nil
+        cols = YAML.safe_load(text)
+        cols = cols.is_a?(Hash) ? cols["columns"] : nil
+        return nil unless cols.is_a?(Hash)
+
+        gone = cols.keys - keys
+        return nil if gone.empty?
+
+        "not saved: #{gone.map { |k| "#{k} (→ #{cols[k]})" }.join(', ')} mapped in #{ProjectAgents::FILE} — change its " \
+          "columns on the project's Settings tab first, then save the board"
+      rescue Skills::Invalid, Psych::Exception
+        nil
+      end
 
       # The project page's Settings tab's Save: any file of the repo's own .busyyaks/skills (agents/<type>.md, on-demand
       # skills and their reference files: AgentRuleFiles.write!) — the layer as it would be after the save read the way
@@ -270,11 +303,15 @@ module Busyyaks
           own = Skills.busyyaks!(@checkout, types: types, settings: settings)
           check = lambda do |repo|
             layer = Skills.project(repo, types: types, settings: settings)
-            types.each { |t| Skills.check_selection!(Skills.select(own + [layer].compact, t), settings) }
+            layers = own + [layer].compact
+            types.each { |t| Skills.check_selection!(Skills.select(layers, t), settings) }
+            role_launches!(repo, layer, layers, settings)
           end
           # the old `/.busyyaks/` exclude line would hide the files written here from git: replaced first
           WorkflowFiles.exclude!(project)
-          written = AgentRuleFiles.write!(project, files, types: types, settings: settings, check: check)
+          # a role of the repo's .busyyaks/agents.yml has its brief at agents/<role>.md too
+          named = types | Skills.roles_of(project[:path])
+          written = AgentRuleFiles.write!(project, files, types: named, settings: settings, check: check)
           written.each { |f| @log.call("#{project[:slug]}: #{AgentRuleFiles.rel(f)} #{by_word(project, f)} (#{by})") }
           [200, { written: written }]
         end
@@ -286,6 +323,50 @@ module Busyyaks
         [422, { error: "not written: #{e.message}" }]
       rescue Skills::Invalid => e
         [422, { error: "not written: busyyaks's own skills cannot be read (#{e.message})" }]
+      end
+
+      # The project page's Settings tab's Agent types: the repo's .busyyaks/agents.yml + the briefs of new
+      # roles (ProjectAgentsFile.write!), checked against the current agent settings (their opt-in types, presets) and
+      # the board's columns. → [status, body]: 200 {written: [paths]} · 404 · 409 changed on disk · 422 refused
+      def project_agents(slug, change, by:)
+        @lock.synchronize do
+          project = @db[:projects].where(slug: slug.to_s).first or return [404, { error: "no project #{slug}" }]
+          st = @store.call
+          # the opt-in keys of the revision THIS store's config was built from (Kanban, loaded by bin/writer)
+          doc = Kanban.revision_of(st.config)[:doc]
+          types = ProjectAgents.types(st.config, AgentSettings.opt_in(doc))
+          b = st.board_of(slug)
+          board = b.keys.to_h { |k| [k, b.type_of(k).key] }
+          WorkflowFiles.exclude!(project)
+          written = ProjectAgentsFile.write!(project[:path], change, types: types, presets: AgentPresets.keys,
+                                                                     board: board, settings: @skills.call)
+          written.each { |f| @log.call("#{project[:slug]}: #{f} written (#{by})") }
+          [200, { written: written }]
+        end
+      rescue ProjectAgentsFile::Conflict => e
+        [409, { error: "#{e.message} — load the newest, then save again" }]
+      rescue ProjectAgentsFile::Refused, AgentPresets::Invalid => e
+        [422, { error: "not written: #{e.message}" }]
+      end
+
+      # every role the repo's .busyyaks/agents.yml declares keeps its brief (a launch of the board would be
+      # refused without it) and each role's launch fits its entry skill — as bin/launcher plans it (Skills.with_role)
+      def role_launches!(repo, layer, layers, settings)
+        text = Skills.agents_file!(repo) or return
+        raw = YAML.safe_load(text)
+        roles = raw.is_a?(Hash) && raw["roles"].is_a?(Hash) ? raw["roles"] : {}
+        roles.each do |role, r|
+          unless layer&.agents&.key?(role)
+            raise Skills::Invalid, "agents/#{role}.md is the brief of role #{role} in #{Skills::AGENTS_FILE}: remove " \
+                                   "the role there first (the Agent types section)"
+          end
+          like = r.is_a?(Hash) ? r["like"].to_s : ""
+          next if like.empty?
+
+          Skills.check_selection!(Skills.with_role(Skills.select(layers, like), [layer], role, "loaded"), settings)
+        end
+      rescue Psych::Exception => e
+        raise Skills::Invalid, "#{Skills::AGENTS_FILE}: #{e.message}"
       end
 
       def by_word(project, path) = File.exist?(File.join(project[:path], AgentRuleFiles.rel(path))) ? "written" : "removed"
@@ -540,6 +621,7 @@ module Busyyaks
         when "workflow_reset" then @writer.reset(req.fetch("slug"), by: req.fetch("by"))
         when "agent_rules_save" then @writer.agent_rules(req.fetch("slug"), req.fetch("files"), by: req.fetch("by"))
         when "skills_save" then @writer.skills_save(req.fetch("files"), by: req.fetch("by"))
+        when "project_agents_save" then @writer.project_agents(req.fetch("slug"), req.fetch("change"), by: req.fetch("by"))
         else [400, { error: "unknown op #{req['op'].inspect}" }]
         end
       rescue KeyError => e
