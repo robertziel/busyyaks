@@ -3,7 +3,7 @@
 One line per change a user would notice. Format: [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/);
 versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-11-28
 
 ### Added
 
@@ -201,5 +201,6 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - Launcher socket private (umask); git `safe.directory` scoped to the mounted repos.
 - Credentials stripped from stored remote URLs; Markdown rendered with raw HTML dropped.
 
+[0.3.0]: https://github.com/robertziel/busyyaks/releases/tag/v0.3.0
 [0.2.0]: https://github.com/robertziel/busyyaks/releases/tag/v0.2.0
 [0.1.0]: https://github.com/robertziel/busyyaks/releases/tag/v0.1.0
