@@ -13,6 +13,7 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Card PR tags: a PR whose CI is still running says **checks running**, no longer "checks failing". The CI tag comes from the same read the approval gate uses (required checks only): checks passed · running · failed · stuck · not reported · not read yet · unknown (with why), plus "informational check failed" beside a green; GitHub's "has hooks" no longer shows as "hooks pending". The hover names the head and when it was read.
 - Agent skills: every visible change a session makes is proven by one image per change — before | after side by side, the changed area boxed, the change's number as a badge — posted on the card when that change lands, not saved up for the handoff; QA fails a change without one.
 - README: says what the board enforces and what only the agent skills ask — gate columns and their green-CI check are the board's workflow (green CI off by default, the operator's drag never refused by it); never merging before the approval is a skill rule; only a protected branch on the git host can stop a merge.
 

@@ -575,33 +575,15 @@ module Busyyaks
       # Inside the window, an unanswered or old answer still means the service is not answering → Unavailable.
       def answer(repo, ref)
         now = @clock.call
-        row = @db[:gh_pr_checks].where(repo: repo, ref: ref).first
-        return peek_answer(repo, ref, row, now) if @peek
-        if row && now - row[:requested_at] > @wanted_for && !fresh?(row, now)
-          @db[:gh_pr_checks].where(id: row[:id]).update(requested_at: now, checked_at: nil, error: nil)
-          return { number: nil, state: "unpolled", finished_at: nil }
-        end
-        unless row
-          @db[:gh_pr_checks].insert(repo: repo, ref: ref, requested_at: now)
-          return { number: nil, state: "unpolled", finished_at: nil }
-        end
-        @db[:gh_pr_checks].where(id: row[:id]).update(requested_at: now)
-        raise Unavailable, "GitHub check poll for #{repo} #{ref} failed: #{row[:error]}" if row[:error]
-        if row[:checked_at].nil?
-          waited = now - row[:requested_at]
-          if waited > @stale_after
-            raise Unavailable, "#{repo} #{ref} was requested #{waited}s ago and the github service has not polled it " \
-                               "(is it running?)"
-          end
-
-          return { number: nil, state: "unpolled", finished_at: nil }
-        end
-        age = now - row[:checked_at]
-        if age > @stale_after
-          raise Unavailable, "GitHub check status for #{repo} #{ref} is #{age}s old (github service stopped?)"
+        if @peek
+          return peek_answer(repo, ref, @db[:gh_pr_checks].where(repo: repo, ref: ref).first, now)
         end
 
-        answered(row)
+        kind, got = PrStates.ci_read(@db, repo, ref, now: now, wanted_for: @wanted_for, stale_after: @stale_after)
+        return { number: nil, state: "unpolled", finished_at: nil } if kind == :unread
+        raise Unavailable, got if kind == :error
+
+        answered(got)
       end
 
       # stale_reads' answer: the row as stored, nothing written; a request the poller dropped (or never got) is noted
@@ -817,7 +799,7 @@ module Busyyaks
         all = statuses(repo, sha) + runs(repo, sha)
         req = all.select { |c| required.include?(c.context) }
         failing = (all - req).select { |c| c.state == "failure" }.map(&:context)
-        note = failing.any? ? "; informational, failing: #{failing.uniq.join(', ')}" : ""
+        note = failing.any? ? "; #{PrStates::INFORMATIONAL_NOTE}#{failing.uniq.join(', ')}" : ""
         out = { builds: JSON.generate(req.filter_map(&:url).uniq) }
         running = req.select { |c| c.state == "pending" }
         return out.merge(pending(running, note)) if running.any?
