@@ -143,7 +143,9 @@ error: "the repo of #{project[:slug]} is not on github.com (#{project[:remote] |
     end
 
     # GitHub's mergeability of an OPEN PR: each mergeable_state as GitHub names it — clean, behind,
-    # blocked (branch rules), unstable (checks failing), has_hooks, draft — except two, which name what they mean:
+    # blocked (a branch rule not met: a required review, or a required check not green yet), unstable (a commit status
+    # is not success: pending counts), has_hooks (mergeable, statuses passing, pre-receive hooks), draft —
+    # except two, which name what they mean:
     # `mergeable` null or mergeable_state "unknown" = "computing" (GitHub starts computing on this read; never guessed
     # either way) and `mergeable` false or "dirty" = "conflicts". A value GitHub adds later = "unknown: <value>",
     # never coerced to one of these.
@@ -180,6 +182,45 @@ error: "the repo of #{project[:slug]} is not on github.com (#{project[:remote] |
 
       named = hits.map { |r| "#{r[:slug]} → #{r[base_col]}" }.join(", ")
       [nil, "the enrolments of #{repo} name different #{side} bases: #{named}"]
+    end
+
+    # The CI poller's note on a head whose required checks passed but an informational one failed
+    # (CiChecks::Poller#checks writes it, Flags reads it: one string)
+    INFORMATIONAL_NOTE = "informational, failing: "
+
+    # ONE read of a gh_pr_checks row, shared by the gates (CiChecks::Port#answer) and the card's CI tag
+    # (Reader#checks), so the two never disagree: it marks the row wanted (requested_at = now) and answers
+    #   [:unread]          no row yet (inserted now), or an old answer that fell out of the poll window and is not
+    #                      fresh — asked afresh (checked_at + error cleared: the poller answers it next), or requested
+    #                      and not polled yet within stale_after;
+    #   [:error, message]  the last poll failed, requested longer than stale_after ago and never polled, or an answer
+    #                      older than stale_after while wanted (the github service stopped);
+    #   [:row, row]        the answer.
+    def ci_read(db, repo, ref, now:, wanted_for:, stale_after:)
+      table = db[:gh_pr_checks]
+      row = table.where(repo: repo, ref: ref).first
+      unless row
+        table.insert_conflict(target: %i[repo ref]).insert(repo: repo, ref: ref, requested_at: now)
+        return [:unread]
+      end
+      fresh = !row[:error] && row[:checked_at] && now - row[:checked_at] <= stale_after
+      if now - row[:requested_at] > wanted_for && !fresh
+        table.where(id: row[:id]).update(requested_at: now, checked_at: nil, error: nil)
+        return [:unread]
+      end
+      table.where(id: row[:id]).update(requested_at: now)
+      return [:error, "GitHub check poll for #{repo} #{ref} failed: #{row[:error]}"] if row[:error]
+      if row[:checked_at].nil?
+        waited = now - row[:requested_at]
+        return [:unread] if waited <= stale_after
+
+        return [:error, "#{repo} #{ref} was requested #{waited}s ago and the github service has not polled it " \
+                        "(is it running?)",]
+      end
+      age = now - row[:checked_at]
+      return [:error, "GitHub check status for #{repo} #{ref} is #{age}s old (github service stopped?)"] if age > stale_after
+
+      [:row, row]
     end
 
     # Seconds a row stays polled after the web last asked for it (Poller and Reader share it).
@@ -229,8 +270,24 @@ error: "the repo of #{project[:slug]} is not on github.com (#{project[:remote] |
         end
 
         out = { state: row[:state], number: row[:number], url: row[:url], checked_at: row[:checked_at], base: row[:base],
-                merge_state: row[:merge_state], auto_merge: row[:auto_merge], }
+                merge_state: row[:merge_state], auto_merge: row[:auto_merge], head: row[:head], }
         row[:state] == "closed" ? out.merge(closed_at: row[:closed_at], reason: row[:reason]) : out
+      end
+
+      # The CI of an open PR as the gates read it: the CiChecks poller's gh_pr_checks pr:<n> row — its
+      # repo's REQUIRED contexts only (config ci.required), on the head it names — and marks the row wanted, so viewing
+      # the card asks the poller. → {state:, detail:, head:, checked_at:} | {state: "unread"} | {error: "…"}: no row
+      # yet, or an old answer nobody wanted (fell out of the poll window) = unread, asked now; a failed poll or an
+      # answer older than stale_after while wanted = error — never shown as a pass or a failure.
+      def checks(repo, number)
+        return { error: GitHosts.not_connected } unless connected?
+
+        kind, got = PrStates.ci_read(@db, repo, "pr:#{number}", now: @clock.call, wanted_for: @wanted_for,
+                                                                stale_after: @stale_after)
+        return { state: "unread" } if kind == :unread
+        return { error: got } if kind == :error
+
+        { state: got[:state], detail: got[:detail], head: got[:head], checked_at: got[:checked_at] }
       end
     end
 
@@ -240,7 +297,7 @@ error: "the repo of #{project[:slug]} is not on github.com (#{project[:remote] |
     # wanted_for is deleted at the end of each run. While `gate` (GithubPollers) is paused nothing is sent and every
     # wanted row says why.
     class Poller
-      KEEP = %w[number html_url state draft merged_at closed_at base mergeable mergeable_state auto_merge].freeze
+      KEEP = %w[number html_url state draft merged_at closed_at base head mergeable mergeable_state auto_merge].freeze
       PAGE = "pr:"
 
       def self.cache_key(url) = GithubNetwork.cache_key(PAGE, KEEP, url)
@@ -302,9 +359,11 @@ error: "the repo of #{project[:slug]} is not on github.com (#{project[:remote] |
 
         state = state(pr)
         out = { number: pr["number"], url: pr["html_url"], state: state, base: pr.dig("base", "ref"), closed_at: nil,
-                reason: nil, merge_state: nil, auto_merge: nil, }
+                reason: nil, merge_state: nil, auto_merge: nil, head: nil, }
         if %w[open draft].include?(state)
-          return out.merge(merge_state: PrStates.merge_state(pr), auto_merge: !pr["auto_merge"].nil?)
+          # head: the rail checks the CI answer is this head's
+          return out.merge(merge_state: PrStates.merge_state(pr), auto_merge: !pr["auto_merge"].nil?,
+                           head: pr.dig("head", "sha"))
         end
         return out unless state == "closed"
 
@@ -373,6 +432,7 @@ error: "the repo of #{project[:slug]} is not on github.com (#{project[:remote] |
 
         body = page.body.slice(*KEEP)
         body["base"] = body["base"]&.slice("ref") # the base branch's name only, never its repo object
+        body["head"] = body["head"].slice("sha") if body["head"] # the head commit only, never its repo
         @pages.save_page(key, page.etag, @clock.call, items: body)
         body
       end
@@ -402,9 +462,26 @@ error: "the repo of #{project[:slug]} is not on github.com (#{project[:remote] |
       ROLE_NAMES = { "local" => "private local repo", "public" => "public repo" }.freeze
       # an open PR's mergeability (PrStates.merge_state): clean = no tag, draft = the draft tag already shown;
       # a value PrStates does not know ("unknown: <value>") is tagged as it is
+      # unstable / has_hooks: no tag — unstable only says "a status is not success" (pending counts) and
+      # has_hooks is mergeable with passing statuses; the CI tag (CHECK_TAGS) says what the checks are
       MERGE_TAGS = { "conflicts" => %w[conflicts bad], "behind" => %w[behind warn],
-                     "blocked" => ["blocked by branch rules", "warn"], "unstable" => ["checks failing", "warn"],
-                     "has_hooks" => ["hooks pending", "muted"], "computing" => ["mergeable: computing", "muted"], }.freeze
+                     "blocked" => ["blocked by branch rules", "warn"],
+                     "computing" => ["mergeable: computing", "muted"], }.freeze
+      # the hover's words for GitHub's states that need them
+      MERGE_WORDS = {
+        "unstable" => "unstable: a commit status is not success (pending counts) — see Checks",
+        "has_hooks" => "has_hooks: mergeable, statuses passing, the repo has pre-receive hooks",
+        "blocked" => "blocked: a branch rule is not met (a required review, or a required check not green yet)",
+      }.freeze
+      # an open PR's CI (Reader#checks, the gates' read: required contexts only) → its tag; a state not listed is
+      # tagged as it is ("checks: <state>"), never coerced
+      CHECK_TAGS = { "success" => ["checks passed", "ok"], "pending" => ["checks running", "muted"],
+                     "failure" => ["checks failed", "bad"], "stuck" => ["checks stuck", "bad"],
+                     "nochecks" => ["checks not reported", "warn"], "unread" => ["checks: not read yet", "muted"], }.freeze
+      # the CI poller's note on a required-green head whose informational check failed (CiChecks::Poller#checks)
+      INFORMATIONAL_RED = /#{Regexp.escape(INFORMATIONAL_NOTE)}/
+      # an open PR's states (a closed / merged one has no CI tag: its CI is no longer what decides anything)
+      CI_STATES = %w[open draft].freeze
 
       # enrolled: -> { every enrolled project row } — a PR's expected base is its own repo's enrolment's (side_base);
       # clock: the epoch now (a removed PR's day is shown without its year while that is this year)
@@ -484,6 +561,7 @@ error: "the repo of #{project[:slug]} is not on github.com (#{project[:remote] |
         detail << row("Assigned", assigned.empty? ? "not recorded" : assigned.join(" · "))
         detail << row("Why", st[:error]) if st[:error]
         pr_flags(st, want_base, why, tags, detail) unless st[:error]
+        ci_flags(@reader.checks(pr[:repo], pr[:number]), st, tags, detail) if !st[:error] && CI_STATES.include?(st[:state])
         detail << row("Why closed", st[:reason]) if st[:reason]
         # an absolute time: a relative "Ns ago" changed the card JSON on every request, so the card dialog's rev poll
         # refetched the whole card every 3 s
@@ -510,12 +588,50 @@ error: "the repo of #{project[:slug]} is not on github.com (#{project[:remote] |
         merge = MERGE_TAGS[st[:merge_state]]
         merge ||= [st[:merge_state], "warn"] if st[:merge_state]&.start_with?("unknown: ")
         tags << tag(*merge) if merge
-        detail << row("Mergeable", st[:merge_state]) if st[:merge_state]
+        detail << row("Mergeable", MERGE_WORDS.fetch(st[:merge_state], st[:merge_state])) if st[:merge_state]
         return unless st[:auto_merge]
 
         tags << tag("auto-merge", "warn")
         detail << row("Auto-merge", "on: GitHub merges it once its checks pass, without the board's approval — the " \
                                     "approval is refused until it is turned off")
+      end
+
+      # the CI tag of an open PR + its hover rows: what the required checks are, on which head, read when
+      # GitHub's REST pull has no review decision, so `blocked` alone cannot say which rule blocks; with the ci.required
+      # checks read green the hover says so — GitHub's own required list may differ from ci.required, so a check outside
+      # it is still named as a possible cause
+      def ci_flags(ci, st, tags, detail)
+        if ci[:error]
+          tags << tag("checks: unknown", "warn")
+          detail << row("Checks", ci[:error])
+          return
+        end
+        if ci[:state] == "unread"
+          tags << tag(*CHECK_TAGS["unread"])
+          detail << row("Checks", "waiting for the github service")
+          return
+        end
+        # a PR closed / merged since its state was read: the state's own tag says it
+        return if %w[merged closed none].include?(ci[:state])
+
+        # the CI answer is another sha's than the head the PR-state poll saw (a push between the two polls): not this
+        # head's checks — never its old pass or failure. The CI poller reads the new head on its next poll.
+        if st[:head] && ci[:head] && st[:head] != ci[:head]
+          tags << tag(*CHECK_TAGS["unread"])
+          detail << row("Checks", "read on #{ci[:head][0, 7]}, the PR's head is now #{st[:head][0, 7]} — waiting for " \
+                                  "the github service")
+          return
+        end
+
+        tags << tag(*CHECK_TAGS.fetch(ci[:state]) { ["checks: #{ci[:state]}", "warn"] })
+        tags << tag("informational check failed", "warn") if ci[:state] == "success" && ci[:detail]&.match?(INFORMATIONAL_RED)
+        head = ci[:head] ? " · head #{ci[:head][0, 7]}" : ""
+        detail << row("Checks", "#{ci[:detail] || ci[:state]}#{head}")
+        detail << row("Checks read", "#{at(ci[:checked_at])} (GitHub, ci.required checks)")
+        return unless st[:merge_state] == "blocked" && ci[:state] == "success"
+
+        detail << row("Blocked by", "ci.required checks green — GitHub's block is another rule: a review, a ruleset, " \
+                                    "or a required check outside ci.required")
       end
     end
   end

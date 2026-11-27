@@ -459,7 +459,7 @@ class PrStatesTest < Minitest::Test
                    pr(12, "o/widgets", head: "o:fix/scanner-skips-worktrees"),]
     @poller.run
     out = links_for(ENROLLED, links, metadata: both)
-    assert_equal ["#5 widgets_local [local merged]", "#12 widgets [public open]"], shown(out.drop(1))
+    assert_equal ["#5 widgets_local [local merged]", "#12 widgets [public open checks: not read yet]"], shown(out.drop(1))
     assert_equal [%w[local info], %w[merged done]], out[1][:tags].map { |t| t.values_at(:text, :tone) }
     assert_equal({ "Repo" => "o/widgets_local", "Role" => "private local repo", "State" => "merged", "Base" => "local",
                    "Assigned" => "agent-1 · #{Time.at(1).strftime('%Y-%m-%d %H:%M:%S %Z')}",
@@ -518,7 +518,7 @@ class PrStatesTest < Minitest::Test
     links_for(ENROLLED, listed, metadata: PUB12)
     @poller.run
     out = links_for(ENROLLED, listed, metadata: PUB12)
-    assert_equal ["github.com/o/widgets/pull/12", "#12 widgets [public open]"], shown(out)
+    assert_equal ["github.com/o/widgets/pull/12", "#12 widgets [public open checks: not read yet]"], shown(out)
     assert_equal %w[url pr], out.map { |l| l[:kind] }
     assert_equal ["github.com/o/widgets/pull/12"], shown(links_for(ENROLLED, listed)), "a pasted URL is not a PR row"
   end
@@ -565,7 +565,7 @@ class PrStatesTest < Minitest::Test
     named = [{ kind: "url", label: "github.com/o/widgets/pull/4", url: "https://github.com/o/widgets/pull/4" }]
     links_for(ENROLLED, named, metadata: PUB12)
     @poller.run
-    assert_equal ["github.com/o/widgets/pull/4", "#12 widgets [public open]"],
+    assert_equal ["github.com/o/widgets/pull/4", "#12 widgets [public open checks: not read yet]"],
                  shown(links_for(ENROLLED, named, metadata: PUB12))
     assert_equal [%w[o/widgets pr:12]], @db[:gh_pr_states].select_map(%i[repo ref]), "the pasted PR is not read"
   end
@@ -600,7 +600,7 @@ class PrStatesTest < Minitest::Test
     @poller.run
     branch = { kind: "branch", label: "card/158-a", url: "https://github.com/o/widgets_local/tree/card/158-a" }
     out = links_for(ENROLLED, [branch], metadata: meta)
-    assert_equal ["card/158-a", "#45 widgets_local [local open]"], shown(out)
+    assert_equal ["card/158-a", "#45 widgets_local [local open checks: not read yet]"], shown(out)
     assert_equal [%w[o/widgets_local pr:45]], @db[:gh_pr_states].select_map(%i[repo ref]), "the branch is not looked up"
   end
 
@@ -612,7 +612,7 @@ class PrStatesTest < Minitest::Test
     links_for(plain, [], metadata: meta)
     @http.pulls = [pr(7, "o/r")]
     @poller.run
-    assert_equal ["#7 r [open]"], shown(links_for(plain, [], metadata: meta))
+    assert_equal ["#7 r [open checks: not read yet]"], shown(links_for(plain, [], metadata: meta))
     refute links_for(plain, [], metadata: meta).first.key?(:group)
     assert_equal [], links_for(plain, [])
     bad = links_for(plain, [], metadata: { "prs" => [{ "url" => "#7", "role" => "pr" }] })
@@ -626,7 +626,7 @@ class PrStatesTest < Minitest::Test
     meta = prs_meta("pr", "https://github.com/o/r/pull/7")
     links_for(plain, [], metadata: meta)
     @poller.run
-    assert_equal ["#7 r [draft]"], shown(links_for(plain, [], metadata: meta))
+    assert_equal ["#7 r [draft checks: not read yet]"], shown(links_for(plain, [], metadata: meta))
     broken = plain.merge(local_error: "guard.publicRemote names remote \"fork\", which has no URL")
     cfg = links_for(broken, [])
     assert_equal ["config [local unknown]"], shown(cfg)
@@ -645,7 +645,7 @@ class PrStatesTest < Minitest::Test
     @http.pulls = [pr(7, "o/r")]
     @poller.run
     rows = links_for(bad, [], metadata: meta)
-    assert_equal ["#7 r [open]", "config [local unknown]"], shown(rows)
+    assert_equal ["#7 r [open checks: not read yet]", "config [local unknown]"], shown(rows)
     assert_equal 'guard.mode is "mirror", not own or upstream', detail(rows[1])["Why"]
   end
 
@@ -658,20 +658,22 @@ class PrStatesTest < Minitest::Test
     @http.pulls = [pr(5, "o/widgets_local"), pr(12, "o/widgets", base: { "ref" => "feature/live-agent-status" })]
     @poller.run
     out = links_for(ENROLLED, [], metadata: meta)
-    assert_equal ["#5 widgets_local [local open]", "#12 widgets [public open base: feature/live-agent-status]"], shown(out)
-    assert_equal "warn", out[1][:tags].last[:tone]
+    assert_equal ["#5 widgets_local [local open checks: not read yet]",
+                  "#12 widgets [public open base: feature/live-agent-status checks: not read yet]",],
+                 shown(out)
+    assert_equal "warn", out[1][:tags][-2][:tone], "the base tag (the CI tag comes last)"
     assert_equal ["feature/live-agent-status", "main"], detail(out[1]).values_at("Base", "Expected base")
     assert_equal ["local", nil], detail(out[0]).values_at("Base", "Expected base")
     unknown = ENROLLED.merge(public_base: nil, local_error: "guard.publicBase is not set")
     out = links_for(unknown, [], metadata: meta)
-    assert_equal "#12 widgets [public open base: feature/live-agent-status]", shown(out)[1]
+    assert_equal "#12 widgets [public open base: feature/live-agent-status checks: not read yet]", shown(out)[1]
     assert_equal "unknown: guard.publicBase is not set", detail(out[1])["Expected base"]
     plain = { slug: "g/r", remote: "https://github.com/o/r.git", local_mode: nil, local_error: nil }
     @http.pulls = [pr(7, "o/r", base: { "ref" => "anything" })]
     links_for(plain, [], metadata: prs_meta("pr", "https://github.com/o/r/pull/7"))
     @poller.run
     plain_out = links_for(plain, [], metadata: prs_meta("pr", "https://github.com/o/r/pull/7"))
-    assert_equal ["#7 r [open]"], shown(plain_out), "a plain project's PR: any base"
+    assert_equal ["#7 r [open checks: not read yet]"], shown(plain_out), "a plain project's PR: any base"
     assert_equal "anything", detail(plain_out[0])["Base"]
   end
 
@@ -687,13 +689,14 @@ class PrStatesTest < Minitest::Test
     @http.pulls = [pr(5, "o/widgets_local"), pr(7, "o/eng_local", base: { "ref" => "main" })]
     @poller.run
     out = links_for(ENROLLED, [], metadata: meta)
-    assert_equal ["#5 widgets_local [local open]", "#7 eng_local [local open]"], shown(out),
+    assert_equal ["#5 widgets_local [local open checks: not read yet]", "#7 eng_local [local open checks: not read yet]"],
+                 shown(out),
                  "the engine PR on main: its own project's base, no warning"
     @http.pulls = [pr(5, "o/widgets_local"), pr(7, "o/eng_local")]
     @now += 60
     @poller.run
     out = links_for(ENROLLED, [], metadata: meta)
-    assert_equal "#7 eng_local [local open base: local]", shown(out)[1]
+    assert_equal "#7 eng_local [local open base: local checks: not read yet]", shown(out)[1]
     assert_equal %w[local main], detail(out[1]).values_at("Base", "Expected base")
     @db[:projects].where(slug: "g/eng").update(local_base: "develop", slug: "g/eng2")
     @db[:projects].insert(slug: "g/eng", path: "/repos/eng-b", remote: "https://github.com/o/eng_local.git", own: true,
@@ -708,17 +711,20 @@ class PrStatesTest < Minitest::Test
   end
 
   # GitHub's mergeable: false / dirty → conflicts, null (still computing) → "mergeable: computing" — never guessed clean
-  # or conflicting; every other mergeable_state is GitHub's own word, with its own tag (blocked,
-  # unstable and has_hooks are not "clean"); a value PrStates does not know → "unknown: <value>", never coerced; a
-  # merged or closed PR has none
+  # or conflicting; every other mergeable_state is GitHub's own word in the hover (blocked,
+  # unstable and has_hooks are not "clean"); unstable / has_hooks carry no tag — the CI tag says what the checks
+  # are; a value PrStates does not know → "unknown: <value>", never coerced; a merged or closed PR has none
   def test_mergeable_state_is_tagged_and_null_is_computing
     cases = { 1 => [{ mergeable: false, mergeable_state: "dirty" }, %w[conflicts bad], "conflicts"],
               2 => [{ mergeable: true, mergeable_state: "behind" }, %w[behind warn], "behind"],
               3 => [{ mergeable: nil, mergeable_state: "unknown" }, ["mergeable: computing", "muted"], "computing"],
               4 => [{ mergeable: true, mergeable_state: "unknown" }, ["mergeable: computing", "muted"], "computing"],
-              5 => [{ mergeable: true, mergeable_state: "unstable" }, ["checks failing", "warn"], "unstable"],
-              6 => [{ mergeable: true, mergeable_state: "blocked" }, ["blocked by branch rules", "warn"], "blocked"],
-              7 => [{ mergeable: true, mergeable_state: "has_hooks" }, ["hooks pending", "muted"], "has_hooks"],
+              5 => [{ mergeable: true, mergeable_state: "unstable" }, nil,
+                    "unstable: a commit status is not success (pending counts) — see Checks",],
+              6 => [{ mergeable: true, mergeable_state: "blocked" }, ["blocked by branch rules", "warn"],
+                    "blocked: a branch rule is not met (a required review, or a required check not green yet)",],
+              7 => [{ mergeable: true, mergeable_state: "has_hooks" }, nil,
+                    "has_hooks: mergeable, statuses passing, the repo has pre-receive hooks",],
               8 => [{ mergeable: true, mergeable_state: "clean" }, nil, "clean"],
               9 => [{ mergeable: true, mergeable_state: "queued_somehow" }, ["unknown: queued_somehow", "warn"],
                     "unknown: queued_somehow",], }
@@ -731,12 +737,168 @@ class PrStatesTest < Minitest::Test
     @poller.run
     out = rows.call
     cases.each do |n, (_, want, mergeable)|
-      tags = out[n - 1][:tags].drop(2).map { |t| [t[:text], t[:tone]] }
+      tags = out[n - 1][:tags].drop(2).reject { |t| t[:text].start_with?("checks") }.map { |t| [t[:text], t[:tone]] }
       assert_equal [want].compact, tags, "PR #{n}"
       assert_equal mergeable, detail(out[n - 1])["Mergeable"], "PR #{n}"
     end
     assert_equal "#10 widgets_local [local merged]", shown([out[9]]).first, "merged: no mergeable tag"
     assert_nil detail(out[9])["Mergeable"]
+  end
+
+  # what the CI poller (CiChecks::Poller → gh_pr_checks pr:N) stored for an open PR, as it stores it
+  def ci_row(n, state, repo: "o/widgets_local", detail: nil, head: "abc1234def", checked: @now, error: nil, requested: @now)
+    @db[:gh_pr_checks].insert(repo: repo, ref: "pr:#{n}", requested_at: requested, checked_at: checked, number: n,
+                              state: state, detail: detail, head: head, error: error)
+  end
+
+  def tags_of(link) = link[:tags].map { |t| [t[:text], t[:tone]] }
+
+  # a PR showed "checks failing" while its only required check (jenkins/ci) was PENDING —
+  # GitHub's mergeable_state "unstable" means "a commit status is not success", pending included. The rail's CI tag now
+  # comes from the CI read the gates use (gh_pr_checks pr:N, required contexts only), one tag per state; GitHub's
+  # unstable / has_hooks say nothing about checks the CI read does not say better, so they carry no tag
+  def test_ci_tag_comes_from_the_ci_read_and_pending_is_never_failing
+    cases = { 1 => ["pending", "running: jenkins/ci", ["checks running", "muted"]],
+              2 => ["success", "passed: jenkins/ci", ["checks passed", "ok"]],
+              3 => ["failure", "failed: jenkins/ci", ["checks failed", "bad"]],
+              4 => ["stuck", "jenkins/ci pending since 2026-11-27T05:00:00Z, over ci.max_pending_minutes 60",
+                    ["checks stuck", "bad"],],
+              5 => ["nochecks", "required jenkins/ci not reported on abc1234", ["checks not reported", "warn"]], }
+    @http.pulls = cases.keys.map { |n| pr(n, "o/widgets_local", mergeable_state: "unstable") }
+    rows = -> { cases.keys.map { |n| links_for(ENROLLED, [], metadata: prs_meta("local", "https://github.com/o/widgets_local/pull/#{n}")).first } }
+    rows.call
+    @poller.run
+    cases.each { |n, (state, det, _)| ci_row(n, state, detail: det) }
+    out = rows.call
+    cases.each do |n, (_, det, want)|
+      tags = tags_of(out[n - 1])
+      assert_equal [%w[local info], %w[open ok], want], tags, "PR #{n}"
+      refute tags.any? { |t, _| t.include?("failing") }, "PR #{n}: never 'failing' from GitHub's unstable"
+      assert_equal "#{det} · head abc1234", detail(out[n - 1])["Checks"], "PR #{n}"
+      assert_match(/\(GitHub, ci.required checks\)\z/, detail(out[n - 1])["Checks read"], "PR #{n}")
+      assert_equal "unstable: a commit status is not success (pending counts) — see Checks",
+                   detail(out[n - 1])["Mergeable"], "PR #{n}"
+    end
+  end
+
+  # the CI read's own gaps are said as gaps, never as a pass or a failure
+  def test_ci_tag_unread_stale_failed_and_unconfigured
+    meta = ->(n) { prs_meta("local", "https://github.com/o/widgets_local/pull/#{n}") }
+    @http.pulls = (1..4).map { |n| pr(n, "o/widgets_local") }
+    (1..4).each { |n| links_for(ENROLLED, [], metadata: meta.call(n)) }
+    @poller.run
+    first = links_for(ENROLLED, [], metadata: meta.call(1)).first
+    assert_equal ["checks: not read yet", "muted"], tags_of(first).last, "no CI row yet: asked now, never green or red"
+    assert_equal 1, @db[:gh_pr_checks].where(repo: "o/widgets_local", ref: "pr:1").count, "the view asks the CI poller"
+    ci_row(2, "success", checked: @now - 400, requested: @now - 10) # wanted, but the service stopped answering
+    ci_row(3, nil, checked: nil,
+           error: "no required CI contexts for o/widgets_local: config/busyyaks.yml ci.required does not list it")
+    ci_row(4, "success", checked: @now - 5000, requested: @now - 5000) # nobody looked for a while: asked again
+    out = (2..4).map { |n| links_for(ENROLLED, [], metadata: meta.call(n)).first }
+    assert_equal ["checks: unknown", "warn"], tags_of(out[0]).last
+    assert_match(/is 400s old \(github service stopped\?\)/, detail(out[0])["Checks"])
+    assert_equal ["checks: unknown", "warn"], tags_of(out[1]).last
+    assert_match(/ci.required does not list it/, detail(out[1])["Checks"])
+    assert_equal ["checks: not read yet", "muted"], tags_of(out[2]).last, "an old answer nobody wanted is not shown"
+  end
+
+  # a view that re-asks an old answer nobody wanted clears it the way the gates do
+  # (PrStates.ci_read, shared with CiChecks::Port#answer) — a second view before the poller runs, and the gate's read,
+  # see "not read yet" / unpolled, never "stopped?" from the row the view itself just touched
+  def test_a_second_view_of_a_re_asked_answer_is_still_unread_and_the_gate_reads_it_unpolled
+    meta = prs_meta("local", "https://github.com/o/widgets_local/pull/1")
+    @http.pulls = [pr(1, "o/widgets_local")]
+    links_for(ENROLLED, [], metadata: meta)
+    @poller.run
+    ci_row(1, "success", checked: @now - 5000, requested: @now - 5000)
+    2.times do |i|
+      link = links_for(ENROLLED, [], metadata: meta).first
+      assert_equal ["checks: not read yet", "muted"], tags_of(link).last, "view #{i + 1}"
+    end
+    row = @db[:gh_pr_checks].where(repo: "o/widgets_local", ref: "pr:1").first
+    assert_equal [nil, nil, @now], row.values_at(:checked_at, :error, :requested_at), "cleared for the poller"
+    assert_equal [:unread], PS.ci_read(@db, "o/widgets_local", "pr:1", now: @now, wanted_for: 600, stale_after: 180),
+                 "the gate's read (CiChecks::Port#answer → unpolled)"
+  end
+
+  # a push between the two polls — the CI row answers the OLD head, the PR-state row has the new one:
+  # not this head's checks, never the old pass (or failure); the hover names both shas. Same head → the CI tag.
+  def test_a_ci_answer_for_another_head_is_not_read_yet
+    meta = prs_meta("local", "https://github.com/o/widgets_local/pull/1")
+    @http.pulls = [pr(1, "o/widgets_local").merge("head" => { "sha" => "def5678aaa", "ref" => "card/1", "repo" => {} })]
+    links_for(ENROLLED, [], metadata: meta)
+    @poller.run
+    assert_equal "def5678aaa", @db[:gh_pr_states].where(ref: "pr:1").get(:head), "the head sha is kept"
+    page = @db[:gh_pages].where(url: PS::Poller.cache_key("/repos/o/widgets_local/pulls/1")).first
+    assert_equal({ "sha" => "def5678aaa" }, JSON.parse(page[:items])["head"], "the head's sha only, never its repo")
+    ci_row(1, "success", detail: "passed: jenkins/ci", head: "abc1234def")
+    link = links_for(ENROLLED, [], metadata: meta).first
+    assert_equal ["checks: not read yet", "muted"], tags_of(link).last
+    refute tags_of(link).any? { |t, _| t == "checks passed" }, "the old head's green is not this head's"
+    assert_equal "read on abc1234, the PR's head is now def5678 — waiting for the github service", detail(link)["Checks"]
+    @db[:gh_pr_checks].where(ref: "pr:1").update(head: "def5678aaa")
+    assert_equal ["checks passed", "ok"], tags_of(links_for(ENROLLED, [], metadata: meta).first).last, "same head"
+  end
+
+  # "informational check failed" only beside a green — the poller writes its note on pending and red
+  # rows too, where the CI tag already says the checks are not green; behind + pending and dirty + red keep both tags
+  def test_informational_tag_only_beside_green_and_combined_states
+    @http.pulls = [pr(1, "o/widgets_local", mergeable_state: "behind"),
+                   pr(2, "o/widgets_local", mergeable: false, mergeable_state: "dirty"),]
+    meta = ->(n) { prs_meta("local", "https://github.com/o/widgets_local/pull/#{n}") }
+    (1..2).each { |n| links_for(ENROLLED, [], metadata: meta.call(n)) }
+    @poller.run
+    ci_row(1, "pending", detail: "running: jenkins/ci; #{PS::INFORMATIONAL_NOTE}lint-docs")
+    ci_row(2, "failure", detail: "failed: jenkins/ci; #{PS::INFORMATIONAL_NOTE}lint-docs")
+    behind, dirty = (1..2).map { |n| links_for(ENROLLED, [], metadata: meta.call(n)).first }
+    assert_equal [%w[local info], %w[open ok], %w[behind warn], ["checks running", "muted"]], tags_of(behind)
+    assert_equal [%w[local info], %w[open ok], %w[conflicts bad], ["checks failed", "bad"]], tags_of(dirty)
+    assert_match(/#{PS::INFORMATIONAL_NOTE}lint-docs/, detail(behind)["Checks"], "said in the hover")
+  end
+
+  # required checks green but an informational check red → both said; a merged / closed PR has no CI tag;
+  # GitHub not connected → no CI tag beyond the state's own error
+  def test_ci_tag_informational_red_and_no_tag_on_merged_or_closed
+    @http.pulls = [pr(1, "o/widgets_local"), pr(2, "o/widgets_local", state: "closed", merged: "2026-11-08T10:00:00Z"),
+                   pr(3, "o/widgets_local", draft: true),]
+    meta = ->(n) { prs_meta("local", "https://github.com/o/widgets_local/pull/#{n}") }
+    (1..3).each { |n| links_for(ENROLLED, [], metadata: meta.call(n)) }
+    @poller.run
+    ci_row(1, "success", detail: "passed: jenkins/ci; #{PS::INFORMATIONAL_NOTE}lint-docs") # the poller's note
+    ci_row(3, "failure", detail: "failed: jenkins/ci")
+    one, two, three = (1..3).map { |n| links_for(ENROLLED, [], metadata: meta.call(n)).first }
+    assert_equal [["checks passed", "ok"], ["informational check failed", "warn"]], tags_of(one).last(2)
+    assert_equal [%w[local info], %w[merged done]], tags_of(two), "merged: no CI tag"
+    assert_nil detail(two)["Checks"]
+    assert_equal [%w[local info], %w[draft muted], ["checks failed", "bad"]], tags_of(three), "draft + red"
+  end
+
+  # GitHub's has_hooks = mergeable, statuses passing, pre-receive hooks exist — it was tagged "hooks pending";
+  # blocked keeps its tag and says which rules can block
+  def test_has_hooks_is_not_pending_and_blocked_says_why
+    @http.pulls = [pr(1, "o/widgets_local", mergeable_state: "has_hooks"), pr(2, "o/widgets_local", mergeable_state: "blocked")]
+    meta = ->(n) { prs_meta("local", "https://github.com/o/widgets_local/pull/#{n}") }
+    (1..2).each { |n| links_for(ENROLLED, [], metadata: meta.call(n)) }
+    @poller.run
+    ci_row(1, "success", detail: "passed: jenkins/ci")
+    ci_row(2, "pending", detail: "running: jenkins/ci")
+    hooks, blocked = (1..2).map { |n| links_for(ENROLLED, [], metadata: meta.call(n)).first }
+    refute tags_of(hooks).any? { |t, _| t.include?("hooks") }
+    assert_equal "has_hooks: mergeable, statuses passing, the repo has pre-receive hooks", detail(hooks)["Mergeable"]
+    assert_includes tags_of(blocked), ["blocked by branch rules", "warn"]
+    assert_equal "blocked: a branch rule is not met (a required review, or a required check not green yet)",
+                 detail(blocked)["Mergeable"]
+    assert_nil detail(blocked)["Blocked by"], "checks still running: either rule may block"
+    ci_row(3, "success", detail: "passed: jenkins/ci")
+    @http.pulls << pr(3, "o/widgets_local", mergeable_state: "blocked")
+    links_for(ENROLLED, [], metadata: meta.call(3))
+    @now += 60
+    @poller.run
+    @db[:gh_pr_checks].where(ref: "pr:3").update(checked_at: @now)
+    green = links_for(ENROLLED, [], metadata: meta.call(3)).first
+    assert_equal "ci.required checks green — GitHub's block is another rule: a review, a ruleset, or a required " \
+                 "check outside ci.required", detail(green)["Blocked by"],
+                 "REST has no review decision, and GitHub's required list may differ from ci.required"
   end
 
   # every GitHub mergeable_state maps to itself or to what it means; nothing unknown is coerced
@@ -757,11 +919,12 @@ class PrStatesTest < Minitest::Test
     links_for(ENROLLED, [], metadata: meta)
     @poller.run
     out = links_for(ENROLLED, [], metadata: meta)
-    assert_equal ["#5 widgets_local [local open auto-merge]"], shown(out)
-    assert_equal "warn", out[0][:tags].last[:tone]
+    assert_equal ["#5 widgets_local [local open auto-merge checks: not read yet]"], shown(out)
+    assert_equal "warn", out[0][:tags][-2][:tone], "the auto-merge tag (the CI tag comes last)"
     assert_match(/without the board's approval/, detail(out[0])["Auto-merge"])
     @http.pulls = [pr(5, "o/widgets_local")]
     @poller.run
-    assert_equal ["#5 widgets_local [local open]"], shown(links_for(ENROLLED, [], metadata: meta)), "turned off: no tag"
+    assert_equal ["#5 widgets_local [local open checks: not read yet]"], shown(links_for(ENROLLED, [], metadata: meta)),
+                 "turned off: no tag"
   end
 end

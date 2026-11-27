@@ -436,6 +436,7 @@ CREATE TABLE `gh_pr_states`(
   `merge_state` varchar(255),
   `auto_merge` boolean,
   `dirty` integer,
+  `head` varchar(255),
   UNIQUE(`repo`, `ref`)
 );
 CREATE TABLE `agent_settings`(
@@ -580,4 +581,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261225613000_comment_actions.rb'),
 ('20261226610000_parked_exits_operator_only.rb'),
 ('20261227630000_git_host_connections.rb'),
-('20261228634000_dictation_settings.rb');
+('20261228634000_dictation_settings.rb'),
+('20261229675000_gh_pr_states_head.rb');
