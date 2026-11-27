@@ -45,8 +45,9 @@ The panel watches every git repo under a directory and gives you and your agents
 - **Today**: commits, active repos and your merged PRs per day, a year-long contribution heatmap, and what is dirty or
   unpushed, so your brain gets its dopamine from the numbers!
 - **A kanban board per repo**, the real diamond of this repo. An agent claims a card, asks you a question on it, and
-  hands it over with the PR, the CI build and screenshots. It never merges before you approve, so you personally
-  ensure the quality of your yaks' work.
+  hands it over with the PR, the CI build and screenshots into a gate column: the card waits there until you approve,
+  so you personally ensure the quality of your yaks' work. Which columns are gates, and whether a gate also waits for
+  green CI (off by default), is your board's workflow ([Workflows](#workflows)).
 - **Launch and supervise agents** in tmux from the browser, see which session is waiting on a permission dialog, and
   answer it from the card.
 - **A daily report** written by a local LLM through the same MCP tools, with every number computed by the server.
@@ -513,15 +514,15 @@ can vendor it too.
 ## The board: agents and the operator
 
 Every repo gets a board. The default columns are **Backlog → To do → In progress → QA → Human Check → Ready to merge →
-Merged**. Columns, their types and the named transitions between them are stored in the database;
-the operator edits them in a graph editor (the board's **Workflow** button).
+Merged**. Columns, their types and the named transitions between them are the board's workflow
+([Workflows](#workflows)); the operator edits them in a graph editor (the board's **Workflow** button).
 
 | Who | Can |
 |---|---|
 | Agent (MCP) | create and claim cards, comment, attach files, move cards between the working columns; after approval, merge the PR and move the card from Ready to merge to Merged |
 | Agent asks the operator | only through `kanban_ask(id, question, author, options?)`: the card keeps its column and is flagged as waiting for you; the options become buttons on the card |
 | Agent → Human Check | only through `kanban_handoff` with the QA steps, the PR URL and the CI URL; a UI change is refused without screenshots |
-| Operator (web) | everything, and is the only one who moves a card out of Human Check into Ready to merge. The agent merges only after that. |
+| Operator (web) | everything, and is the only one who moves a card out of Human Check into Ready to merge (the board refuses an agent's move). Merging only after that is the agents' rule ([Skills](#skills)): the board does not run or block `git` / `gh`. |
 
 Sessions are tied to cards. A session started from the launch bar is registered before tmux starts it. A **lead**
 adopts the cards that wait for the operator. A **worker** is spawned for an ownerless card in a working column. A
@@ -536,8 +537,10 @@ The full contract is [`vendor/agents_kanban/SPEC.md`](vendor/agents_kanban/SPEC.
 
 ## Workflows
 
-A board's workflow is data, stored in the database: its **columns**, each of one **type**, in board order, and the
-**named transitions** between them. Every board has one; a new project gets a copy of the template.
+A board's workflow is data: its **columns**, each of one **type**, in board order, and the **named transitions**
+between them, kept in the repo's `.busyyaks/workflow.yml` (git-ignored) with a validated copy in the database. Every
+board has one; a new project gets a copy of the template. Gates are configured here too: which columns are gates
+(none is allowed), and per gate whether it waits for green CI.
 
 | Column type | Rules |
 |---|---|
@@ -579,7 +582,19 @@ loops, four gates), in the graph editor; dashed arrows go back up the board orde
 ## Skills
 
 The workflow busyyaks's agents follow (asking on a card, handing off on green CI, review loops, never merging before
-your approval) is a set of skills in `skills/busyyaks/`, handed to each session busyyaks starts — per launch only (Claude Code
+your approval) is a set of skills — instructions to the agents, not code the board runs. What the board itself refuses
+and what only the skills ask:
+
+| Rule | Who holds it |
+|---|---|
+| agents move a card only along the workflow's named `agent` / `any` transitions | the board refuses any other move |
+| a gate is entered only with `kanban_handoff`, left by an agent only after your approval | the board |
+| a flagged card (`kanban_ask`, `kanban_block`) is not moved by agents | the board |
+| a handoff into a gate, and its Approve, wait for green CI | the board, only on a gate with `requires_green_ci: true` (off by default); your drag and the **Force** approval are never refused by it |
+| hand off only on green CI (into any gate), run the review loop, QA, a reviewer | the skills |
+| never merge (`gh pr merge`, a push to the default branch) before your approval | the skills: the board does not see `git` / `gh`; outside busyyaks, only a protected branch that requires a PR review on your git host stops a merge |
+
+The skills live in `skills/busyyaks/`, handed to each session busyyaks starts — per launch only (Claude Code
 `--plugin-dir`, hermes through one env-gated `external_dirs` line); your own `claude` / `hermes` sessions are not
 touched. `core/` (how to work the board through the MCP) goes to every session, `agents/<type>.md` to sessions of
 that agent type; the subagent briefs a session dispatches (`reviewer`, `qa`, `critic`) are on-demand skills. A
