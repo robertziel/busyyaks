@@ -7,6 +7,7 @@ import { apiGet } from "../api";
 import { Agents, type AgentTotals } from "./Agents";
 import { ConnectionBadge, ConnectionBanner, useHealth } from "./Connection";
 import { FlashView, useFlash } from "./Flash";
+import { PageBoundary } from "./PageBoundary";
 import { Search } from "./Search";
 import { Settings } from "./Settings";
 import { WaitingWidget } from "./Waiting";
@@ -112,7 +113,9 @@ export function Layout() {
       <div className="shell">
         <main className="wrap">
           {flash && <FlashView flash={flash} onClose={() => setFlash(null)} />}
-          <Outlet />
+          <PageBoundary path={location.pathname}>
+            <Outlet />
+          </PageBoundary>
         </main>
         <aside className="agents" id="agents" aria-label="Agents" ref={asideRef}>
           <Agents onTotals={setTotals} />

@@ -13,7 +13,7 @@ import { ProjectRules } from "../components/ProjectRules";
 import { leaveRefusal } from "../lib/projectRules";
 import { Sessions } from "../components/Sessions";
 import { useStopSessions } from "../components/StopSessions";
-import { ErrorState, Loading } from "../components/States";
+import { ErrorState, Loading, RefreshError } from "../components/States";
 import { ago, at, headTitle, num } from "../lib/format";
 import { heldSessions } from "../lib/sessionLanes";
 import { useTitle } from "../lib/title";
@@ -73,7 +73,7 @@ export function Project() {
   };
   return (
     <>
-      {error && <ErrorState error={error} what="refresh" retry={reload} />}
+      {error && <RefreshError error={error} retry={reload} />}
       {ls?.launcher_error && (
         <div className="flash bad">
           <i className="dot bad" />

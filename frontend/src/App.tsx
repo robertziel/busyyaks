@@ -1,6 +1,7 @@
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { FlashProvider } from "./components/Flash";
 import { Layout } from "./components/Layout";
+import { Mascot } from "./components/Mascot";
 import { useTitle } from "./lib/title";
 import { needsSetup } from "./lib/setupGate";
 import { Commit } from "./routes/Commit";
@@ -26,13 +27,14 @@ function NotFound() {
   const { pathname } = useLocation();
   useTitle("not found");
   return (
-    <>
-      <h1>404</h1>
-      <p className="muted">
-        no page at <code>{pathname}</code> · <Link to="/">Today</Link> · <Link to="/projects">Projects</Link> ·{" "}
-        <Link to="/reports">Reports</Link>
+    <Mascot scene="lost" title="404 · nothing here">
+      <p className="mascot-detail">
+        No page at <code>{pathname}</code>.
       </p>
-    </>
+      <p className="mascot-links">
+        <Link to="/">Today</Link> · <Link to="/projects">Projects</Link> · <Link to="/reports">Reports</Link>
+      </p>
+    </Mascot>
   );
 }
 

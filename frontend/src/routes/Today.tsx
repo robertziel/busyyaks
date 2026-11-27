@@ -5,7 +5,7 @@ import { GraphTile, StatRow, Tiles } from "../components/GraphTile";
 import { DailyTable, dayTiles, MergedPrs, PrStatusLine } from "../components/DailyStats";
 import { ProjectsTable, useTree } from "../components/ProjectsTable";
 import { ReportCard } from "../components/ReportCard";
-import { ErrorState, Loading } from "../components/States";
+import { ErrorState, Loading, RefreshError } from "../components/States";
 import { CommitLog, Head, PendingLine, WeekBars, YearFactList } from "../components/TodayParts";
 import { ago } from "../lib/format";
 import { useTitle } from "../lib/title";
@@ -50,7 +50,7 @@ export function Today() {
   const report = reportBlock(data.today, data.reports, data.latest);
   return (
     <div className="today">
-      {error && <ErrorState error={error} what="refresh" retry={reload} />}
+      {error && <RefreshError error={error} retry={reload} />}
       <section className="card statband">
         <Tiles>
           {tiles.map((t) => (
