@@ -169,13 +169,14 @@ module Busyyaks
     # Settings → Runtime watchdog_grace_seconds, read per use).
     def grace(conn = db) = RuntimeSettings.get(conn)[:watchdog_grace_seconds]
 
-    # The MCP tools (agents). sessions: live tmux session names, the launcher's `sessions` op by default.
-    def tools(st = default, sessions: nil)
+    # The MCP tools (agents). sessions: live tmux session names, the launcher's `sessions` op by default. role: the
+    # project role a kanban_spawn through these tools starts (BoardAgents), nil = none.
+    def tools(st = default, sessions: nil, role: nil)
       AgentsKanban::Tools.new(store: st, attachments: attachments(st), projects: method(:project), backlog: method(:backlog),
                               sessions: sessions || -> { LauncherClient.session_names }, grace: grace(st.db),
                               card_url: ->(slug, id) { card_url(slug, id) }, # each card's `url` (Links rule)
                               # kanban_spawn (the lead starts a worker): the same LAUNCH port as the Launch bar
-                              launcher: LauncherClient::LaunchPort.new(revision_of(st.config)))
+                              launcher: LauncherClient::LaunchPort.new(revision_of(st.config), role: role))
     end
 
     # config/kanban.yml session_boards' slug prefix (nil = session boards off).

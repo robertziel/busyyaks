@@ -315,6 +315,15 @@ export function ProjectRules({ slug, onUnsaved }: { slug: string; onUnsaved: (n:
           </div>
         ))}
 
+      {loaded.roles.length > 0 && <h3 className="pr-group">Per role · .busyyaks/agents.yml</h3>}
+      {loaded.roles.map((r) =>
+        card(
+          agentPath(r),
+          `${r} role brief · this project · follows its type's rules`,
+          `every session the lead starts with role ${r}`,
+        ),
+      )}
+
       <h3 className="pr-group">Per agent type</h3>
       {loaded.types.map((t) => {
         const path = agentPath(t.key);

@@ -23,7 +23,7 @@ module CollectorSandbox
   ROOT = File.expand_path("../..", __dir__)
   BOOT_SECONDS = 60
   COPY = %w[bin/launcher bin/collector lib/busyyaks vendor/agents_kanban/ruby/lib config/engines.yml
-            config/harnesses.yml skills].freeze
+            config/harnesses.yml skills config/agent_presets.yml].freeze
   INVOCATIONS = YAML.safe_load_file(File.expand_path("../fixtures/busyyaks.yml", __dir__)).dig("launch", "commands")
   # the agent settings revision a launch carries (card #277): the suite's
   AGENTS = YAML.safe_load_file(File.expand_path("../fixtures/agents.yml", __dir__))

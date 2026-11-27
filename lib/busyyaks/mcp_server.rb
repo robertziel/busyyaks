@@ -13,6 +13,7 @@ require_relative "store"
 require_relative "report_blocks"
 require_relative "markdown"
 require_relative "kanban"
+require_relative "board_agents"
 require_relative "daily_report_settings"
 require_relative "github_network"
 require_relative "scan_freshness"
@@ -122,6 +123,32 @@ module Busyyaks
     ].freeze
 
     class ToolError < StandardError; end
+
+    # A board's agent types (the repo's .busyyaks/agents.yml, BoardAgents) — a board tool (MCP_BOARD_TOKEN)
+    BOARD_AGENTS = "board_agents"
+    BOARD_AGENTS_TOOL = {
+      name: BOARD_AGENTS,
+      description: "Which agent type works each column of a board: the repo's .busyyaks/agents.yml as a " \
+                   "launch reads it — state (loaded · none · left: <why>, an untrusted repo's file is not read), the " \
+                   "opt-in types the board uses, its own roles (each a type + a brief), and per column `takes` (the " \
+                   "type or role kanban_spawn must start for a card there; null = any type the board runs) with the " \
+                   "`spawn` arguments to pass. An opt-in type the board does not use is never started. The rule holds " \
+                   "where a session TAKES a card — kanban_spawn, kanban_assign_worker, kanban_claim; a card its " \
+                   "session moves or hands off into a mapped column keeps that session.",
+      inputSchema: { type: "object", properties: { project: { type: "string", description: "project slug" } },
+                     required: ["project"], },
+    }.freeze
+
+    # kanban_spawn's definition + `role`
+    def spawn_with_role(t)
+      schema = t[:inputSchema]
+      t.merge(description: "#{t[:description]} A board whose .busyyaks/agents.yml maps the card's column starts only " \
+                           "that type or role (board_agents lists them); role = one of the board's roles, with type = " \
+                           "the type it runs as; an opt-in type only on a board that uses it.",
+              inputSchema: schema.merge(properties: schema[:properties].merge(
+                role: { type: "string", description: "a role of the board's .busyyaks/agents.yml (board_agents)" },
+              )))
+    end
 
     # What MCP_REPORT_TOKEN may call: the reads the daily report makes, check_report and post_report. Never scan_now: a
     # scan runs git on repos busyyaks does not control inside this process, which holds the launcher socket.
@@ -275,11 +302,53 @@ module Busyyaks
         # read fresh on every call (unless injected): a saved revision or an allowlist edit applies at the next tick
         state, out = DailyReportSettings.resolve(store.db, (@config || Config.load).daily_report_runners)
         dump(state == :ok ? { configured: true, config: out.to_h } : { configured: false, reason: out })
+      when "kanban_spawn" then board_spawn(a)
+      when "kanban_assign_worker" then board_assign(a)
+      when "kanban_claim" then board_claim(a)
+      when BOARD_AGENTS then board_view(a)
       else
         raise ToolError, "unknown tool: #{name}" unless kanban_tools.handles?(name)
 
         kanban_tools.call(name, a)
       end
+    end
+
+    # kanban_spawn: the board's rule for which type works a card's column (BoardAgents) first, then the
+    # engine starts the session — with the role, when one was asked — and busyyaks records what it started
+    def board_spawn(a)
+      ba = board_agents
+      role, slug = ba.spawn!(a)
+      out = Kanban.tools(sessions: @sessions, role: role).call("kanban_spawn", a.except("role"))
+      ba.record!(session: JSON.parse(out).fetch("session"), slug: slug, type: a["type"].to_s, role: role)
+      out
+    rescue ProjectAgents::Invalid => e
+      raise ToolError, e.message
+    end
+
+    def board_claim(a)
+      board_agents.claim!(a)
+      kanban_tools.call("kanban_claim", a)
+    rescue ProjectAgents::Invalid => e
+      raise ToolError, e.message
+    end
+
+    def board_view(a)
+      dump(board_agents.view(str!(a, "project")))
+    rescue ProjectAgents::Invalid => e
+      raise ToolError, e.message
+    end
+
+    def board_assign(a)
+      board_agents.assign!(a)
+      kanban_tools.call("kanban_assign_worker", a)
+    rescue ProjectAgents::Invalid => e
+      raise ToolError, e.message
+    end
+
+    def board_agents
+      st = Kanban.default
+      BoardAgents.new(store: st, projects: ->(slug) { store.project(slug.to_s) }, revision: Kanban.revision_of(st.config),
+                      db: store.db)
     end
 
     def whats_new(date)
@@ -516,14 +585,15 @@ module Busyyaks
     # The board's tools (every kanban_*): a session busyyaks launches gets them through its own per-launch MCP config
     # (MCP_BOARD_TOKEN); the operator's terminal sessions (MCP_TOKEN) never see them — a session busyyaks did not
     # start has no idea of the board (2026-11-24).
-    def board_tool?(name) = name.to_s.start_with?("kanban_")
+    def board_tool?(name) = name.to_s.start_with?("kanban_") || name == BOARD_AGENTS
 
     SCOPES = %i[operator board report].freeze
 
     def tools_for(scope)
       raise ArgumentError, "unknown scope #{scope.inspect}" unless SCOPES.include?(scope)
 
-      all = TOOLS + kanban_tools.definitions
+      all = TOOLS + kanban_tools.definitions.map { |t| t[:name] == "kanban_spawn" ? spawn_with_role(t) : t } +
+            [BOARD_AGENTS_TOOL]
       case scope
       when :report then all.select { |t| REPORT_TOOLS.include?(t[:name].to_s) }
       when :operator then all.reject { |t| board_tool?(t[:name]) }

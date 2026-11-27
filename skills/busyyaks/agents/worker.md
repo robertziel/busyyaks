@@ -36,7 +36,9 @@ found) reports that and stops; you post it on the card and `kanban_ask` — neve
    (`Comments posted`), you answer and `All threads answered`. A board without one: the loop runs on the card's
    comments while the card stays in its work column.
    **Critic**: once QA passed, before the handoff into the operator's gate, dispatch the on-demand `critic` skill's
-   critic (input-isolated: the requirement and the diff only). Fix its BLOCKER / MAJOR findings first.
+   critic (input-isolated: the requirement and the diff only). Fix its BLOCKER / MAJOR findings first. Beside it, the
+   same way: the `security` skill's auditor when the change touches auth, sessions, secrets, input parsing, file paths,
+   shell / process spawning, network or a dependency; the `design` skill's critic when it changes anything visible.
 6. **Handoff** (a board without an agent review column — only after the reviewer's SUMMARY on the PR's CURRENT head;
    with one, the reviewer hands off): `kanban_handoff` — `qa`
    = how to check it without asking (steps, URLs, what to look for, accounts) and a line `Not verified: <what, and

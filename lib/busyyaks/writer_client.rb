@@ -24,6 +24,8 @@ module Busyyaks
     def agent_rules_save(slug, files, by:) = call({ op: "agent_rules_save", slug: slug, files: files, by: by })
     # Settings → Agent rules: busyyaks's own skills files (SkillFiles), in the checkout the WRITER finds itself
     def skills_save(files, by:) = call({ op: "skills_save", files: files, by: by })
+    # the project Settings tab's Agent types: the repo's .busyyaks/agents.yml + new roles' briefs (ProjectAgentsFile)
+    def project_agents_save(slug, change, by:) = call({ op: "project_agents_save", slug: slug, change: change, by: by })
 
     # → [status, body] (the writer's answer)
     def call(req, timeout: TIMEOUT)

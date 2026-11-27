@@ -52,6 +52,7 @@ export type ProjectRulesData = {
   dir: string; // .busyyaks/skills
   path: string; // the dir on the host
   types: AgentType[]; // the current agent settings' types, in their order
+  roles: string[]; // the roles of the repo's .busyyaks/agents.yml — each one's brief is agents/<role>.md
   files: Record<string, RuleFile>; // path (relative to dir) → its file
   creatable: string[]; // agents/<type>.md no file holds yet
   errors: Record<string, string>; // path → why it cannot be edited here ("" = the whole dir)

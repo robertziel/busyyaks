@@ -38,6 +38,18 @@
   low → none), then the oldest. The board adopts and pings in that order already; a cap that leaves room for one
   more worker goes to the highest-priority card waiting.
 
+## Which agent type works a card
+
+- A board may name the type or role per column in its repo's `.busyyaks/agents.yml` — read it with
+  `mcp__busyyaks__board_agents(project)`: each column's `takes` and the `spawn` arguments to pass. A card in a mapped
+  column gets a session of THAT type or role (`kanban_spawn(id, type, role?, …)`, an idle one of the same kind with
+  `kanban_assign_worker`; a session's own `kanban_claim` too); busyyaks refuses any other and names the right one.
+  The rule is checked where a session TAKES a card: a card its session moves or hands off into a mapped column keeps
+  that session. An unmapped column: a `worker`, unless
+  the card asks for another type the board runs (an opt-in type it `use`s, one of its roles).
+- An opt-in type (a copywriter, a researcher) runs only on a board whose file `use`s it: never start one elsewhere.
+  `board_agents` state `left: <why>` = the repo is not trusted, its file is not read: only the plain types run there.
+
 ## Orchestration
 
 - The lead only orchestrates, and never works a card or is its assignee (operator rules 2026-11-17, 2026-11-24): give

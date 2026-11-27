@@ -115,14 +115,14 @@ class McpTest < Minitest::Test
 
   # U2, the live run: MCP_BOARD_TOKEN listed 49 tools (35 kanban_*), MCP_TOKEN 14 (0 kanban_*). Stated as what it means,
   # never as counts that change with the tools: the board token = the terminal token's tools + every kanban_* tool the
-  # engine serves; the terminal token = every tool but those
+  # engine serves + board_agents (which agent type works each column); the terminal token = every tool but those
   def test_the_board_token_lists_the_terminal_tokens_tools_and_every_board_tool
     names = ->(auth) { rpc("tools/list", auth: auth).dig("result", "tools").map { |t| t["name"] } }
     board = names.(BOARD_TOKEN)
     terminal = names.(TOKEN)
     kanban = board.grep(/\Akanban_/)
     assert_operator kanban.size, :>=, 30, kanban.inspect
-    assert_equal (terminal + kanban).sort, board.sort
+    assert_equal (terminal + kanban + [Busyyaks::McpServer::BOARD_AGENTS]).sort, board.sort
     assert_empty terminal.grep(/kanban/)
     %w[kanban_register kanban_spawn kanban_handoff kanban_claim kanban_ask].each { assert_includes kanban, _1 }
   end

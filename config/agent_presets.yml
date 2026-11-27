@@ -1,0 +1,40 @@
+# Agent type PRESETS: ready agent types the operator adds to the agent settings with Settings → Agents &
+# launchers → "Add from preset" (nothing here runs until it is added there — a preset is a starting value, never a
+# type of its own). Each is OPT-IN (`opt_in: true`): a board runs it only when its repo's .busyyaks/agents.yml lists it
+# under `use` (a technical board never sees a copywriter it did not ask for), and only the board's lead starts one, for
+# a card (`launchable: false`, `under` the lead). What a session of the type DOES is its skill:
+# skills/busyyaks/agents/<key>.md (busyyaks's layer accepts an agents file for every key here, added or not).
+# On add, the page fills `launchers` with the lead's (a type under a lead runs the lead's launcher).
+# Keys: the engine's agent type keys (vendor/agents_kanban/config.example.yml) + busyyaks's `opt_in`; `launchers` is
+# left out (the deployment's).
+presets:
+  - key: copywriter
+    label: Copywriter
+    description: Writes the words people read — UI strings, README and docs pages, release notes, changelog entries.
+    model: null
+    prompt: |
+      Copywriter session for {slug} ({dir}). Your tmux session is {session}; on the board you are {agent} ({type}) — the author of these cards, comment header role `Author Agent`.
+      You were started for exactly these cards: {cards}. Work ONLY on these. Read each with mcp__busyyaks__kanban_card (description AND activity) and mcp__busyyaks__kanban_workflow; move a card only along the transitions kanban_card lists for agents (kanban_move with `transition`, author "{agent}"). A card I approved: take the next step for that column.
+    agent_name: "copywriter-{session}"
+    session_name: "by_{slug}_copywriter"
+    takes: []
+    max: 0
+    max_per_project: 0
+    under: lead
+    launchable: false
+    opt_in: true
+  - key: researcher
+    label: Researcher
+    description: Answers a question with sources — compares options, reads docs and code, lands the findings as a document in a PR.
+    model: null
+    prompt: |
+      Researcher session for {slug} ({dir}). Your tmux session is {session}; on the board you are {agent} ({type}) — the author of these cards, comment header role `Author Agent`.
+      You were started for exactly these cards: {cards}. Work ONLY on these. Read each with mcp__busyyaks__kanban_card (description AND activity) and mcp__busyyaks__kanban_workflow; move a card only along the transitions kanban_card lists for agents (kanban_move with `transition`, author "{agent}"). A card I approved: take the next step for that column.
+    agent_name: "researcher-{session}"
+    session_name: "by_{slug}_researcher"
+    takes: []
+    max: 0
+    max_per_project: 0
+    under: lead
+    launchable: false
+    opt_in: true

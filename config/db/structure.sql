@@ -522,6 +522,14 @@ CREATE TABLE `dictation_settings`(
   `author` varchar(255) NOT NULL,
   `created_at` integer NOT NULL
 );
+CREATE TABLE `session_roles`(
+  `id` integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+  `session` varchar(255) NOT NULL UNIQUE,
+  `project_slug` varchar(255) NOT NULL,
+  `type_key` varchar(255) NOT NULL,
+  `role` varchar(255),
+  `created_at` integer NOT NULL
+);
 INSERT INTO schema_migrations (filename) VALUES
 ('20261101000000_create_core.rb'),
 ('20261101230000_create_daily.rb'),
@@ -582,4 +590,5 @@ INSERT INTO schema_migrations (filename) VALUES
 ('20261226610000_parked_exits_operator_only.rb'),
 ('20261227630000_git_host_connections.rb'),
 ('20261228634000_dictation_settings.rb'),
+('20261229667000_session_roles.rb'),
 ('20261229675000_gh_pr_states_head.rb');

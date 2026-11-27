@@ -52,6 +52,7 @@ const data = (files: Record<string, string> = {}, max = 64): ProjectRulesData =>
       { key: "lead", label: "Team lead", under: null, takes: ["queued", "working"], standalone: false },
       { key: "worker", label: "Worker", under: "lead", takes: [], standalone: false },
     ],
+    roles: [],
     files: loaded,
     creatable: ["agents/lead.md", "agents/worker.md"].filter((p) => !(p in loaded)),
     errors: {},

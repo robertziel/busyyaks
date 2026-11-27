@@ -229,7 +229,10 @@ class AgentSettingsTest < Minitest::Test
       assert started, "#{t['key']}: nothing starts it"
       assert File.exist?(File.join(root, "skills/busyyaks/agents/#{t['key']}.md")), "#{t['key']}: no rules"
     end
-    assert_empty Dir[File.join(root, "skills/busyyaks/agents/*.md")].map { File.basename(_1, ".md") } - keys
+    # a preset type ships its brief before any deployment adds it; every preset has one
+    presets = Busyyaks::AgentPresets.keys
+    assert_empty Dir[File.join(root, "skills/busyyaks/agents/*.md")].map { File.basename(_1, ".md") } - keys - presets
+    presets.each { |k| assert File.exist?(File.join(root, "skills/busyyaks/agents/#{k}.md")), "preset #{k}: no rules" }
     assert_empty S.template["launchers"].map { _1["key"] } - types.flat_map { _1["launchers"] }, "a launcher no type runs"
     example = YAML.safe_load_file(File.join(root, "config/kanban.example.yml"))
     faces = example["theme"].keys.grep(/\A--ak-face-type-/).map { _1.delete_prefix("--ak-face-type-") }
@@ -239,12 +242,67 @@ class AgentSettingsTest < Minitest::Test
 
   # "the critic and the QA brief are editable files like the reviewer": each subagent a session dispatches is its
   # own on-demand skill of busyyaks's layer, with the one line that says who dispatches it and when
+  # the presets (config/agent_presets.yml) are offered by the page and save as they are once the lead's
+  # launchers are filled in; `opt_in: true` is busyyaks's key — checked, taken out before the engine reads the revision
+  def test_a_preset_adds_an_opt_in_type_and_opt_in_needs_a_spawn_only_type_under_a_lead
+    status, body = API.show(db: db, commands: ALLOW)
+    assert_equal 200, status
+    assert_equal %w[copywriter researcher], body[:presets].map { _1["key"] }
+    assert(body[:presets].all? { _1["opt_in"] == true && _1["launchable"] == false && _1["under"] == "lead" })
+    d = doc
+    lead = d["agent_types"].find { |t| t["key"] == "lead" }
+    body[:presets].each { |p| d["agent_types"] << Busyyaks::AgentPresets.type(p, launchers: lead["launchers"]) }
+    status, out = save(d)
+    assert_equal 200, status, out.inspect
+    assert_equal %w[copywriter researcher], S.opt_in(out[:doc])
+    cfg = Busyyaks::Kanban.config
+    assert_equal "lead", cfg.agent_type("copywriter").under
+    refute cfg.agent_type("copywriter").respond_to?(:opt_in), "the engine never sees opt_in"
+    bad = ->(over) { d.merge("agent_types" => d["agent_types"].map { |t| t["key"] == "copywriter" ? t.merge(over) : t }) }
+    status, out = save(bad.({ "launchable" => true }), base: base)
+    assert_equal 422, status
+    assert_match(/agent type copywriter: opt_in: true needs `under: <lead type>` and `launchable: false`/, out[:error])
+    status, out = save(bad.({ "opt_in" => "yes" }), base: base)
+    assert_equal [422, "agent type copywriter: opt_in must be true or false"], [status, out[:error]]
+  end
+
+  # `color` is busyyaks's key — one name of the palette (skin tokens), checked and
+  # taken out before the engine reads the revision, and put into the theme as the type's face token over the file's
+  def test_a_type_color_is_a_palette_name_that_becomes_its_face_token
+    status, body = API.show(db: db, commands: ALLOW)
+    assert_equal 200, status
+    assert_equal S::COLORS, body[:colors]
+    assert_equal "var(--vivid-blue)", body[:face_theme]["lead"], "the file's theme colour of a type with none of its own"
+    d = doc
+    over = ->(c) { d.merge("agent_types" => d["agent_types"].map { |t| t["key"] == "worker" ? t.merge("color" => c) : t }) }
+    status, out = save(over.("pink"))
+    assert_equal 200, status, out.inspect
+    assert_equal "pink", out[:doc]["agent_types"].find { _1["key"] == "worker" }["color"]
+    cfg = Busyyaks::Kanban.config
+    assert_equal "var(--vivid-pink)", cfg.theme["--ak-face-type-worker"], "over the file's gold"
+    assert_equal "var(--vivid-blue)", cfg.theme["--ak-face-type-lead"], "a type with no colour keeps the file's"
+    refute cfg.agent_type("worker").respond_to?(:color), "the engine never sees color"
+    status, out = save(over.("#ff0000"), base: base)
+    assert_equal 422, status
+    assert_equal "agent type worker: color must be one of #{S::COLORS.keys.join(', ')} (got \"#ff0000\")", out[:error]
+  end
+
+  def test_a_color_needs_no_theme_entry_and_a_file_with_no_theme_is_left_to_the_engine
+    types = [{ "key" => "x", "color" => "teal" }, { "key" => "y" }, "not a hash"]
+    assert_equal({ "--ak-face-type-x" => "var(--vivid-teal)" }, S.face_tokens(types))
+    file = { "theme" => { "--ak-ink" => "var(--ink)" } }
+    assert_equal({ "--ak-ink" => "var(--ink)", "--ak-face-type-x" => "var(--vivid-teal)" }, S.themed(file, types)["theme"])
+    assert_same file, S.themed(file, [{ "key" => "y" }]), "no colour: the file as is"
+    bad = { "theme" => "nope" }
+    assert_same bad, S.themed(bad, types), "a theme that is no mapping: the engine's refusal"
+  end
+
   def test_the_critic_and_the_qa_brief_are_editable_files_like_the_reviewer
     root = File.expand_path("../..", __dir__)
     layer = Busyyaks::Skills.busyyaks!(root, types: S.template["agent_types"].map { _1["key"] },
                                              settings: Busyyaks::Skills.settings!(SKILLS_SETTINGS)).first
     briefs = layer.skills.to_h { [_1.name, _1] }
-    assert_equal %w[critic qa reviewer], briefs.keys.sort
+    assert_equal %w[critic design qa reviewer security], briefs.keys.sort
     briefs.each_value { |b| assert_match(/\A(the worker|the worker, )/, b.dispatch, b.name) }
     assert_match(/input-isolated|ONLY the card's requirement/, briefs["critic"].body)
     assert_match(/BLOCKER.*MAJOR.*MINOR/m, briefs["critic"].body)

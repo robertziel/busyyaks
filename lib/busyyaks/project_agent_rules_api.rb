@@ -15,12 +15,13 @@ module Busyyaks
   # .md files (a busyyaks skill's name replaces that skill for this project) — as [status, body] (the actions are one
   # line each; test/unit/project_agent_rules_test.rb drives this).
   #   show(slug)       → 200 {project, dir (.busyyaks/skills), path (host), types: [{key, label, under, takes,
-  #                           standalone}], files: {path => {body, sha, eol, kind (agent · skill · skill_ref), type |
-  #                           skill, mode}}, creatable: [agents/<type>.md no file holds yet], errors: {path => why it is
-  #                           not editable}, git: {path => committed | modified | added | ignored | untracked |
-  #                           deleted}, git_error, max_bytes, launches: {state, reason, budget, replace_budget, layers,
-  #                           checkout}, global, global_error} · 404 (a file's body has LF line ends; eol says what the
-  #                           file has; a path is relative to dir)
+  #                           standalone}], roles: [the role names of the repo's .busyyaks/agents.yml: each its
+  #                           brief agents/<role>.md], files: {path => {body, sha, eol, kind (agent ·
+  #                           skill · skill_ref), type | skill, mode}}, creatable: [agents/<type>.md no file holds
+  #                           yet], errors: {path => why it is not editable}, git: {path => committed | modified |
+  #                           added | ignored | untracked | deleted}, git_error, max_bytes, launches: {state, reason,
+  #                           budget, replace_budget, layers, checkout}, global, global_error} · 404 (a file's body
+  #                           has LF line ends; eol says what the file has; a path is relative to dir)
   #   save(slug, body) → the writer's answer (WriterClient: the web mounts the repos read-only): 200 the same as show,
   #                      re-read · 404 · 409 a file changed on disk since it was read · 422 refused (the reason
   #                      verbatim) — body = {files: {path => {base: the loaded sha | null, body: markdown | null (remove)}}}
@@ -37,12 +38,19 @@ module Busyyaks
 
       cfg = Kanban.config(db)
       types = cfg.agent_type_keys
-      files, errors = AgentRuleFiles.read(project, types: types, settings: skills)
+      # a role of the repo's .busyyaks/agents.yml has its brief at agents/<role>.md: editable here too
+      roles, roles_error = begin
+        [Skills.roles_of(project[:path]), nil]
+      rescue Skills::Invalid => e
+        [[], e.message] # no role is known while the file is unreadable: each agents file that is no type says why
+      end
+      files, errors = AgentRuleFiles.read(project, types: types | roles, settings: skills)
+      errors = errors.transform_values { |m| m.include?("is not an agent type") ? "#{m} — #{roles_error}" : m } if roles_error
       creatable = types.map { |t| AgentRuleFiles.agent_path(t) } - files.keys - errors.keys
       git, git_error = git(project, files, errors, creatable, root)
       [200, { project: project[:slug], dir: AgentRuleFiles::REL, git: git, git_error: git_error,
               path: WorkflowFiles.on_host(File.join(project[:path], AgentRuleFiles::REL)),
-              types: cfg.agent_types.map { |t| type_of(t) }, **global(db),
+              types: cfg.agent_types.map { |t| type_of(t) }, roles: roles, **global(db),
               files: files.transform_values { |f| f.except(:blob) }, creatable: creatable, errors: errors,
               max_bytes: skills.max_bytes, launches: launches(project, Kanban.revision_of(cfg)), },]
     end

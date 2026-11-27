@@ -106,3 +106,152 @@
 .rc-replaced .mono {
   text-decoration: line-through;
 }
+
+/* the Agent types section's column → type table — every cell starts where its header does */
+table.pa-columns th,
+table.pa-columns td {
+  text-align: left;
+  vertical-align: top;
+}
+/* the YAML view's column table: the label column wide enough that "Ready to merge" wraps between words on a phone */
+table.as-preview.pa-columns th:nth-child(1) {
+  width: 40%;
+}
+table.as-preview.pa-columns th:nth-child(2) {
+  width: 22%;
+}
+
+/* Agent types as a form: faces in their type's colour, a chip per type, a row per role, a pick per column */
+.pa-modes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+.pa-modes .btn.on {
+  background: var(--panel-2);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.pa-form {
+  display: grid;
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.pa-block {
+  display: grid;
+  gap: 8px;
+}
+.pa-block h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.pa-note {
+  margin: 0;
+  font-size: 12px;
+}
+.pa-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pa-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink-dim);
+}
+label.pa-chip {
+  cursor: pointer;
+}
+.pa-chip.on {
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+.pa-chip .muted {
+  font-size: 11px;
+}
+.pa-role {
+  display: grid;
+  grid-template-columns: auto repeat(3, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 8px 10px;
+  padding: 10px;
+  border-radius: var(--radius-band);
+  background: var(--panel-2);
+}
+.pa-role > svg {
+  align-self: center;
+}
+.pa-role label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink-dim);
+  min-width: 0;
+}
+.pa-role input,
+.pa-role select,
+.pa-pick select {
+  font: inherit;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.3rem 0.5rem;
+  border: 0.5px solid var(--line-strong);
+  border-radius: var(--radius-ctl-sm);
+  background: var(--panel);
+  color: var(--ink);
+}
+.pa-role .pa-wide {
+  grid-column: 1 / -1;
+}
+@media (max-width: 640px) {
+  .pa-role {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .pa-role label,
+  .pa-role .btn {
+    grid-column: 1 / -1;
+  }
+}
+.pa-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pa-pick-face {
+  display: inline-flex;
+  width: 22px;
+  flex: none;
+}
+.pr-global.warn {
+  color: var(--warn);
+}
+/* the form's column table: the column's name beside its pick, both shrinking to the card (a 390 px phone included) */
+table.pa-picks {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+table.pa-picks th:first-child {
+  width: 40%;
+}
+table.pa-picks td {
+  padding: 3px 6px 3px 0;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+table.pa-picks td .mono {
+  font-size: 11px;
+}
+.pa-pick select {
+  flex: 1 1 auto;
+}

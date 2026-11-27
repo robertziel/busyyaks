@@ -200,6 +200,9 @@ module Busyyaks
         dst = File.join(tmp, REL)
         FileUtils.mkdir_p(File.dirname(dst))
         File.directory?(src) ? FileUtils.cp_r(src, dst) : FileUtils.mkdir_p(dst)
+        # the repo's .busyyaks/agents.yml beside it: its roles are the names agents/<role>.md may have
+        agents = File.join(project.fetch(:path), Skills::AGENTS_FILE)
+        FileUtils.cp(agents, File.join(tmp, Skills::AGENTS_FILE)) if File.file?(agents) && !File.symlink?(agents)
         plan.each do |c|
           path = File.join(dst, c[:path])
           if c[:text].nil?

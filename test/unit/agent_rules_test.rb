@@ -116,7 +116,7 @@ class AgentRulesTest < Minitest::Test
       entry.index(text) || flunk("#{p} is not in the staged entry skill")
     end
     assert_equal at.sort, at, "the page's order is the entry skill's"
-    assert_equal %w[critic qa reviewer deploy-flow], lead[:on_demand]
+    assert_equal %w[critic design qa reviewer security deploy-flow], lead[:on_demand]
     lead[:start].each do |p|
       f = file(body, p)
       assert_equal File.size(File.join(@checkout, p)), f[:bytes]
