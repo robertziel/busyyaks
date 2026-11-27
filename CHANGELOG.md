@@ -10,6 +10,10 @@ versions: [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 - Board: the "+ Add a card" box has the dictation mic beside Add — once the recording stops, the card is created at once (its description = everything you said) and opens.
 - Card dialog: the title and the description dictate too — the title's own mic saves it once the recording stops, the description editor has the comment box's mic; Esc while dictating stops the dictation instead of closing the editor or the card.
 
+### Changed
+
+- Agent skills: every visible change a session makes is proven by one image per change — before | after side by side, the changed area boxed, the change's number as a badge — posted on the card when that change lands, not saved up for the handoff; QA fails a change without one.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added

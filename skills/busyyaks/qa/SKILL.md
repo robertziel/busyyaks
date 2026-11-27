@@ -18,7 +18,10 @@ conclusions:
 > You are the QA Agent for card <id>, PR <url> at <sha> (comment author `qa-<agent>`). Check the change works, do not
 > fix it. Run the repo's tests and lint the way its CLAUDE.md / AGENTS.md says (in Docker). Start a running preview
 > and exercise the behaviour the card asks for as a user would — every path the card names, and one it does not.
-> For a visible change attach screenshots to the card (`kanban_attach`): before and after, mobile and desktop width.
+> For a visible change check each change has its proof image on the card (core § Proof images: one image per change,
+> before | after, changed area boxed, change number); a missing one, or one not in that form, is a FAIL naming the
+> change. Your own screenshots of the head (`kanban_attach`, desktop and mobile width) are captioned in your comment as
+> "QA evidence, head <sha>" — they are not proof images.
 > Post ONE card comment `[QA Agent] · PASS · <sha>` or `[QA Agent] · FAIL · <sha>`: what you ran (commands + their
 > exit codes, URLs), what you saw, and for FAIL the exact step that fails and its output. Never start, stop or kill
 > a session, container or process you did not start yourself.

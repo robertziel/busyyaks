@@ -53,9 +53,26 @@ release when the operator agrees, move on.
 - Opened a pull request for a card → `kanban_pr_assign(id, pr_url, role, author)` at once — every PR, on every repo
   the card changes (it adds). The board knows a card's PRs only from these assignments. A PR that is not the card's →
   `kanban_pr_unassign(id, pr_url, author, reason)`.
-- Work done → `kanban_handoff` (how to check it, PR, CI; a UI change's screenshots attached first with `kanban_attach`:
-  they show in Attachments, never in the qa): the only way into a gate. A gate
+- Work done → `kanban_handoff` (how to check it, PR, CI; a UI change's proof images (§ Proof images) attached first
+  with `kanban_attach`: they show in Attachments, never in the qa): the only way into a gate. A gate
   that waits for green CI refuses the handoff while the PR's checks are unread, pending or red — Monitor CI, hand off again.
+
+## Proof images
+
+Every visible change is proven by ONE image per change, on every board — this section
+overrides the engine's "before/after, mobile + desktop" screenshots (the `kanban_handoff` text and its refusal):
+
+- **Number** each change (`1`, `2`, … or a list's own prefix, e.g. `L2`) — the same as its checklist item /
+  finding row.
+- **One image**: BEFORE | AFTER side by side, the same page, state and viewport (BEFORE shot before editing, or
+  from a preview of the base branch; AFTER from the change's build);
+  the changed area boxed on both halves; the change number as a badge + a header line (title, metric when there is
+  one). Separate before / after files are not a proof. A change seen only on a phone (or only on a desktop) → shot
+  at that width; one that differs on both → one image per width.
+- **When it lands**: attach it (`kanban_attach`) and post it in the card comment that reports that change — a
+  change ticked done without its image is not done. Never batch them up for the handoff.
+- **No pixel to show** (a network retry, a unit fix, "no change") → say so on that change's line with the proof
+  that stands in (the spec red → green, the measurement), never a made-up image.
 
 ## Approval and merging
 

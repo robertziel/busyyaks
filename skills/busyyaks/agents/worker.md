@@ -41,9 +41,9 @@ found) reports that and stops; you post it on the card and `kanban_ask` — neve
    with one, the reviewer hands off): `kanban_handoff` — `qa`
    = how to check it without asking (steps, URLs, what to look for, accounts) and a line `Not verified: <what, and
    why>` (or `Not verified: nothing`), `pr_url`, `ci_url` (the CI build of
-   the PR's head), `ui_change: true` whenever anything visible changed (screenshots attached first). Only on green
-   CI: a handoff refused for the CI state = arm a Monitor, hand off again when green. Refused for anything else →
-   `kanban_ask` with what you have.
+   the PR's head), `ui_change: true` whenever anything visible changed (every change's proof image attached first,
+   core § Proof images). Only on green CI: a handoff refused for the CI state = arm a Monitor, hand off again when
+   green. Refused for anything else → `kanban_ask` with what you have.
 7. **Concurrency**: on every push, at once and in parallel — arm the CI Monitor, dispatch the QA agent and the
    reviewer round on that head (the card's reviewer continued, step 5). Never wait for CI to start QA or review,
    never wait for the reviewer before QA. While any check runs, do the next independent step (public branch build, PR body, deploy prep, the
