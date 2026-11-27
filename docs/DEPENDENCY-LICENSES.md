@@ -4,7 +4,7 @@ busyyaks publishes source only. Its dependencies are not in this repository: Doc
 image (`Dockerfile`, `scripts/lint/Dockerfile`, `scripts/hooks/Dockerfile`). Material that IS in the repository —
 ported code, copied rules, fonts, the vendored kanban module — is listed in [`NOTICE`](../NOTICE).
 
-Read from the lockfiles at 0.2.0; re-check after a dependency change with the commands at the end.
+Read from the lockfiles at 0.3.0; re-check after a dependency change with the commands at the end.
 
 ## Ruby gems (`Gemfile.lock`, 92 gems)
 

@@ -702,11 +702,11 @@ the two the dashboard's notice counts, how often it asks.
 
 ```console
 $ yaks update --check
-checkout       1f0c2ab on main (v0.2.0)
-newest tag     v0.3.0 9e41d07 · available, 12 commits
+checkout       1f0c2ab on main (v0.3.0)
+newest tag     v0.4.0 9e41d07 · available, 12 commits
 origin/main    main 4b77a10 · available, 19 commits
 update available (channel tags)
-$ yaks update            # → v0.3.0          yaks update --main → origin/main's head
+$ yaks update            # → v0.4.0          yaks update --main → origin/main's head
 ```
 
 | step | what |
@@ -727,7 +727,7 @@ holds the lock) is shown as interrupted. An update runs the remote's code: trust
 **Settings → Updates** (`/settings/updates`): the same check (the launcher's, re-asked past `check_minutes`), the
 newest tag and the branch head with an **Update to …** button each (off, with the reason, when not allowed), and the
 running / last update step by step — the page keeps polling while the web restarts. The settings cog carries a dot
-and the Updates link the notice ("v0.3.0 available", "main +3") while the channel's target is a fast-forward away.
+and the Updates link the notice ("v0.4.0 available", "main +3") while the channel's target is a fast-forward away.
 
 ## Running in production
 

@@ -27,7 +27,7 @@ module Busyyaks
   # nothing that writes a card, a note or anything typed into a session.
   class McpServer
     PROTOCOLS = %w[2025-11-25 2025-06-18 2025-03-26 2024-11-05].freeze
-    INFO = { name: "busyyaks", version: "0.2.0" }.freeze
+    INFO = { name: "busyyaks", version: "0.3.0" }.freeze
 
     TOOLS = [
       { name: "whats_new",
